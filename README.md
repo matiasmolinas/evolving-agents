@@ -19,8 +19,8 @@ A production-grade framework for creating, managing, and evolving AI agents with
 
 ```bash
 # Clone the repository
-git clone https://github.com/matiasmolinas/evolving-agents-framework.git
-cd evolving-agents-framework
+git clone https://github.com/matiasmolinas/evolving-agents.git
+cd evolving-agents
 
 # Install dependencies
 pip install -r requirements.txt
