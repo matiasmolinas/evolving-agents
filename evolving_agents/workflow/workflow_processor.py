@@ -6,6 +6,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 
 from evolving_agents.core.system_agent import SystemAgent
+from evolving_agents.acp.client import ACPClient
 
 logger = logging.getLogger(__name__)
 
