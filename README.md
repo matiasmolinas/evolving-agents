@@ -2,13 +2,9 @@
 
 A toolkit for agent autonomy, evolution, and governance. Create agents that can understand requirements, evolve through experience, communicate effectively, and build new agents and tools - all while operating within governance guardrails.
 
-![Evolving Agents](evolving-agents-logo.png)
-
-## Why the World Needs This Toolkit
+## Why This Toolkit?
 
 Current agent systems are designed primarily for humans to build and control AI agents. The Evolving Agents Toolkit takes a fundamentally different approach: agents building agents.
-
-![The Evolving Agents Toolkit](1-toolkit.png)
 
 Our toolkit provides:
 
@@ -18,295 +14,148 @@ Our toolkit provides:
 - **Self-Building Systems**: The ability for agents to create new tools and agents when existing ones are insufficient
 - **Agent-Centric Architecture**: Communication and capabilities built for agents themselves, not just their human creators
 
-Instead of creating yet another agent framework, we build on existing frameworks like BeeAI and OpenAI Agents SDK to create a layer that enables agent autonomy, evolution, and self-governance - moving us closer to truly autonomous AI systems that improve themselves while staying within safe boundaries.
+We build on existing frameworks like BeeAI and OpenAI Agents SDK to create a layer that enables agent autonomy, evolution, and self-governance - moving us closer to truly autonomous AI systems that improve themselves while staying within safe boundaries.
 
-## Architect-Zero: Our Flagship Meta-Agent
-
-Our toolkit is best demonstrated through Architect-Zero, an agent that autonomously designs solutions to complex problems, leveraging LLM intelligence to find the optimal components for tasks.
-
-```python
-# Create an Architect-Zero agent
-architect_agent = await create_architect_zero(
-    llm_service=llm_service,
-    smart_library=smart_library,
-    agent_bus=agent_bus,
-    system_agent_factory=SystemAgentFactory.create_agent
-)
-
-# Give it a task to design a solution
-task_requirement = """
-Create a comprehensive medical diagnostic system that analyzes patient medical records to provide clinical insights. The system should:
-
-1. Extract and structure patient information, vital signs, medications, and symptoms
-2. Analyze symptoms to identify possible medical conditions and their likelihood
-3. Check for potential interactions between current medications and suggest adjustments
-4. Generate treatment recommendations based on the identified conditions
-5. Provide appropriate medical disclaimers and highlight when specialist consultation is needed
-
-The system should leverage existing components, evolve them where needed, and create new ones for missing functionality.
-"""
-
-# Architect-Zero analyzes the requirements and designs a solution
-result = await architect_agent.run(task_requirement)
-```
-
-### What Happens Behind the Scenes
-
-Architect-Zero demonstrates the full capabilities of our toolkit:
-
-1. **LLM-Enhanced Analysis**: It intelligently extracts required capabilities from the task requirements
-   ```
-   Extracted capabilities: ['medical_record_analysis', 'symptom_analysis', 'medication_interaction_check', 'treatment_recommendation', 'medical_disclaimer_generation']
-   ```
-
-2. **Smart Component Discovery**: It searches for components that match these capabilities using LLM-powered semantic matching
-   ```
-   Found component for capability medical_record_analysis using LLM matching: MedicalRecordAnalyzer
-   ```
-
-3. **Capability-Based Design**: It designs a complete workflow with specialized components:
-   ```yaml
-   scenario_name: Medical Diagnostic Workflow
-   domain: healthcare
-   description: >
-     This workflow processes patient medical records to extract information, analyze symptoms,
-     identify possible conditions, check medication interactions, and recommend treatments
-     with appropriate medical disclaimers.
-   
-   steps:
-     - type: EXECUTE
-       item_type: AGENT
-       name: MedicalRecordAnalyzer
-       inputs:
-         medical_record: |
-           PATIENT MEDICAL RECORD
-           # Full medical record here
-       outputs:
-         - structured_patient_data
-    
-     # Additional steps for symptom analysis, medication interactions, etc.
-   ```
-
-4. **Component Evolution and Creation**: It determines when to evolve existing components or create new ones:
-   ```
-   - type: DEFINE
-     item_type: AGENT
-     name: TreatmentRecommender
-     code_snippet: |
-       # Implementation code
-   ```
-
-5. **Workflow Execution**: The system executes this workflow, processing medical records through all components:
-   ```
-   === MEDICAL ANALYSIS ===
-   Primary condition: Migraine with aura
-   Confidence: High
-   
-   Supporting evidence:
-   - Visual symptoms (flashing lights preceding headaches)
-   - Nausea accompanying headaches
-   - Blurred vision with headaches
-   - Partial response to screen time reduction
-   
-   Medication concerns:
-   - Need for both preventive and acute migraine treatment
-   - Ensure new migraine medication doesn't interact with existing medications
-   ```
-
-6. **System Evolution**: The system can evolve its analysis as new information becomes available:
-   ```
-   === Evolution of Analysis ===
-   New symptoms identified:
-   - Visual aura (flashing lights)
-   - Blurred vision with headaches
-   - Nausea with severe headaches
-   
-   Key insights from evolution:
-   - System recognized pattern shift from tension/hypertension to migraine
-   - Incorporated family history that became more relevant with new symptoms
-   ```
-
-This example showcases the true potential of our toolkit - a meta-agent that can design, implement, and orchestrate complex multi-agent systems based on high-level requirements, with the ability to evolve as new information becomes available.
-
-## Industry-Specific Examples
-
-### Finance: Invoice Processing System
-
-Our `architect_zero_financial_demo.py` example demonstrates how Architect-Zero designs a multi-agent invoice processing system:
-
-```python
-# Give Architect-Zero a financial task
-task_requirement = """
-Create an advanced invoice processing system that improves upon the basic version. The system should:
-
-1. Use a more sophisticated document analyzer to detect invoices with higher confidence
-2. Extract comprehensive information (invoice number, date, vendor, items, subtotal, tax, total)
-3. Verify calculations to ensure subtotal + tax = total
-4. Generate a structured summary with key insights
-5. Handle different invoice formats and detect potential errors
-"""
-
-# Architect-Zero designs a financial solution
-result = await architect_agent.run(task_requirement)
-```
-
-### Healthcare: Medical Diagnostic System
-
-Our `architect_zero_medical_demo.py` example shows how Architect-Zero creates a medical diagnostic system:
-
-```python
-# Give Architect-Zero a healthcare task
-task_requirement = """
-Create a comprehensive medical diagnostic system that analyzes patient medical records. The system should:
-
-1. Extract and structure patient information, vital signs, medications, and symptoms
-2. Analyze symptoms to identify possible medical conditions and their likelihood
-3. Check for potential interactions between current medications
-4. Generate treatment recommendations based on the identified conditions
-5. Provide appropriate medical disclaimers for all recommendations
-"""
-
-# Architect-Zero designs a healthcare solution
-result = await architect_agent.run(task_requirement)
-```
-
-## Why is Firmware Essential in Autonomous Agent Evolution?
-
-In a system where agents and tools can evolve autonomously and create new components from scratch, governance firmware becomes not just important but essential. Without proper guardrails:
-
-![Governance Firmware](2-firmware.png)
-
-- **Capability Drift**: Evolved agents could develop capabilities that stray from their intended purpose
-- **Alignment Challenges**: Self-improving systems may optimize for the wrong objectives without proper constraints
-- **Safety Concerns**: Autonomous creation of new agents could introduce unforeseen risks or harmful behaviors
-- **Compliance Issues**: Evolved agents might unknowingly violate regulatory requirements or ethical boundaries
-
-Our firmware system addresses these challenges by embedding governance rules directly into the evolution process itself. It ensures that:
-
-1. All evolved agents maintain alignment with human values and intentions
-2. Component creation and evolution happens within clearly defined ethical and operational boundaries
-3. Domain-specific compliance requirements (medical, financial, etc.) are preserved across generations
-4. Evolution optimizes for both performance and responsible behavior
-
-The firmware acts as a constitution for our agent ecosystem - allowing freedom and innovation within sensible boundaries.
-
-## LLM-Enhanced Smart Library
-
-The Smart Library serves as the institutional memory and knowledge base for our agent ecosystem, now enhanced with LLM capabilities for intelligent component selection:
-
-![Smart Library](3-smartlibrary.png)
-
-- **LLM-Powered Component Selection**: Uses advanced language models to match capabilities with the best components
-- **Semantic Component Discovery**: Finds components based on capability understanding rather than exact matches
-- **Capability-Based Search**: Understands what a component can do rather than just matching keywords
-- **Performance History Integration**: Tracks component success rates to improve selection over time
-- **Experience-Based Evolution**: Uses past performance to guide improvements in component capabilities
-
-By using LLMs to understand requirements and match them to capabilities, the Smart Library enables a more intelligent reuse of components, significantly accelerating development of agent-based systems.
-
-## Why Do We Need Agent and Tool Evolution?
-
-Evolution capabilities are essential because no agent or tool is perfect from the start. Evolution enables:
-
-![Agent and Tool Evolution](5-evolution.png)
-
-- **Performance Improvement**: Refining agents based on observed successes and failures
-- **Adaptation to Change**: Updating tools when external services or requirements change
-- **Specialization**: Creating domain-specific variants optimized for particular use cases
-- **Knowledge Transfer**: Applying learnings from one domain to another through targeted adaptation
-- **Interface Alignment**: Adjusting agents to work better with new LLMs or companion tools
-
-Evolution represents the core learning mechanism of our system, allowing it to improve over time through experience rather than requiring constant human intervention and rebuilding.
-
-## Why Create Agents and Tools from Scratch?
-
-While evolution is powerful, sometimes entirely new capabilities are needed. Creation from scratch:
-
-![Creating New Agents and Tools](6-new.png)
-
-- **Fills Capability Gaps**: Creates missing components when no suitable starting point exists
-- **Implements Novel Approaches**: Builds components that use fundamentally new techniques
-- **Introduces Diversity**: Prevents the system from getting stuck in local optima by introducing fresh approaches
-- **Responds to New Requirements**: Addresses emerging needs that weren't anticipated in existing components
-- **Leverages LLM Strengths**: Utilizes the code generation capabilities of modern LLMs to create well-designed components
-
-The creation capability ensures that our system can expand to meet new challenges rather than being limited to its initial design, making it truly adaptable to changing needs.
-
-## The Agent Bus: Capability-Based Communication
-
-The Agent Bus facilitates communication between agents based on capabilities rather than identity, enabling:
-
-- **Dynamic Discovery**: Agents find each other based on what they can do, not who they are
-- **Loose Coupling**: Components can be replaced or upgraded without disrupting the system
-- **Resilient Architecture**: The system can continue functioning even when specific agents change
-- **Emergent Collaboration**: New collaboration patterns can form without explicit programming
-
-In our medical example, the components registered their capabilities with the Agent Bus, allowing the system to find the right component for each diagnostic stage automatically.
-
-## Key Features
-
-- **Intelligent Agent Evolution**: Tools encapsulate the logic to determine when to reuse, evolve, or create new components
-- **Agent-to-Agent Communication**: Agents communicate through capabilities rather than direct references
-- **LLM-Enhanced Smart Library**: Find relevant components using advanced LLM understanding of requirements
-- **Multi-Strategy Evolution**: Multiple evolution strategies (standard, conservative, aggressive, domain adaptation)
-- **Human-readable YAML Workflows**: Define complex agent collaborations with simple, version-controlled YAML
-- **Multi-Framework Support**: Seamlessly integrate agents from different frameworks (BeeAI, OpenAI Agents SDK, etc.)
-- **Governance through Firmware**: Enforce domain-specific rules across all agent types
-- **Agent Bus Architecture**: Connect agents through a unified communication system with pluggable backends
-- **Meta-Agents**: Agents like Architect-Zero that can design and create entire agent systems
-
-For detailed architectural information, see [ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## Supported Frameworks
-
-### BeeAI Framework
-Our core agent architecture is built on BeeAI's ReActAgent system, providing reasoning-based decision making.
-
-### OpenAI Agents SDK
-We fully support the OpenAI Agents SDK, enabling:
-- Creation and execution of OpenAI agents within our system
-- Experience-based evolution of OpenAI agents
-- Firmware rules translated to OpenAI guardrails
-- A/B testing between original and evolved agents
-- YAML workflow integration across frameworks
-
-## Quick Start
+## Getting Started
 
 ```bash
-# Clone the repository
-git clone https://github.com/matiasmolinas/evolving-agents.git
-cd evolving-agents
-
 # Install dependencies
 pip install -r requirements.txt
 pip install -e .
 
-# Install OpenAI Agents SDK
+# Optional: Install OpenAI Agents SDK
 pip install -r requirements-openai-agents.txt
 
-# Run the Finance example
-python examples/architect_zero_financial_demo.py
+# Create the initial libraries
+python evolving_agents/generate_smart_library.py
 
-# Run the Healthcare example
-python examples/architect_zero_medical_demo.py
+# Run the examples
+python evolving_agents/run_examples.py
 ```
 
-## System Initialization Example
+## Core Architecture
+
+The toolkit's architecture is centered around these key components:
+
+### 1. Smart Library with Components
+
+The Smart Library serves as a repository for all agents, tools, and capabilities. Components are stored with:
+
+- Semantic embeddings for intelligent search
+- Performance metrics for experience-based selection
+- Capability contracts defining inputs and outputs
 
 ```python
-# Initialize core components
-llm_service = LLMService(provider="openai", model="gpt-4o")
-smart_library = SmartLibrary("smart_library.json", llm_service)
-agent_bus = SimpleAgentBus("agent_bus.json")
+# Search for components in the library
+search_results = await smart_library.semantic_search(
+    query="agent that can process invoices and analyze costs",
+    domain="finance",
+    limit=3,
+    threshold=0.6
+)
+```
 
-# Create the system agent
-system_agent = await SystemAgentFactory.create_agent(
-    llm_service=llm_service,
-    smart_library=smart_library,
-    agent_bus=agent_bus
+### 2. Agent Bus for Capability-Based Communication
+
+The Agent Bus enables agents to discover and communicate with each other through capabilities:
+
+```python
+# Register a component with capabilities
+provider_id = await agent_bus.register_provider(
+    name="InvoiceAnalyzer",
+    capabilities=[{
+        "id": "invoice_analysis",
+        "name": "Invoice Analysis",
+        "description": "Analyzes invoice contents to extract key information"
+    }]
 )
 
-# Create the Architect-Zero agent
+# Request service by capability
+result = await agent_bus.request_service(
+    capability="invoice_analysis",
+    content={"invoice_text": "INVOICE #12345..."}
+)
+```
+
+### 3. Governance Firmware
+
+The Firmware system implements guardrails that apply across all components:
+
+```python
+# Get domain-specific firmware rules
+finance_firmware = firmware.get_firmware_prompt("finance")
+
+# Apply firmware to component creation
+agent_record = await smart_library.create_record(
+    name="Financial Analyzer",
+    record_type="AGENT",
+    domain="finance",
+    description="Analyzes financial documents and provides insights",
+    code_snippet=code_with_firmware
+)
+```
+
+### 4. Evolving Agents with Experience
+
+Agents can evolve based on their experiences:
+
+```python
+# Evolve an agent with specific changes
+evolved_agent = await evolution_manager.evolve_agent(
+    agent_id="invoice_processor_v1",
+    changes="Improve extraction of line items and verify calculations",
+    evolution_type="standard"
+)
+
+# Compare agent versions with A/B testing
+test_results = await evolution_manager.compare_agents(
+    agent_a_id="invoice_processor_v1",
+    agent_b_id=evolved_agent["evolved_agent_id"],
+    test_inputs=test_data,
+    domain="finance"
+)
+```
+
+## Example Use Cases
+
+### Financial Invoice Processing
+
+The `financial_example.py` demonstrates how to build an invoice processing system:
+
+```python
+# Run the financial example
+python evolving_agents/financial_example.py
+```
+
+This example uses the Architect-Zero agent to:
+1. Create document analyzers for invoice detection
+2. Extract structured data from invoices (date, vendor, line items, totals)
+3. Verify calculations for correctness
+4. Generate concise summaries with key insights
+
+### Medical Assessment System
+
+The `medical_example.py` showcases a healthcare assessment system:
+
+```python
+# Run the medical example
+python evolving_agents/medical_example.py
+```
+
+This example creates:
+1. A physiological data extractor for patient records
+2. BMI and cardiovascular risk calculators
+3. Medical analysis agents for interpretation and recommendations
+4. Components that adhere to healthcare governance rules
+
+## Key Components
+
+### Architect-Zero
+
+The Architect-Zero agent is a meta-agent that designs multi-agent solutions:
+
+```python
+# Initialize Architect-Zero
 architect_agent = await create_architect_zero(
     llm_service=llm_service,
     smart_library=smart_library,
@@ -314,38 +163,178 @@ architect_agent = await create_architect_zero(
     system_agent=system_agent
 )
 
-# Now you can use architect_agent.run() to solve complex problems
+# Give it a high-level task
+result = await architect_agent.run(
+    "Create a comprehensive medical diagnostic system that analyzes patient records..."
+)
 ```
 
-## Key Technical Achievements
+### Smart Library Tools
 
-1. **LLM-Enhanced Smart Library**: Uses language models to intelligently match capabilities to components
-2. **Agent-Design-Agent**: Architect-Zero can design and implement entire agent systems
-3. **Tool-Encapsulated Logic**: Each tool contains its own strategy, enabling independent evolution
-4. **Pure ReActAgent Implementation**: All agents use reasoning rather than hardcoded functions
-5. **Cross-Framework Integration**: Seamless interaction between BeeAI and OpenAI agents
-6. **Experience-Based Evolution**: Agents evolve based on performance metrics and usage patterns
-7. **Unified Governance**: Firmware rules apply to all agent types through appropriate mechanisms
+Tools for component management:
 
-## Use Cases
+```python
+# Search for components
+search_results = await search_tool.run(
+    query="component that extracts financial data",
+    record_type="TOOL",
+    domain="finance"
+)
 
-- **Document Processing**: Create specialized agents for different document types that collaborate to extract and analyze information
-- **Healthcare**: Medical diagnostic agents communicating with pharmacy and insurance agents to coordinate patient care
-- **Financial Analysis**: Portfolio management agents collaborating with market analysis agents
-- **Customer Service**: Routing agents delegating to specialized support agents
-- **Multi-step Reasoning**: Break complex problems into components handled by specialized agents
+# Create a new component
+new_component = await create_tool.run(
+    name="InvoiceLineItemExtractor",
+    record_type="TOOL",
+    domain="finance",
+    description="Extracts line items from invoices",
+    requirements="Create a tool that can extract individual line items..."
+)
 
-## Contributing
+# Evolve an existing component
+evolved_component = await evolve_tool.run(
+    parent_id="existing_component_id",
+    changes="Add support for multi-currency line items",
+    evolution_strategy="standard"
+)
+```
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+### Agent Bus Tools
+
+Tools for agent communication:
+
+```python
+# Register a provider with the bus
+provider_id = await register_tool.run(
+    name="DataExtractor",
+    capabilities=[
+        "text_extraction",
+        "table_extraction"
+    ]
+)
+
+# Request a service
+result = await request_tool.run(
+    capability="text_extraction",
+    content="Extract data from this document: ..."
+)
+
+# Discover available capabilities
+capabilities = await discover_tool.run(
+    query="extraction capabilities"
+)
+```
+
+## Technical Architecture
+
+The toolkit integrates with different agent frameworks through a provider system:
+
+```python
+# Create a BeeAI agent
+agent_record = await create_tool.run(
+    name="DataAnalyzer",
+    record_type="AGENT",
+    domain="data_analysis",
+    requirements="...",
+    framework="beeai"
+)
+
+# Create an OpenAI agent
+openai_agent = await create_openai_agent_tool.run(
+    name="FinancialAssistant",
+    domain="finance",
+    description="...",
+    model="gpt-4o"
+)
+```
+
+## Framework Integration
+
+The toolkit provides adapters for different frameworks:
+
+- **BeeAI Provider**: Creates and manages BeeAI ReActAgents
+- **OpenAI Provider**: Creates and manages OpenAI Agents SDK agents
+- **Tool Adapters**: Convert between different tool formats
+
+## API Reference
+
+### SmartLibrary
+
+```python
+# Create a component
+record = await smart_library.create_record(
+    name="ComponentName",
+    record_type="AGENT",  # or "TOOL" 
+    domain="domain_name",
+    description="Description",
+    code_snippet="# Code goes here",
+    tags=["tag1", "tag2"],
+    metadata={"key": "value"}
+)
+
+# Search for components
+results = await smart_library.semantic_search(
+    query="search query",
+    record_type="AGENT",  # optional filter
+    domain="domain_name",  # optional filter
+    limit=5
+)
+
+# Find components by capability
+component = await smart_library.find_component_by_capability(
+    capability_id="capability_name",
+    domain="domain_name"
+)
+
+# Evolve a component
+evolved = await smart_library.evolve_record(
+    parent_id="original_record_id",
+    new_code_snippet="# New code",
+    description="Updated description"
+)
+```
+
+### AgentBus
+
+```python
+# Register a provider
+provider_id = await agent_bus.register_provider(
+    name="ProviderName",
+    capabilities=[{
+        "id": "capability_id",
+        "name": "Capability Name",
+        "description": "Description"
+    }]
+)
+
+# Request a service
+result = await agent_bus.request_service(
+    capability="capability_id",
+    content={"key": "value"}
+)
+
+# Find providers for a capability
+providers = await agent_bus.find_providers_for_capability(
+    capability="capability_id",
+    min_confidence=0.7
+)
+```
+
+### Workflow Processor
+
+```python
+# Process a workflow from YAML
+result = await workflow_processor.process_workflow(yaml_content)
+
+# Generate a workflow from design
+yaml_workflow = await workflow_generator.generate_workflow_from_design(
+    workflow_design=design_dict,
+    library_entries=entries_dict
+)
+```
 
 ## License
 
 [Apache v2.0](LICENSE)
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=matiasmolinas/evolving-agents&type=Timeline)](https://star-history.com/#matiasmolinas/evolving-agents&Timeline)
 
 ## Acknowledgements
 
