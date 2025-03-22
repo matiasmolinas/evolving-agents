@@ -1,0 +1,200 @@
+{
+  "records": [
+    {
+      "id": "8c070a11-cc07-4baf-9bfa-4f793344484d",
+      "name": "DocumentAnalyzer",
+      "record_type": "TOOL",
+      "domain": "document_processing",
+      "description": "Tool that analyzes and identifies the type of document from its content",
+      "code_snippet": "\n# Document analyzer code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.049174",
+      "last_updated": "2025-03-22T14:32:37.049184",
+      "tags": [
+        "document",
+        "analysis",
+        "classification"
+      ],
+      "metadata": {
+        "framework": "beeai"
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "document_analysis",
+          "name": "Document Analysis",
+          "description": "Analyzes and identifies the type of document from its content",
+          "context": {
+            "required_fields": [
+              "document_text"
+            ],
+            "produced_fields": [
+              "document_type",
+              "confidence",
+              "extracted_fields"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "9df9966c-dc02-4380-8131-5e93f300aedc",
+      "name": "CalculationVerifier",
+      "record_type": "TOOL",
+      "domain": "document_processing",
+      "description": "Tool that verifies calculations in invoices, ensuring subtotal + tax = total",
+      "code_snippet": "\n# Calculation verifier code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.049673",
+      "last_updated": "2025-03-22T14:32:37.049678",
+      "tags": [
+        "invoice",
+        "calculation",
+        "verification"
+      ],
+      "metadata": {
+        "framework": "beeai"
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "calculation_verification",
+          "name": "Calculation Verification",
+          "description": "Verifies that calculations in an invoice are correct (subtotal + tax = total)",
+          "context": {
+            "required_fields": [
+              "invoice_data"
+            ],
+            "produced_fields": [
+              "is_correct",
+              "expected_total",
+              "difference"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "52ee462f-9177-4887-a162-46f9c4325be2",
+      "name": "InvoiceSummaryGenerator",
+      "record_type": "TOOL",
+      "domain": "document_processing",
+      "description": "Tool that generates a concise summary of an invoice's key information",
+      "code_snippet": "\n# Invoice summary generator code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.050152",
+      "last_updated": "2025-03-22T14:32:37.050157",
+      "tags": [
+        "invoice",
+        "summary",
+        "report"
+      ],
+      "metadata": {
+        "framework": "beeai"
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "summary_generation",
+          "name": "Summary Generation",
+          "description": "Generates a concise summary of an invoice with key details and recommendations",
+          "context": {
+            "required_fields": [
+              "invoice_data"
+            ],
+            "produced_fields": [
+              "summary",
+              "key_details",
+              "recommendations"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bfa8a5ff-4b21-4c96-a6e2-c9208ed5a57d",
+      "name": "OpenAIInvoiceProcessor",
+      "record_type": "AGENT",
+      "domain": "document_processing",
+      "description": "An OpenAI agent specialized in processing invoice documents",
+      "code_snippet": "\n# OpenAI invoice processor code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.050604",
+      "last_updated": "2025-03-22T14:32:37.050609",
+      "tags": [
+        "openai",
+        "invoice",
+        "financial",
+        "agent"
+      ],
+      "metadata": {
+        "framework": "openai-agents",
+        "model": "gpt-4o",
+        "model_settings": {
+          "temperature": 0.3
+        },
+        "guardrails_enabled": true
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "invoice_data_extraction",
+          "name": "Invoice Data Extraction",
+          "description": "Extracts structured data from invoice documents",
+          "context": {
+            "required_fields": [
+              "invoice_text"
+            ],
+            "produced_fields": [
+              "structured_invoice_data"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
