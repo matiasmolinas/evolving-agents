@@ -1,0 +1,211 @@
+{
+  "records": [
+    {
+      "id": "a80d8bc9-0e3a-479b-bca8-e7575a9be59e",
+      "name": "BMICalculator",
+      "record_type": "TOOL",
+      "domain": "medical_assessment",
+      "description": "Tool that calculates Body Mass Index (BMI) and classifies weight status",
+      "code_snippet": "\n# BMI Calculator code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.051448",
+      "last_updated": "2025-03-22T14:32:37.051454",
+      "tags": [
+        "medical",
+        "assessment",
+        "bmi",
+        "calculator"
+      ],
+      "metadata": {
+        "framework": "beeai"
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "bmi_calculation",
+          "name": "BMI Calculation",
+          "description": "Calculates Body Mass Index from height and weight and classifies weight status",
+          "context": {
+            "required_fields": [
+              "weight_kg",
+              "height_cm"
+            ],
+            "produced_fields": [
+              "bmi",
+              "weight_status",
+              "health_risk"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "eba606a5-a64c-41d9-a345-ebf70f41fbc7",
+      "name": "CardiovascularRiskCalculator",
+      "record_type": "TOOL",
+      "domain": "medical_assessment",
+      "description": "Tool that calculates 10-year cardiovascular disease risk using established medical formulas",
+      "code_snippet": "\n# Cardiovascular risk calculator code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.051750",
+      "last_updated": "2025-03-22T14:32:37.051754",
+      "tags": [
+        "medical",
+        "cardiology",
+        "risk_assessment",
+        "framingham"
+      ],
+      "metadata": {
+        "framework": "beeai"
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "cardiovascular_risk_calculation",
+          "name": "Cardiovascular Risk Calculation",
+          "description": "Calculates 10-year cardiovascular disease risk using established medical formulas",
+          "context": {
+            "required_fields": [
+              "age",
+              "sex",
+              "total_cholesterol",
+              "hdl_cholesterol",
+              "systolic_bp",
+              "is_bp_treated",
+              "is_smoker",
+              "has_diabetes"
+            ],
+            "produced_fields": [
+              "risk_percentage",
+              "risk_level",
+              "recommendations"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "d36cf204-1ec8-49bc-afce-41b8f46f8032",
+      "name": "PhysiologicalDataExtractor",
+      "record_type": "AGENT",
+      "domain": "medical_assessment",
+      "description": "An agent that extracts structured physiological data from medical records for analysis",
+      "code_snippet": "\n# Physiological data extractor code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.052106",
+      "last_updated": "2025-03-22T14:32:37.052110",
+      "tags": [
+        "medical",
+        "extraction",
+        "physiological",
+        "data"
+      ],
+      "metadata": {
+        "framework": "beeai"
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "physiological_data_extraction",
+          "name": "Physiological Data Extraction",
+          "description": "Extracts structured physiological data from medical records",
+          "context": {
+            "required_fields": [
+              "medical_record_text"
+            ],
+            "produced_fields": [
+              "structured_physiological_data",
+              "vital_signs",
+              "lab_values",
+              "cardiovascular_risk_factors"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "f1c029ba-d7e2-41b0-87d7-4bebb9e0b2e1",
+      "name": "MedicalAnalysisAgent",
+      "record_type": "AGENT",
+      "domain": "medical_assessment",
+      "description": "An agent that analyzes physiological data and risk scores to provide clinical interpretations and recommendations",
+      "code_snippet": "\n# Medical analysis agent code here\n",
+      "version": "1.0.0",
+      "usage_count": 0,
+      "success_count": 0,
+      "fail_count": 0,
+      "status": "active",
+      "created_at": "2025-03-22T14:32:37.052578",
+      "last_updated": "2025-03-22T14:32:37.052583",
+      "tags": [
+        "medical",
+        "analysis",
+        "interpretation",
+        "assessment"
+      ],
+      "metadata": {
+        "framework": "beeai"
+      },
+      "performance_metrics": {
+        "total_executions": 0,
+        "successful_executions": 0,
+        "average_execution_time": 0.0,
+        "capabilities": {},
+        "domains": {},
+        "last_execution": null
+      },
+      "capabilities": [
+        {
+          "id": "medical_data_analysis",
+          "name": "Medical Data Analysis",
+          "description": "Analyzes physiological data and risk scores to provide clinical interpretations and recommendations",
+          "context": {
+            "required_fields": [
+              "structured_physiological_data",
+              "risk_scores"
+            ],
+            "produced_fields": [
+              "clinical_analysis",
+              "interpretations",
+              "recommendations",
+              "flags"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
