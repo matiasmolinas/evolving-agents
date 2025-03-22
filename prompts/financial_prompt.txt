@@ -1,0 +1,12 @@
+Create an advanced invoice processing system that improves upon the basic version in the library. The system should:
+
+1. Use a more sophisticated document analyzer that can detect invoices with higher confidence
+2. Extract comprehensive information (invoice number, date, vendor, items, subtotal, tax, total)
+3. Verify calculations to ensure subtotal + tax = total
+4. Generate a structured summary with key insights
+5. Handle different invoice formats and detect potential errors
+
+The system should leverage existing components from the library when possible,
+evolve them where improvements are needed, and create new components for missing functionality.
+
+Please generate a complete workflow for this invoice processing system.

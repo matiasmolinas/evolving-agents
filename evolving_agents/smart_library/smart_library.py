@@ -262,13 +262,20 @@ class SmartLibrary:
         """Prepare a record's text representation for embedding comparison."""
         name = record.get("name", "")
         description = record.get("description", "")
+        record_type = record.get("record_type", "UNKNOWN")
         capabilities = record.get("capabilities", [])
         
         if capabilities and capability_focus:
             # Create capability-focused text representation
             capability_texts = []
             for cap in capabilities:
-                cap_text = f"{cap.get('name', '')} {cap.get('description', '')}"
+                cap_id = cap.get("id", "")
+                cap_name = cap.get("name", "")
+                cap_desc = cap.get("description", "")
+                
+                # Build a rich capability description
+                cap_text = f"{cap_id} {cap_name} {cap_desc}"
+                
                 # Add context requirements if available
                 if "context" in cap:
                     context = cap["context"]
@@ -279,15 +286,22 @@ class SmartLibrary:
                     if produced:
                         cap_text += f" produces {', '.join(produced if isinstance(produced, list) else [produced])}"
                 capability_texts.append(cap_text)
+            
+            # Type is important for matching AGENT vs TOOL
+            type_text = f"record_type:{record_type}"
                 
-            return f"{name} {description} Capabilities: {' '.join(capability_texts)}"
+            return f"{name} {description} {type_text} Capabilities: {' '.join(capability_texts)}"
         else:
             # Create a general text representation
             code_snippet = record.get("code_snippet", "")
             # Limit code snippet length to avoid embedding token limits
-            if len(code_snippet) > 1000:
-                code_snippet = code_snippet[:1000] + "..."
-            return f"{name} {description} {code_snippet}"
+            if len(code_snippet) > 500:
+                code_snippet = code_snippet[:500] + "..."
+            
+            # Type is important for matching AGENT vs TOOL
+            type_text = f"record_type:{record_type}"
+            
+        return f"{name} {description} {type_text} {code_snippet}"
     
     async def _calculate_capability_match_with_llm(self, query: str, record: Dict[str, Any]) -> float:
         """Use LLM to evaluate how well a record's capabilities match a query."""
@@ -963,11 +977,12 @@ class SmartLibrary:
         self,
         capability_id: str,
         domain: Optional[str] = None,
-        min_success_rate: float = 0.7,
+        min_success_rate: float = 0.5,
         prefer_performance: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
         Find the best component for implementing a capability based on performance history.
+        This method is enhanced to better handle partial matches and semantic similarity.
         
         Args:
             capability_id: ID of the required capability
@@ -980,108 +995,53 @@ class SmartLibrary:
         """
         # First try to find direct matches by capability ID
         direct_matches = []
+        
+        # Clean the capability ID for matching (remove common words)
+        clean_capability = capability_id.lower().replace("agent", "").replace("tool", "").strip()
+        
         for record in self.records:
             # Skip inactive records
             if record.get("status", "active") != "active":
                 continue
-                
-            # Check if this record has the exact capability ID
-            has_capability = False
+            
+            # Check for direct match on capability ID
             for cap in record.get("capabilities", []):
-                if cap.get("id") == capability_id:
-                    has_capability = True
+                cap_id = cap.get("id", "").lower()
+                
+                # Check for exact match or if the clean capability is contained in the capability ID
+                if cap_id == capability_id.lower() or clean_capability in cap_id:
+                    direct_matches.append(record)
                     break
-            
-            if has_capability:
-                direct_matches.append(record)
         
-        # If we have direct matches and performance data is preferred
-        if direct_matches and prefer_performance:
-            # Check for performance metrics
-            candidates = []
-            for record in direct_matches:
-                metrics = record.get("performance_metrics", {})
-                cap_metrics = metrics.get("capabilities", {}).get(capability_id, {})
-                
-                # Skip if no executions for this capability
-                if cap_metrics.get("total_executions", 0) == 0:
-                    continue
-                    
-                # Calculate success rate
-                total = cap_metrics.get("total_executions", 0)
-                successful = cap_metrics.get("successful_executions", 0)
-                success_rate = successful / total if total > 0 else 0.0
-                
-                # Skip if below minimum success rate
-                if success_rate < min_success_rate:
-                    continue
-                    
-                # Calculate domain-specific score if applicable
-                domain_modifier = 1.0
-                if domain:
-                    domain_metrics = metrics.get("domains", {}).get(domain, {})
-                    domain_total = domain_metrics.get("total_executions", 0)
-                    domain_successful = domain_metrics.get("successful_executions", 0)
-                    if domain_total > 0:
-                        domain_success_rate = domain_successful / domain_total
-                        # Boost score for domain-specific success
-                        domain_modifier = 1.0 + (domain_success_rate * 0.5)  # Up to 50% boost
-                
-                # Calculate final score - combine success rate, execution time, and domain modifier
-                execution_time = cap_metrics.get("average_execution_time", 1.0)
-                time_factor = 1.0 / max(0.1, execution_time)  # Faster is better, avoid division by zero
-                score = success_rate * domain_modifier * (0.7 + (time_factor * 0.3))  # Weight speed at 30%
-                
-                candidates.append((record, score))
-            
-            # If we found candidates with performance metrics, return the best one
-            if candidates:
-                # Sort by score (descending) and return the best
-                candidates.sort(key=lambda x: x[1], reverse=True)
-                logger.info(f"Found component for capability {capability_id} based on performance metrics: {candidates[0][0]['name']}")
-                return candidates[0][0]
-         
-        # If we have direct matches but no performance data
+        # If direct matches found, return the most appropriate one
         if direct_matches:
-            # Just return the first one
-            logger.info(f"Found component for capability {capability_id} with direct ID match: {direct_matches[0]['name']}")
-            return direct_matches[0]   
+            if len(direct_matches) == 1:
+                return direct_matches[0]
             
-        # If no direct capability ID matches, try by capability description
-        if self.llm_service:
-            # Extract full capability ID including domain if present
-            full_capability_id = capability_id
+            # If multiple matches, prioritize by domain if specified
             if domain:
-                full_capability_id = f"{capability_id} in {domain}"
-                
-            # Use LLM to find components by capability description
-            matching_components = await self.find_components_by_capability_description(
-                full_capability_id, 
-                domain
-            )
+                domain_matches = [r for r in direct_matches if r.get("domain") == domain]
+                if domain_matches:
+                    return domain_matches[0]
             
-            if matching_components:
-                logger.info(f"Found component for capability {capability_id} using LLM matching: {matching_components[0]['name']}")
-                return matching_components[0]
+            # Otherwise return first match
+            return direct_matches[0]
         
-        # Otherwise, fall back to semantic search
-        logger.info(f"No direct match for capability {capability_id}, using semantic search")
-        query = f"component that provides {capability_id} capability"
+        # If no direct matches, try semantic search
+        search_query = f"component that can {capability_id}"
         if domain:
-            query += f" for {domain} domain"
-            
+            search_query += f" for {domain} domain"
+        
         search_results = await self.semantic_search(
-            query=query,
-            record_type=None,  # Accept any record type
-            threshold=0.6,
-            capability_focus=True
+            query=search_query,
+            domain=domain,
+            threshold=0.5  # Lower threshold to catch more potential matches
         )
         
         if search_results:
-            logger.info(f"Found component for capability {capability_id} using semantic search: {search_results[0][0]['name']}")
             return search_results[0][0]
-            
-        logger.warning(f"No suitable component found for capability {capability_id}")
+        
+        # No matches found
         return None
     
     async def find_components_by_capability_description(

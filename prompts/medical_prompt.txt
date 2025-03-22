@@ -1,0 +1,13 @@
+Create a cardiovascular health assessment system that analyzes patient physiological data to evaluate cardiovascular disease risk. 
+The system should:
+
+1. Extract physiological data from patient records (vital signs, lab values, anthropometrics, risk factors)
+2. Calculate Body Mass Index (BMI) and classify weight status
+3. Apply the Framingham Risk Score formula to determine 10-year cardiovascular disease risk
+4. Analyze the combined data to provide clinical interpretations, concerning findings, and evidence-based recommendations
+5. Generate a comprehensive patient assessment with appropriate medical disclaimers
+
+The system should use established medical formulas and guidelines for all calculations and risk assessments.
+Leverage existing components from the library when possible and create new components for missing functionality.
+
+Please generate a complete workflow for this cardiovascular assessment system.

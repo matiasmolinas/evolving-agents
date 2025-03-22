@@ -551,8 +551,18 @@ class DesignWorkflowTool(Tool[DesignWorkflowInput, None, StringToolOutput]):
         data_flow = workflow_design.get("data_flow", [])
         domain = workflow_design.get("domain", "general")
         
+        # Get the exact list of available components in the library
+        library_components = []
+        for record in self.library.records:
+            library_components.append({
+                "name": record["name"],
+                "type": record["record_type"],
+                "domain": record.get("domain", "general"),
+                "id": record["id"]
+            })
+        
         yaml_prompt = f"""
-        Convert this workflow design to a YAML workflow representation:
+        Convert this workflow design to a YAML workflow representation.
 
         SEQUENCE:
         {json.dumps(sequence, indent=2) if sequence else "No sequence defined."}
@@ -566,6 +576,9 @@ class DesignWorkflowTool(Tool[DesignWorkflowInput, None, StringToolOutput]):
         DOMAIN:
         {domain}
 
+        AVAILABLE LIBRARY COMPONENTS (ONLY USE THESE EXACT COMPONENTS):
+        {json.dumps(library_components, indent=2)}
+
         The YAML should follow this structure:
         ```yaml
         scenario_name: [task name]
@@ -573,11 +586,19 @@ class DesignWorkflowTool(Tool[DesignWorkflowInput, None, StringToolOutput]):
         description: [description]
 
         steps:
-          - type: "CREATE" or "EXECUTE" or "DEFINE"
+        - type: "CREATE" or "EXECUTE" or "DEFINE"
             item_type: "AGENT" or "TOOL"
             name: [component name]
             [additional parameters as needed]
         ```
+
+        CRITICAL INSTRUCTIONS:
+        1. ONLY use component names from the AVAILABLE LIBRARY COMPONENTS list above
+        2. Ensure item_type exactly matches the component's "type" field 
+        3. All components must be CREATEd before they are EXECUTEd
+        4. For user inputs, use the pipe character (|) for multi-line strings
+        5. Do NOT invent or rename components - use ONLY the exact names from the library
+        6. If a required component doesn't exist, use the closest match or leave it out
 
         Return only the YAML content.
         """
