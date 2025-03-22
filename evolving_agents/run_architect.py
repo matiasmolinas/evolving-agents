@@ -317,7 +317,7 @@ async def enhance_workflow_processor(system_components):
     original_process_workflow = system_agent.workflow_processor.process_workflow
     
     # Create an enhanced version that uses the agent bus
-    async def enhanced_process_workflow(workflow_yaml, params=None):
+    async def enhanced_process_workflow(workflow_yaml, **kwargs):
         print_step("PROCESSING WORKFLOW WITH REAL COMPONENTS", 
                  "Using registered component instances instead of mock execution", 
                  "PROGRESS")
@@ -346,7 +346,6 @@ async def enhance_workflow_processor(system_components):
             
             if step_type == "EXECUTE":
                 try:
-                    # Here's the key change: Use the agent bus to execute the component
                     # Construct input content
                     content = {}
                     
@@ -387,10 +386,9 @@ async def enhance_workflow_processor(system_components):
                         })
                     else:
                         print(f"No registered instance found for {name}, falling back to workflow processing")
-                        # Fall back to original processing
+                        # Fall back to original processing with a YAML subset containing just this step
                         result = await original_process_workflow(
-                            workflow_yaml=yaml.dump({"steps": [step]}),
-                            params=params
+                            workflow_yaml=yaml.dump({"steps": [step]})
                         )
                         results.append({
                             "step": i+1,
@@ -411,10 +409,7 @@ async def enhance_workflow_processor(system_components):
                 # For non-EXECUTE steps, use the original processing
                 try:
                     step_workflow = yaml.dump({"steps": [step]})
-                    result = await original_process_workflow(
-                        workflow_yaml=step_workflow,
-                        params=params
-                    )
+                    result = await original_process_workflow(workflow_yaml=step_workflow)
                     results.append({
                         "step": i+1,
                         "name": name if name else f"Step {i+1}",

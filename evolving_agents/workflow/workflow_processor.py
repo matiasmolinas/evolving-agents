@@ -31,12 +31,13 @@ class WorkflowProcessor:
         """Set the LLM service."""
         self.llm = llm_service
     
-    async def process_workflow(self, workflow_yaml: str) -> Dict[str, Any]:
+    async def process_workflow(self, workflow_yaml: str, **kwargs) -> Dict[str, Any]:
         """
         Process a workflow from a YAML string.
         
         Args:
             workflow_yaml: YAML string defining the workflow
+            **kwargs: Additional keyword arguments (for backward compatibility)
             
         Returns:
             Execution results
@@ -59,6 +60,9 @@ class WorkflowProcessor:
         disclaimers = workflow.get("additional_disclaimers", [])
         
         logger.info(f"Executing scenario: {scenario_name} in domain: {domain}")
+        
+        # Get params if provided (for backward compatibility)
+        params = kwargs.get('params', {})
         
         # Run the workflow using the agent's run method
         prompt = f"""
