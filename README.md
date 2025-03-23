@@ -84,6 +84,30 @@ evolved_agent = await evolve_component_tool.run(
 )
 ```
 
+## Medical Pipeline Example
+
+The `run_medical_pipeline.py` example demonstrates how to create a complete processing pipeline for medical reports:
+
+```python
+# Simple usage example
+await run_pipeline(
+    prompt="Summarize the diagnosis and medications in this medical report",
+    input_path="medical_report.txt",
+    output_path="summary_output.txt"
+)
+```
+
+This example:
+
+1. Loads a medical report from a text file
+2. Initializes the core components (LLM service, Smart Library, Agent Bus)
+3. Creates the Architect-Zero agent, our most sophisticated meta-agent
+4. Passes the prompt and medical report to the architect
+5. Architect-Zero analyzes requirements, builds a system to process the medical data, and generates a report
+6. The output is saved to the specified path
+
+This demonstrates how the toolkit can be used to build complex document processing pipelines with minimal code, letting Architect-Zero handle the details of system design and implementation.
+
 ## Why Another Agent Toolkit?
 
 Most agent frameworks focus on creating individual agents, not agent ecosystems that can build themselves. Key differences:
@@ -112,6 +136,7 @@ We provide several examples to demonstrate different capabilities:
 - **[openai_agent_evolution_demo.py](examples/openai_agent_evolution_demo.py)**: Demonstrates agent evolution and domain adaptation
 - **[pure_react_system_agent.py](examples/pure_react_system_agent.py)**: Shows our pure ReActAgent implementation
 - **[openai_agents_workflow_integration.py](examples/openai_agents_workflow_integration.py)**: Demonstrates workflow integration with OpenAI Agents
+- **[run_medical_pipeline.py](examples/run_medical_pipeline.py)**: Shows how to process medical documents with a complete pipeline
 
 ## Installation
 
