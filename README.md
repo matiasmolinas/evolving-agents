@@ -163,3 +163,23 @@ pip install evolving-agents-framework
 - [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro) for the original concept and architecture
 - [BeeAI Framework](https://github.com/i-am-bee/beeai-framework/tree/main/python) for integrated agent capabilities
 - [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) for additional agent integration
+
+# Important Note on Alpha Status
+
+**Current Status: Alpha Release**
+
+Please be aware that this project is currently in an **alpha state**. The examples provided are primarily demonstration toys showing the intended architecture and capabilities, but they are not yet fully functional production implementations.
+
+In the next few days, we will be:
+- Replacing mock components with fully functional implementations
+- Improving the Smart Agent Bus with real-time capability routing
+- Adding comprehensive metrics for agent performance
+- Implementing full cross-framework compatibility
+
+Some specific components that are currently simplified/mocked and will be replaced:
+- The embedding service has fallback mock implementations
+- Some provider integrations use simplified execution paths
+- The workflow processor has limited error handling
+- The agent bus uses simplified storage backends
+
+Thank you for your understanding as we work to deliver a robust, production-ready version of the Evolving Agents Toolkit.
