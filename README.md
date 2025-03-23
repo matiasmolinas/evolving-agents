@@ -17,7 +17,7 @@ pip install -e .
 pip install -r requirements-openai-agents.txt
 
 # Run the Architect-Zero example
-python examples/architect_zero_comprehensive_demo.py
+python examples/invoice_processing/architect_zero_comprehensive_demo.py
 ```
 
 ## Core Features
@@ -27,6 +27,8 @@ python examples/architect_zero_comprehensive_demo.py
 - **Framework Agnostic**: Works with BeeAI, OpenAI Agents SDK, and custom frameworks
 - **Governance Firmware**: Built-in guardrails to ensure agents stay within safe boundaries
 - **Self-Building Capabilities**: Agents can design and implement entire agent systems
+
+> **Note**: This project is currently in alpha state. Some components may be using mocks or simplified implementations. In the coming days, we will be shipping a fully functional version with an improved Smart Agent Bus, capability-based agent and tool discovery, and performance metrics.
 
 ## Key Concepts
 
@@ -84,29 +86,47 @@ evolved_agent = await evolve_component_tool.run(
 )
 ```
 
-## Medical Pipeline Example
+## Example Applications
 
-The `run_medical_pipeline.py` example demonstrates how to create a complete processing pipeline for medical reports:
+The repository includes several examples demonstrating key capabilities:
 
-```python
-# Simple usage example
-await run_pipeline(
-    prompt="Summarize the diagnosis and medications in this medical report",
-    input_path="medical_report.txt",
-    output_path="summary_output.txt"
-)
-```
+### 1. Architect-Zero Comprehensive Demo
+The flagship example in `examples/invoice_processing/architect_zero_comprehensive_demo.py` shows our most sophisticated meta-agent building a complete invoice processing system from scratch. This example demonstrates:
+- Automated requirements analysis
+- Component discovery and reuse
+- Evolution of existing components
+- Generation of complete workflows
+- End-to-end execution
 
-This example:
+### 2. OpenAI Agent Evolution
+The `examples/agent_evolution/openai_agent_evolution_demo.py` demonstrates:
+- Creating OpenAI agents with the Agents SDK
+- Evolving agents through different strategies (standard, aggressive)
+- Domain adaptation (finance → healthcare)
+- A/B testing to compare agent versions
 
-1. Loads a medical report from a text file
-2. Initializes the core components (LLM service, Smart Library, Agent Bus)
-3. Creates the Architect-Zero agent, our most sophisticated meta-agent
-4. Passes the prompt and medical report to the architect
-5. Architect-Zero analyzes requirements, builds a system to process the medical data, and generates a report
-6. The output is saved to the specified path
+### 3. Medical Pipeline
+The `examples/medical_pipeline/run_medical_pipeline.py` example demonstrates how to create a complete processing pipeline for medical reports that:
+- Processes medical records to extract diagnoses and medications
+- Analyzes patient data for key insights
+- Generates structured summaries
 
-This demonstrates how the toolkit can be used to build complex document processing pipelines with minimal code, letting Architect-Zero handle the details of system design and implementation.
+### 4. Personal AI System
+The `examples/personal_ai/personal_ai_pipeline.py` builds a personal assistant with:
+- Multi-tier memory management (hot/warm/cold)
+- Memory importance ranking
+- Memory consolidation and retrieval
+- Contextual response generation
+
+### 5. Conversational Forms
+The `examples/forms/run_conversational_form.py` demonstrates:
+- Natural language form definition
+- Dynamic conversation flow
+- Validation and conditional logic
+- Response summary generation
+
+### 6. Pure ReAct System
+The `examples/pure_react_system/pure_react_system_agent.py` shows the core System Agent working as a pure BeeAI ReActAgent with embedded tool strategies.
 
 ## Why Another Agent Toolkit?
 
@@ -126,17 +146,7 @@ In an ecosystem where agents can evolve and create new components, governance is
 - Ensures ethical constraints are maintained across generations
 - Prevents capability drift through continuous validation
 
-Without proper guardrails, autonomous agent ecosystems could develop unintended behaviors or safety issues.
-
-## Examples
-
-We provide several examples to demonstrate different capabilities:
-
-- **[architect_zero_comprehensive_demo.py](examples/architect_zero_comprehensive_demo.py)**: Our flagship example showing a meta-agent designing a complete system
-- **[openai_agent_evolution_demo.py](examples/openai_agent_evolution_demo.py)**: Demonstrates agent evolution and domain adaptation
-- **[pure_react_system_agent.py](examples/pure_react_system_agent.py)**: Shows our pure ReActAgent implementation
-- **[openai_agents_workflow_integration.py](examples/openai_agents_workflow_integration.py)**: Demonstrates workflow integration with OpenAI Agents
-- **[run_medical_pipeline.py](examples/run_medical_pipeline.py)**: Shows how to process medical documents with a complete pipeline
+Without proper guardrails, autonomous agent ecosystems could develop unintended behaviors or safety issues. The Evolving Agents Toolkit tackles this challenge head-on by making governance a core part of the agent lifecycle, not an afterthought.
 
 ## Installation
 
@@ -151,5 +161,25 @@ pip install evolving-agents-framework
 ## Acknowledgements
 
 - [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro) for the original concept and architecture
-- BeeAI framework for integrated agent capabilities
-- OpenAI for the Agents SDK
+- [BeeAI Framework](https://github.com/i-am-bee/beeai-framework/tree/main/python) for integrated agent capabilities
+- [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) for additional agent integration
+
+# Important Note on Alpha Status
+
+**Current Status: Alpha Release**
+
+Please be aware that this project is currently in an **alpha state**. The examples provided are primarily demonstration toys showing the intended architecture and capabilities, but they are not yet fully functional production implementations.
+
+In the next few days, we will be:
+- Replacing mock components with fully functional implementations
+- Improving the Smart Agent Bus with real-time capability routing
+- Adding comprehensive metrics for agent performance
+- Implementing full cross-framework compatibility
+
+Some specific components that are currently simplified/mocked and will be replaced:
+- The embedding service has fallback mock implementations
+- Some provider integrations use simplified execution paths
+- The workflow processor has limited error handling
+- The agent bus uses simplified storage backends
+
+Thank you for your understanding as we work to deliver a robust, production-ready version of the Evolving Agents Toolkit.
