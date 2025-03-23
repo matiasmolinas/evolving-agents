@@ -1,0 +1,7 @@
+Patient Name: John Doe
+Age: 67
+Diagnosis: Type 2 Diabetes Mellitus and Hypertension.
+Medications: Metformin, Lisinopril, Atorvastatin.
+
+Patient exhibits moderate fatigue and elevated blood pressure. 
+Follow-up in 30 days recommended.
