@@ -1,5 +1,5 @@
 import asyncio
-from evolving_agents.agents import create_architect_zero
+from evolving_agents.agents.architect_zero import create_architect_zero
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.core.llm_service import LLMService
@@ -48,9 +48,19 @@ async def run_pipeline(prompt: str, input_path: str, output_path: str):
 
     result = await architect.run(full_prompt)
 
-    # Step 5: Save the result
+    # Step 5: Extract the actual text result and save it
+    # Access the text content from the result object
+    if hasattr(result, 'result') and hasattr(result.result, 'text'):
+        result_text = result.result.text
+    elif hasattr(result, 'text'):
+        result_text = result.text
+    else:
+        # Fallback - convert the whole object to string
+        result_text = str(result)
+
+    # Save the result text
     with open(output_path, "w") as f:
-        f.write(result)
+        f.write(result_text)
 
     print("Pipeline completed. Output written to", output_path)
 
