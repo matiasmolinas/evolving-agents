@@ -19,7 +19,7 @@ from evolving_agents.tools.agent_bus.discover_capability_tool import DiscoverCap
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.core.llm_service import LLMService
-from evolving_agents.agent_bus.simple_agent_bus import SimpleAgentBus
+from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 
 # Import workflow components with fixed imports
 from evolving_agents.workflow.workflow_processor import WorkflowProcessor
@@ -67,7 +67,12 @@ class SystemAgentFactory:
         # Initialize or use provided agent_bus
         if not agent_bus:
             # Create a simple agent bus
-            agent_bus = SimpleAgentBus()
+            agent_bus = SmartAgentBus(
+                smart_library=smart_library,
+                system_agent=None,  # We'll set this after system_agent is created
+                storage_path="smart_agent_bus.json", 
+                log_path="agent_bus_logs.json"
+            )
         
         # Create Smart Library tools
         search_tool = SearchComponentTool(smart_library)

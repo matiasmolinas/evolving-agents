@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.smart_library.smart_library import SmartLibrary
-from evolving_agents.agent_bus.simple_agent_bus import SimpleAgentBus
+from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.agents.architect_zero import create_architect_zero
 
@@ -229,7 +229,12 @@ async def main():
     # Initialize core components
     llm_service = LLMService(provider="openai", model="gpt-4o")
     smart_library = SmartLibrary("smart_library.json")
-    agent_bus = SimpleAgentBus("agent_bus.json")
+    agent_bus = SmartAgentBus(
+        smart_library=smart_library,
+        system_agent=None,  # We'll set this after system_agent is created
+        storage_path="smart_agent_bus.json", 
+        log_path="agent_bus_logs.json"
+    )
     
     # Create the system agent
     system_agent = await SystemAgentFactory.create_agent(
@@ -237,6 +242,12 @@ async def main():
         smart_library=smart_library,
         agent_bus=agent_bus
     )
+
+    # Update the agent_bus with the system_agent
+    agent_bus.system_agent = system_agent
+
+    # Initialize from library
+    await agent_bus.initialize_from_library()
     
     # Create the Architect-Zero agent
     architect_agent = await create_architect_zero(

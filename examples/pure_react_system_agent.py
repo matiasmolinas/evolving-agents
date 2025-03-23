@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.core.system_agent import SystemAgentFactory
-from evolving_agents.agent_bus.simple_agent_bus import SimpleAgentBus
+from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -79,7 +79,12 @@ async def main():
         llm_service = LLMService(provider="openai", model="gpt-4o")
         
         # Initialize the Agent Bus
-        agent_bus = SimpleAgentBus()
+        agent_bus = SmartAgentBus(
+            smart_library=library,
+            system_agent=None,  # We'll set this after system_agent is created
+            storage_path="smart_agent_bus.json", 
+            log_path="agent_bus_logs.json"
+        )
         
         # Create the SystemAgent as a pure BeeAI ReActAgent
         print("\nInitializing SystemAgent as a pure BeeAI ReActAgent...")
