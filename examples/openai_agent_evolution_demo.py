@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.core.system_agent import SystemAgentFactory
-from evolving_agents.agent_bus.simple_agent_bus import SimpleAgentBus
+from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.providers.registry import ProviderRegistry
 from evolving_agents.providers.beeai_provider import BeeAIProvider
 from evolving_agents.providers.openai_agents_provider import OpenAIAgentsProvider
@@ -245,7 +245,12 @@ async def main():
         library_path = await setup_evolution_demo_library()
         library = SmartLibrary(library_path)
         llm_service = LLMService(provider="openai", model="gpt-4o")
-        agent_bus = SimpleAgentBus()
+        agent_bus = SmartAgentBus(
+            smart_library=library,
+            system_agent=None,  # We'll set this after system_agent is created
+            storage_path="smart_agent_bus.json", 
+            log_path="agent_bus_logs.json"
+        )
         
         # Set up provider registry
         provider_registry = ProviderRegistry()
@@ -259,9 +264,14 @@ async def main():
         system_agent = await SystemAgentFactory.create_agent(
             llm_service=llm_service,
             smart_library=library,
-            agent_bus=agent_bus,
-            memory_type="token"
+            agent_bus=agent_bus
         )
+
+        # Update the agent_bus with the system_agent
+        agent_bus.system_agent = system_agent
+
+        # Initialize from library
+        await agent_bus.initialize_from_library()
         
         # Create agent experience tracker
         experience_tracker = AgentExperienceTracker()

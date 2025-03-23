@@ -12,7 +12,7 @@ from beeai_framework.emitter.emitter import Emitter
 
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
-from evolving_agents.agent_bus.simple_agent_bus import SimpleAgentBus
+from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.workflow.workflow_generator import WorkflowGenerator
 from evolving_agents.core.system_agent import SystemAgentFactory
 
@@ -36,7 +36,7 @@ class ArchitectZeroAgentInitializer:
     async def create_agent(
         llm_service: LLMService,
         smart_library: SmartLibrary,
-        agent_bus: SimpleAgentBus,
+        agent_bus: SmartAgentBus,
         system_agent_factory: Optional[callable] = None,
         tools: Optional[List[Tool]] = None
     ) -> ReActAgent:
@@ -71,6 +71,12 @@ class ArchitectZeroAgentInitializer:
                 smart_library=smart_library,
                 agent_bus=agent_bus
             )
+
+        # Update the agent_bus with the system_agent
+        agent_bus.system_agent = system_agent
+
+        # Initialize from library
+        await agent_bus.initialize_from_library()
         
         # Create workflow generator
         workflow_generator = WorkflowGenerator(llm_service, smart_library)
@@ -769,7 +775,7 @@ class ExecuteWorkflowTool(Tool[ExecuteWorkflowInput, None, StringToolOutput]):
 async def create_architect_zero(
     llm_service: LLMService,
     smart_library: SmartLibrary,
-    agent_bus: SimpleAgentBus,
+    agent_bus: SmartAgentBus,
     system_agent_factory: Optional[callable] = None
 ) -> ReActAgent:
     """
