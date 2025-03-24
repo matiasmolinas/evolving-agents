@@ -3,3 +3,4 @@ numpy
 openai-agents
 chromadb
 pytest
+pytest-asyncio

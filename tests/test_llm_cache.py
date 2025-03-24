@@ -1,5 +1,3 @@
-# tests/test_llm_cache.py
-
 import os
 import shutil
 import pytest
@@ -41,6 +39,9 @@ async def test_embedding_cache(temp_cache_dir, monkeypatch):
     call_count = 0
     
     class MockEmbeddingModel:
+        # Add a model_id attribute required by the service
+        model_id = "mock-embedding-model"
+        
         async def create(self, input_text):
             nonlocal call_count
             call_count += 1
@@ -50,10 +51,10 @@ async def test_embedding_cache(temp_cache_dir, monkeypatch):
         async def create_batch(self, input_texts):
             nonlocal call_count
             call_count += len(input_texts)
-            # Return a list of vectors
+            # Return a list of vectors for each text in the batch
             return [{"data": [0.1, 0.2, 0.3, 0.4, 0.5]} for _ in input_texts]
     
-    # Create LLM service with mocked model and caching
+    # Create LLM service with mocked embedding model and caching enabled
     service = LLMService(provider="openai", use_cache=True, cache_dir=temp_cache_dir)
     service.embedding_model = MockEmbeddingModel()
     
@@ -61,21 +62,22 @@ async def test_embedding_cache(temp_cache_dir, monkeypatch):
     embedding1 = await service.embed("test text")
     assert call_count == 1
     
-    # Second call with same text should use cache
+    # Second call with same text should return cached embedding
     embedding2 = await service.embed("test text")
-    assert call_count == 1  # Count should not increase
+    assert call_count == 1  # Call count should not increase
     
-    # Call with different text should hit the model
+    # Call with different text should hit the model again
     embedding3 = await service.embed("different text")
     assert call_count == 2
     
     # Test batch embedding
     batch_result = await service.embed_batch(["text1", "text2", "text3"])
-    assert call_count == 5  # +3 for the batch
+    # The batch call should add 3 more calls (one per text not cached)
+    assert call_count == 5
     
-    # Second batch with same texts should use cache
+    # Second batch with the same texts should use cache
     batch_result2 = await service.embed_batch(["text1", "text2", "text3"])
-    assert call_count == 5  # Count should not increase
+    assert call_count == 5  # Call count should remain unchanged
 
 @pytest.mark.asyncio
 async def test_completion_cache(temp_cache_dir, monkeypatch):
@@ -97,7 +99,7 @@ async def test_completion_cache(temp_cache_dir, monkeypatch):
             call_count += 1
             return MockResponse()
     
-    # Create LLM service with mocked model and caching
+    # Create LLM service with mocked chat model and caching enabled
     service = LLMService(provider="openai", use_cache=True, cache_dir=temp_cache_dir)
     service.chat_model = MockChatModel()
     
@@ -105,17 +107,15 @@ async def test_completion_cache(temp_cache_dir, monkeypatch):
     response1 = await service.generate("test prompt")
     assert call_count == 1
     
-    # Second call with same prompt should use cache
+    # Second call with the same prompt should use cache
     response2 = await service.generate("test prompt")
     assert call_count == 1  # Count should not increase
     
-    # Call with different prompt should hit the model
+    # Call with a different prompt should hit the model again
     response3 = await service.generate("different prompt")
     assert call_count == 2
     
-    # Test cache clearing
+    # Test cache clearing: after clearing the cache, a new call should hit the model again
     count = service.clear_cache()
-    
-    # After clearing, calls should hit the model again
     response4 = await service.generate("test prompt")
     assert call_count == 3
