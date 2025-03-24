@@ -28,8 +28,6 @@ python examples/invoice_processing/architect_zero_comprehensive_demo.py
 - **Governance Firmware**: Built-in guardrails to ensure agents stay within safe boundaries
 - **Self-Building Capabilities**: Agents can design and implement entire agent systems
 
-> **Note**: This project is currently in alpha state. Some components may be using mocks or simplified implementations. In the coming days, we will be shipping a fully functional version with an improved Smart Agent Bus, capability-based agent and tool discovery, and performance metrics.
-
 ## Key Concepts
 
 ### Agent-Centric Architecture
@@ -46,7 +44,7 @@ analysis_agent = await agent_bus.request_service(
 
 ### Smart Library
 
-The Smart Library provides semantic discovery, storage, and evolution of components:
+The Smart Library provides semantic discovery, storage, and evolution of components using real vector embeddings with ChromaDB:
 
 ```python
 # Example: Searching for components semantically
@@ -80,7 +78,7 @@ Evolve existing agents to adapt to new requirements or domains:
 # Example: Evolve an agent to a new domain
 evolved_agent = await evolve_component_tool.run(
     parent_id=original_agent_id,
-    changes="Adapt to medical records instead of invoices",
+    changes="Adapt to a new domain with different requirements",
     target_domain="healthcare",
     evolution_strategy="domain_adaptation"
 )
@@ -102,31 +100,21 @@ The flagship example in `examples/invoice_processing/architect_zero_comprehensiv
 The `examples/agent_evolution/openai_agent_evolution_demo.py` demonstrates:
 - Creating OpenAI agents with the Agents SDK
 - Evolving agents through different strategies (standard, aggressive)
-- Domain adaptation (finance → healthcare)
+- Domain adaptation
 - A/B testing to compare agent versions
 
-### 3. Medical Pipeline
-The `examples/medical_pipeline/run_medical_pipeline.py` example demonstrates how to create a complete processing pipeline for medical reports that:
-- Processes medical records to extract diagnoses and medications
-- Analyzes patient data for key insights
-- Generates structured summaries
-
-### 4. Personal AI System
-The `examples/personal_ai/personal_ai_pipeline.py` builds a personal assistant with:
-- Multi-tier memory management (hot/warm/cold)
-- Memory importance ranking
-- Memory consolidation and retrieval
-- Contextual response generation
-
-### 5. Conversational Forms
+### 3. Conversational Forms
 The `examples/forms/run_conversational_form.py` demonstrates:
 - Natural language form definition
 - Dynamic conversation flow
 - Validation and conditional logic
 - Response summary generation
 
-### 6. Pure ReAct System
-The `examples/pure_react_system/pure_react_system_agent.py` shows the core System Agent working as a pure BeeAI ReActAgent with embedded tool strategies.
+### 4. Smart Autocomplete
+The `examples/autocomplete/run_autocomplete_system.py` shows:
+- Context-aware text completion
+- Learning from multiple input sources
+- Adaptive suggestions based on user context
 
 ## Why Another Agent Toolkit?
 
@@ -154,6 +142,12 @@ Without proper guardrails, autonomous agent ecosystems could develop unintended 
 pip install evolving-agents-framework
 ```
 
+## Development Features
+
+- **LLM Caching**: Built-in caching for completions and embeddings speeds up development and testing
+- **Vector Search**: Integrated ChromaDB for efficient semantic search of components
+- **Hot Reloading**: Components can be modified and reloaded without restarting the system
+
 ## License
 
 [Apache v2.0](LICENSE)
@@ -163,23 +157,3 @@ pip install evolving-agents-framework
 - [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro) for the original concept and architecture
 - [BeeAI Framework](https://github.com/i-am-bee/beeai-framework/tree/main/python) for integrated agent capabilities
 - [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) for additional agent integration
-
-# Important Note on Alpha Status
-
-**Current Status: Alpha Release**
-
-Please be aware that this project is currently in an **alpha state**. The examples provided are primarily demonstration toys showing the intended architecture and capabilities, but they are not yet fully functional production implementations.
-
-In the next few days, we will be:
-- Replacing mock components with fully functional implementations
-- Improving the Smart Agent Bus with real-time capability routing
-- Adding comprehensive metrics for agent performance
-- Implementing full cross-framework compatibility
-
-Some specific components that are currently simplified/mocked and will be replaced:
-- The embedding service has fallback mock implementations
-- Some provider integrations use simplified execution paths
-- The workflow processor has limited error handling
-- The agent bus uses simplified storage backends
-
-Thank you for your understanding as we work to deliver a robust, production-ready version of the Evolving Agents Toolkit.
