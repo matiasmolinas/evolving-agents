@@ -1,4 +1,4 @@
-# examples/run_conversational_form.py
+# examples/forms/run_conversational_form.py
 
 import asyncio
 import json
@@ -9,6 +9,12 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 async def create_conversational_form(form_prompt: str, form_id: str = "feedback_form"):
     """Create a conversational form based on natural language description."""

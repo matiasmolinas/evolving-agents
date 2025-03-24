@@ -1,4 +1,4 @@
-# examples/openai_agent_evolution_demo.py
+
 
 import asyncio
 import logging
@@ -23,6 +23,12 @@ from evolving_agents.agents.agent_factory import AgentFactory
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Sample invoice for testing
 SAMPLE_INVOICE = """

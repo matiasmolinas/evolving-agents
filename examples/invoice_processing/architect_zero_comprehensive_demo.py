@@ -1,4 +1,4 @@
-# examples/architect_zero_comprehensive_demo.py
+# examples/invoice_processing/architect_zero_comprehensive_demo.py
 
 import asyncio
 import logging
