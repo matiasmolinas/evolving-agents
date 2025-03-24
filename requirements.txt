@@ -1,3 +1,5 @@
 beeai-framework
 numpy
 openai-agents
+chromadb
+pytest

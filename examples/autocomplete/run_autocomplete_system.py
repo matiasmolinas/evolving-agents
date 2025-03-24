@@ -1,4 +1,4 @@
-# examples/run_autocomplete_system.py
+# examples/autocomplete/run_autocomplete_system.py
 
 import asyncio
 import json
@@ -8,6 +8,12 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
+
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 async def run_smart_autocomplete(
