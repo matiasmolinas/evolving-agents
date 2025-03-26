@@ -1,9 +1,16 @@
 import os
 import json
 import logging
+import asyncio
+import time
+import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple, Union
+from pathlib import Path
 
+import chromadb
+import numpy as np
+from evolving_agents.core.llm_service import LLMService
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from beeai_framework.agents.react import ReActAgent
 
@@ -11,387 +18,519 @@ logger = logging.getLogger(__name__)
 
 class SmartAgentBus:
     """
-    A unified Agent Bus that integrates with SmartLibrary and supports an agent-centric,
-    capability-based communication model. Capabilities are treated as descriptive criteria—
-    if a record lacks explicit capability definitions, a default capability is derived from its description.
+    A unified Agent Bus with semantic capability discovery, provider management,
+    and execution orchestration.
     
-    Production strategy:
-      - If no provider is found for a requested capability, the request fails.
-      - If no system agent is configured to process the request, the request fails.
-      - Execution errors from the system agent are propagated.
+    Features:
+    - Semantic capability matching using ChromaDB
+    - Circuit breaker pattern for fault tolerance
+    - Integrated with SmartLibrary for capability discovery
+    - Comprehensive logging and monitoring
+    - Async operations throughout
     """
+
     def __init__(
         self,
         smart_library: SmartLibrary,
         system_agent: Optional[ReActAgent] = None,
+        llm_service: Optional[LLMService] = None,
         storage_path: str = "smart_agent_bus.json",
+        chroma_path: str = "./capability_db",
         log_path: str = "agent_bus_logs.json"
     ):
-        self.storage_path = storage_path
-        self.log_path = log_path
+        """
+        Initialize the SmartAgentBus.
+        
+        Args:
+            smart_library: Initialized SmartLibrary instance
+            system_agent: Optional ReActAgent for service execution
+            llm_service: Optional LLMService for embeddings
+            storage_path: Path for provider storage
+            chroma_path: Path for ChromaDB storage
+            log_path: Path for execution logs
+        """
         self.smart_library = smart_library
         self.system_agent = system_agent
+        self.llm_service = llm_service or LLMService()
+        self.log_path = log_path
+
+        # Initialize components
+        self._init_chroma_db(chroma_path)
+        self._init_provider_system(storage_path)
+        self._load_capabilities()
+
+        logger.info(f"SmartAgentBus initialized with logging at {log_path}")
+
+    def _init_chroma_db(self, chroma_path: str) -> None:
+        """Initialize the ChromaDB capability registry."""
+        self.chroma_client = chromadb.PersistentClient(path=chroma_path)
+        self.capability_collection = self.chroma_client.get_or_create_collection(
+            name="capability_registry",
+            metadata={"hnsw:space": "cosine"}  # Using cosine similarity
+        )
+
+    def _init_provider_system(self, storage_path: str) -> None:
+        """Initialize the provider management system."""
+        self.provider_storage_path = storage_path
         self.providers: Dict[str, Dict[str, Any]] = {}
-        self.capabilities: Dict[str, Dict[str, Any]] = {}
-        self._load_data()
-    
-    def _load_data(self):
-        if os.path.exists(self.storage_path):
+        self.circuit_breakers: Dict[str, Dict[str, Any]] = {}
+        self._load_providers()
+
+    def _load_providers(self) -> None:
+        """Load providers from persistent storage."""
+        if Path(self.provider_storage_path).exists():
             try:
-                with open(self.storage_path, "r", encoding="utf-8") as f:
+                with open(self.provider_storage_path, 'r') as f:
                     data = json.load(f)
                     self.providers = data.get("providers", {})
-                    self.capabilities = data.get("capabilities", {})
-                logger.info(f"Loaded Agent Bus data from {self.storage_path}")
+                    self.circuit_breakers = data.get("circuit_breakers", {})
+                logger.info(f"Loaded {len(self.providers)} providers from storage")
             except Exception as e:
-                logger.error(f"Error loading Agent Bus data: {str(e)}")
-                self.providers = {}
-                self.capabilities = {}
-        else:
-            logger.info(f"No existing Agent Bus data found at {self.storage_path}, starting fresh.")
-    
-    def _save_data(self):
-        with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "providers": self.providers,
-                "capabilities": self.capabilities,
-                "updated_at": datetime.utcnow().isoformat()
-            }, f, indent=2)
-        logger.info(f"Saved Agent Bus data to {self.storage_path}")
-    
-    def _validate_capability(self, capability: Dict[str, Any]) -> bool:
-        required_keys = {"id", "name", "description"}
-        return required_keys.issubset(capability.keys())
-    
-    def _derive_default_capability(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        If a record does not include explicit capabilities, derive one using its description.
-        """
-        return {
-            "id": f"{record['name'].lower().replace(' ', '_')}_default",
-            "name": record["name"],
-            "description": record.get("description", ""),
-            "confidence": 0.8
+                logger.error(f"Error loading providers: {str(e)}")
+
+    async def _save_providers(self) -> None:
+        """Persist providers to storage."""
+        data = {
+            "providers": self.providers,
+            "circuit_breakers": self.circuit_breakers,
+            "updated_at": datetime.utcnow().isoformat()
         }
-    
+        with open(self.provider_storage_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        logger.debug(f"Saved {len(self.providers)} providers to storage")
+
+    def _load_capabilities(self) -> None:
+        """Load capabilities from SmartLibrary records."""
+        self.capabilities = {}
+        for record in self.smart_library.records:
+            if record.get("status") != "active":
+                continue
+                
+            for cap in record.get("metadata", {}).get("capabilities", []):
+                if self._validate_capability(cap):
+                    self.capabilities[cap["id"]] = cap
+        logger.info(f"Loaded {len(self.capabilities)} capabilities from library")
+
+    def _validate_capability(self, capability: Dict[str, Any]) -> bool:
+        """Validate capability structure."""
+        required = {"id", "name", "description"}
+        return all(field in capability for field in required)
+
+    async def _register_capability(self, capability: Dict[str, Any]) -> None:
+        """Register a capability in ChromaDB with semantic indexing."""
+        semantic_text = (
+            f"Capability: {capability['name']}\n"
+            f"Description: {capability.get('description', '')}\n"
+            f"Input: {capability.get('input_requirements', '')}\n"
+            f"Output: {capability.get('output_guarantees', '')}"
+        )
+        
+        embedding = await self.llm_service.embed(semantic_text)
+        
+        self.capability_collection.add(
+            ids=[capability["id"]],
+            embeddings=[embedding],
+            documents=[semantic_text],
+            metadatas=[{
+                "name": capability["name"],
+                "description": capability.get("description", ""),
+                "created_at": datetime.utcnow().isoformat()
+            }]
+        )
+        logger.debug(f"Registered capability: {capability['name']}")
+
+    async def _log_execution(
+        self,
+        capability_id: str,
+        input_data: Dict[str, Any],
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        provider_id: Optional[str] = None
+    ) -> None:
+        """Log execution details to file."""
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "capability": capability_id,
+            "provider": provider_id,
+            "input": input_data,
+            "result": result,
+            "error": error,
+            "system_state": {
+                "active_providers": len(self.providers),
+                "tripped_circuits": sum(
+                    1 for cb in self.circuit_breakers.values()
+                    if cb["failures"] >= 3 and (time.time() - cb["last_failure"]) < 300
+                )
+            }
+        }
+
+        try:
+            logs = []
+            if Path(self.log_path).exists():
+                with open(self.log_path, 'r') as f:
+                    logs = json.load(f)
+            
+            logs.append(log_entry)
+            
+            with open(self.log_path, 'w') as f:
+                json.dump(logs, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to write execution log: {str(e)}")
+
+    def _check_circuit_breaker(self, provider_id: str) -> bool:
+        """Check if provider is in circuit breaker state."""
+        if provider_id not in self.circuit_breakers:
+            return False
+        
+        cb = self.circuit_breakers[provider_id]
+        return cb["failures"] >= 3 and (time.time() - cb["last_failure"]) < 300
+
+    def _record_failure(self, provider_id: str) -> None:
+        """Record a provider failure."""
+        if provider_id not in self.circuit_breakers:
+            self.circuit_breakers[provider_id] = {
+                "failures": 1,
+                "last_failure": time.time()
+            }
+        else:
+            self.circuit_breakers[provider_id]["failures"] += 1
+            self.circuit_breakers[provider_id]["last_failure"] = time.time()
+
+    def _reset_circuit_breaker(self, provider_id: str) -> None:
+        """Reset circuit breaker after successful operation."""
+        if provider_id in self.circuit_breakers:
+            del self.circuit_breakers[provider_id]
+
     async def register_provider(
-        self, 
-        name: str, 
-        capabilities: List[Dict[str, Any]], 
+        self,
+        name: str,
+        capabilities: List[Dict[str, Any]],
         provider_type: str = "AGENT",
         description: str = "",
-        metadata: Dict[str, Any] = {}
+        metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Register a provider. If explicit capabilities are not provided, derive one from the description.
+        Register a new capability provider.
+        
+        Args:
+            name: Provider name
+            capabilities: List of capabilities provided
+            provider_type: Type of provider (AGENT, TOOL, etc.)
+            description: Provider description
+            metadata: Additional metadata
+            
+        Returns:
+            Provider ID
         """
-        provider_id = f"{name.lower().replace(' ', '_')}_{provider_type.lower()}"
-        if not capabilities:
-            capabilities = [self._derive_default_capability({"name": name, "description": description})]
+        provider_id = f"{provider_type.lower()}_{uuid.uuid4().hex[:8]}"
         
-        valid_capabilities = []
+        valid_caps = []
         for cap in capabilities:
-            if self._validate_capability(cap):
-                valid_capabilities.append(cap)
-            else:
+            if not self._validate_capability(cap):
                 logger.warning(f"Skipping invalid capability: {cap}")
+                continue
+                
+            valid_caps.append(cap)
+            
+            if cap["id"] not in self.capabilities:
+                self.capabilities[cap["id"]] = cap
+                await self._register_capability(cap)
         
-        self.providers[provider_id] = {
+        provider = {
             "id": provider_id,
             "name": name,
-            "provider_type": provider_type,
+            "type": provider_type,
             "description": description,
-            "capabilities": valid_capabilities,
-            "metadata": metadata,
+            "capabilities": valid_caps,
+            "metadata": metadata or {},
             "status": "active",
             "registered_at": datetime.utcnow().isoformat(),
             "last_updated": datetime.utcnow().isoformat()
         }
         
-        # Update the capability registry.
-        for capability in valid_capabilities:
-            cap_id = capability["id"]
-            if cap_id not in self.capabilities:
-                self.capabilities[cap_id] = {
-                    "id": cap_id,
-                    "name": capability["name"],
-                    "description": capability["description"],
-                    "context_contract": capability.get("context_contract", {}),
-                    "providers": []
-                }
-            self.capabilities[cap_id]["providers"].append({
-                "id": provider_id,
-                "name": name,
-                "confidence": capability.get("confidence", 0.8)
-            })
+        self.providers[provider_id] = provider
+        await self._save_providers()
         
-        self._save_data()
+        logger.info(f"Registered provider {name} with {len(valid_caps)} capabilities")
         return provider_id
-    
-    async def update_provider_capabilities(
-        self, 
-        provider_id: str, 
-        capabilities: List[Dict[str, Any]]
-    ) -> bool:
-        if provider_id not in self.providers:
-            return False
-        
-        # Remove provider from all capability listings.
-        for cap_id in self.capabilities:
-            self.capabilities[cap_id]["providers"] = [
-                p for p in self.capabilities[cap_id]["providers"] if p["id"] != provider_id
-            ]
-        
-        valid_capabilities = [cap for cap in capabilities if self._validate_capability(cap)]
-        self.providers[provider_id]["capabilities"] = valid_capabilities
-        self.providers[provider_id]["last_updated"] = datetime.utcnow().isoformat()
-        
-        for capability in valid_capabilities:
-            cap_id = capability["id"]
-            if cap_id not in self.capabilities:
-                self.capabilities[cap_id] = {
-                    "id": cap_id,
-                    "name": capability["name"],
-                    "description": capability["description"],
-                    "context_contract": capability.get("context_contract", {}),
-                    "providers": []
-                }
-            self.capabilities[cap_id]["providers"].append({
-                "id": provider_id,
-                "name": self.providers[provider_id]["name"],
-                "confidence": capability.get("confidence", 0.8)
-            })
-        
-        self._save_data()
-        return True
-    
-    async def deregister_provider(self, provider_id: str) -> bool:
-        if provider_id not in self.providers:
-            return False
-        
-        for cap_id in self.capabilities:
-            self.capabilities[cap_id]["providers"] = [
-                p for p in self.capabilities[cap_id]["providers"] if p["id"] != provider_id
-            ]
-        del self.providers[provider_id]
-        self._save_data()
-        return True
-    
+
     async def request_service(
         self,
-        capability: str,
-        content: Dict[str, Any],
+        capability_query: Union[str, Dict[str, Any]],
+        input_data: Dict[str, Any],
         provider_id: Optional[str] = None,
-        min_confidence: float = 0.5
+        min_confidence: float = 0.7,
+        timeout: float = 30.0
     ) -> Dict[str, Any]:
         """
-        Request a service by capability. The provided content may include context data under the "context" key.
+        Request a service by capability.
         
-        Production strategy: If no provider or no system agent is available to process the request,
-        the method will fail.
+        Args:
+            capability_query: Capability ID or natural language description
+            input_data: Input data for the service
+            provider_id: Optional specific provider
+            min_confidence: Minimum semantic match confidence
+            timeout: Operation timeout in seconds
+            
+        Returns:
+            Service response with metadata
+            
+        Raises:
+            ValueError: If capability or provider not found
+            RuntimeError: If execution fails
         """
-        if provider_id:
-            if provider_id not in self.providers:
-                raise ValueError(f"Provider '{provider_id}' not found")
-            provider = self.providers[provider_id]
-            has_capability = False
-            capability_confidence = 0.0
-            for cap in provider["capabilities"]:
-                if cap["id"] == capability:
-                    confidence = cap.get("confidence", 0.0)
-                    if confidence >= min_confidence:
-                        has_capability = True
-                        capability_confidence = confidence
-                        break
-            if not has_capability:
-                raise ValueError(f"Provider '{provider_id}' does not have capability '{capability}' with sufficient confidence")
-            response = {
-                "provider_id": provider_id,
-                "provider_name": provider["name"],
-                "content": self._process_content(capability, content, provider),
-                "confidence": capability_confidence
-            }
+        start_time = time.time()
+        
+        # Resolve capability
+        if isinstance(capability_query, str):
+            if capability_query in self.capabilities:
+                capability_id = capability_query
+            else:
+                # Semantic search
+                query_embedding = await self.llm_service.embed(capability_query)
+                results = self.capability_collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=1,
+                    include=["distances"]
+                )
+                
+                if not results["ids"][0]:
+                    raise ValueError(f"No matching capability found for: {capability_query}")
+                
+                distance = results["distances"][0][0]
+                similarity = 1.0 - distance
+                
+                if similarity < min_confidence:
+                    raise ValueError(
+                        f"Best match similarity {similarity:.2f} below threshold {min_confidence}"
+                    )
+                
+                capability_id = results["ids"][0][0]
+                logger.info(f"Matched query to capability {capability_id} (similarity: {similarity:.2f})")
         else:
-            if capability not in self.capabilities:
-                raise ValueError(f"No providers found for capability '{capability}'")
-            eligible_providers = [
-                p for p in self.capabilities[capability]["providers"]
-                if p.get("confidence", 0.0) >= min_confidence
-            ]
-            if not eligible_providers:
-                raise ValueError(f"No providers with sufficient confidence for capability '{capability}'")
-            best_provider = max(eligible_providers, key=lambda p: p.get("confidence", 0.0))
-            provider_id = best_provider["id"]
-            provider = self.providers[provider_id]
-            response = {
-                "provider_id": provider_id,
-                "provider_name": provider["name"],
-                "content": self._process_content(capability, content, provider),
-                "confidence": best_provider.get("confidence", 0.8)
-            }
+            capability_id = capability_query["id"]
         
-        # In production, we require a system agent to process the request.
-        if not self.system_agent:
-            raise RuntimeError("No system agent configured to process service requests in production")
+        # Get provider
+        if provider_id:
+            if self._check_circuit_breaker(provider_id):
+                raise RuntimeError(f"Provider {provider_id} is temporarily unavailable")
+            
+            provider = self.providers.get(provider_id)
+            if not provider:
+                raise ValueError(f"Provider not found: {provider_id}")
+                
+            if not any(cap["id"] == capability_id for cap in provider["capabilities"]):
+                raise ValueError(f"Provider does not have capability: {capability_id}")
+        else:
+            # Find best available provider
+            candidates = []
+            for p in self.providers.values():
+                if self._check_circuit_breaker(p["id"]):
+                    continue
+                    
+                for cap in p["capabilities"]:
+                    if cap["id"] == capability_id:
+                        candidates.append((p, cap.get("confidence", 0.8)))
+                        break
+            
+            if not candidates:
+                raise ValueError(f"No available providers for capability: {capability_id}")
+                
+            provider, confidence = max(candidates, key=lambda x: x[1])
+            logger.info(f"Selected provider {provider['name']} (confidence: {confidence:.2f})")
         
-        prompt = (
-            f"You are the system agent. Execute a request using provider '{response['provider_name']}' "
-            f"for capability '{capability}'.\n\nInput Content:\n{json.dumps(content, indent=2)}\n\n"
-            "Ensure that the context requirements are met."
-        )
+        # Execute with timeout
         try:
-            result = await self.system_agent.run(prompt)
+            result = await asyncio.wait_for(
+                self._execute_service(provider, capability_id, input_data),
+                timeout=timeout
+            )
+            
+            # Record success
+            self._reset_circuit_breaker(provider["id"])
+            
+            response = {
+                "result": result,
+                "metadata": {
+                    "provider": provider["id"],
+                    "capability": capability_id,
+                    "processing_time": time.time() - start_time,
+                    "success": True
+                }
+            }
+            
+            await self._log_execution(
+                capability_id,
+                input_data,
+                response,
+                provider_id=provider["id"]
+            )
+            
+            return response
+            
         except Exception as e:
-            raise RuntimeError(f"System agent failed to process request: {e}")
-        
-        execution_result = {
-            "result": result,
-            "executed_by": response["provider_id"],
-            "executed_at": datetime.utcnow().isoformat(),
-            "success": True
-        }
-        
-        await self._log_execution(capability, content, execution_result)
-        response["execution"] = execution_result
-        return response
-    
-    def _process_content(self, capability: str, content: Dict[str, Any], provider: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process the content by invoking the provider's real execution function, if defined.
-        If the provider has an "execution_function" (either as a direct attribute or in its metadata)
-        and it is callable, that function is used to process the content.
-        
-        Otherwise, the function applies a default transformation (in production, you would expect
-        providers to have real implementations).
-        """
-        execution_func = provider.get("execution_function") or provider.get("metadata", {}).get("execution_function")
+            # Record failure
+            self._record_failure(provider["id"])
+            
+            await self._log_execution(
+                capability_id,
+                input_data,
+                error=str(e),
+                provider_id=provider["id"]
+            )
+            
+            logger.error(f"Service execution failed: {str(e)}")
+            raise RuntimeError(f"Service execution failed: {str(e)}")
+
+    async def _execute_service(
+        self,
+        provider: Dict[str, Any],
+        capability_id: str,
+        input_data: Dict[str, Any]
+    ) -> Any:
+        """Execute a service using the provider."""
+        # Check for direct execution function
+        execution_func = provider.get("metadata", {}).get("execution_function")
         if execution_func and callable(execution_func):
             try:
-                result = execution_func(content)
+                if asyncio.iscoroutinefunction(execution_func):
+                    return await execution_func(input_data)
+                return execution_func(input_data)
             except Exception as e:
-                raise RuntimeError(f"Error during provider execution: {e}")
-        else:
-            # In production, we expect a provider to have its own execution logic.
-            raise RuntimeError(f"Provider '{provider['name']}' does not implement an execution function.")
+                raise RuntimeError(f"Provider execution failed: {str(e)}")
         
-        return {
-            "result": result,
-            "provider_type": provider["provider_type"],
-            "timestamp": datetime.utcnow().isoformat(),
-            "metadata": {
-                "input_size": len(content.get("text", json.dumps(content))),
-                "capability": capability
-            }
-        }
-    
-    async def find_providers_for_capability(
-        self, 
-        capability: str,
-        min_confidence: float = 0.5,
+        # Fall back to system agent
+        if not self.system_agent:
+            raise RuntimeError("No execution method available for provider")
+        
+        prompt = self._create_execution_prompt(provider, capability_id, input_data)
+        return await self.system_agent.run(prompt)
+
+    def _create_execution_prompt(
+        self,
+        provider: Dict[str, Any],
+        capability_id: str,
+        input_data: Dict[str, Any]
+    ) -> str:
+        """Create execution prompt for system agent."""
+        capability = self.capabilities[capability_id]
+        
+        return (
+            f"Execute capability: {capability['name']}\n"
+            f"Description: {capability.get('description', '')}\n"
+            f"Using provider: {provider['name']}\n"
+            f"Provider type: {provider['type']}\n\n"
+            f"Input Data:\n{json.dumps(input_data, indent=2)}\n\n"
+            "Process this request according to the capability requirements."
+        )
+
+    async def discover_capabilities(
+        self,
+        query: str,
+        min_confidence: float = 0.6,
         provider_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        if capability not in self.capabilities:
-            return []
-        provider_ids = [
-            p["id"] for p in self.capabilities[capability]["providers"]
-            if p.get("confidence", 0.0) >= min_confidence
-        ]
-        return [
-            self.providers[pid] for pid in provider_ids
-            if pid in self.providers and (not provider_type or self.providers[pid]["provider_type"] == provider_type)
-        ]
-    
-    async def find_provider_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        for provider in self.providers.values():
-            if provider["name"] == name:
-                return provider
-        return None
-    
-    async def get_provider(self, provider_id: str) -> Optional[Dict[str, Any]]:
-        return self.providers.get(provider_id)
-    
-    async def list_all_providers(self, provider_type: Optional[str] = None) -> List[Dict[str, Any]]:
-        if provider_type:
-            return [p for p in self.providers.values() if p["provider_type"] == provider_type]
-        return list(self.providers.values())
-    
-    async def list_all_capabilities(
-        self, 
-        provider_type: Optional[str] = None,
-        min_confidence: float = 0.0,
-        limit: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
-        result = []
-        for cap_id, capability in self.capabilities.items():
-            filtered_providers = capability["providers"]
-            if provider_type or min_confidence > 0:
-                filtered_providers = []
-                for provider in capability["providers"]:
-                    provider_record = self.providers.get(provider["id"])
-                    if not provider_record:
-                        continue
-                    if provider_type and provider_record["provider_type"] != provider_type:
-                        continue
-                    if min_confidence > 0 and provider.get("confidence", 0) < min_confidence:
-                        continue
-                    filtered_providers.append(provider)
-            if not filtered_providers:
-                continue
-            result.append({
-                "id": cap_id,
-                "name": capability["name"],
-                "description": capability.get("description", ""),
-                "providers": filtered_providers
-            })
-        if limit is not None and limit > 0:
-            result = result[:limit]
-        return result
-    
-    async def search_capabilities(
-        self, 
-        query: str,
-        min_confidence: float = 0.5,
-        provider_type: Optional[str] = None,
-        limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        query = query.lower()
+        """
+        Discover capabilities using semantic search.
+        
+        Args:
+            query: Natural language query
+            min_confidence: Minimum similarity threshold
+            provider_type: Optional provider type filter
+            
+        Returns:
+            List of matching capabilities with providers
+        """
+        query_embedding = await self.llm_service.embed(query)
+        results = self.capability_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=5,
+            include=["distances", "metadatas"]
+        )
+        
         matches = []
-        for cap_id, capability in self.capabilities.items():
-            if query in capability["name"].lower() or query in capability.get("description", "").lower():
-                filtered_providers = []
-                for provider in capability["providers"]:
-                    provider_record = self.providers.get(provider["id"])
-                    if not provider_record:
+        for i, cap_id in enumerate(results["ids"][0]):
+            distance = results["distances"][0][i]
+            similarity = 1.0 - distance
+            
+            if similarity >= min_confidence and cap_id in self.capabilities:
+                capability = self.capabilities[cap_id]
+                
+                # Find matching providers
+                matching_providers = []
+                for p in self.providers.values():
+                    if provider_type and p["type"] != provider_type:
                         continue
-                    if provider_type and provider_record["provider_type"] != provider_type:
-                        continue
-                    if min_confidence > 0 and provider.get("confidence", 0) < min_confidence:
-                        continue
-                    filtered_providers.append(provider)
-                if not filtered_providers:
-                    continue
-                matches.append({
-                    "id": cap_id,
-                    "name": capability["name"],
-                    "description": capability.get("description", ""),
-                    "providers": filtered_providers
-                })
-        matches.sort(key=lambda c: len(c["providers"]), reverse=True)
-        return matches[:limit]
-    
-    async def initialize_from_library(self):
+                        
+                    if any(c["id"] == cap_id for c in p["capabilities"]):
+                        if not self._check_circuit_breaker(p["id"]):
+                            matching_providers.append({
+                                "id": p["id"],
+                                "name": p["name"],
+                                "type": p["type"]
+                            })
+                
+                if matching_providers:
+                    matches.append({
+                        "capability": capability,
+                        "similarity": similarity,
+                        "providers": matching_providers
+                    })
+        
+        return matches
+
+    async def get_provider_status(self, provider_id: str) -> Dict[str, Any]:
         """
-        Register all active records from SmartLibrary as providers.
-        If a record does not include explicit capabilities, derive a default capability from its description.
+        Get detailed provider status.
+        
+        Args:
+            provider_id: ID of the provider
+            
+        Returns:
+            Provider status information
+            
+        Raises:
+            ValueError: If provider not found
         """
+        provider = self.providers.get(provider_id)
+        if not provider:
+            raise ValueError(f"Provider not found: {provider_id}")
+        
+        status = {
+            **provider,
+            "circuit_breaker": "tripped" if self._check_circuit_breaker(provider_id) else "normal"
+        }
+        
+        if provider_id in self.circuit_breakers:
+            cb = self.circuit_breakers[provider_id]
+            status.update({
+                "failure_count": cb["failures"],
+                "last_failure": cb["last_failure"],
+                "time_since_last_failure": time.time() - cb["last_failure"]
+            })
+        
+        return status
+
+    async def initialize_from_library(self) -> None:
+        """Initialize providers from SmartLibrary records."""
         for record in self.smart_library.records:
-            if record.get("status", "active") != "active":
+            if record.get("status") != "active":
                 continue
-            if await self.find_provider_by_name(record["name"]):
+                
+            # Skip if already registered
+            if any(p["name"] == record["name"] for p in self.providers.values()):
                 continue
+                
             capabilities = record.get("metadata", {}).get("capabilities", [])
             if not capabilities:
-                capabilities = [self._derive_default_capability(record)]
+                # Create default capability
+                capabilities = [{
+                    "id": f"{record['name'].lower().replace(' ', '_')}_default",
+                    "name": record["name"],
+                    "description": record.get("description", ""),
+                    "confidence": 0.8
+                }]
+            
             await self.register_provider(
                 name=record["name"],
                 capabilities=capabilities,
@@ -399,50 +538,39 @@ class SmartAgentBus:
                 description=record.get("description", ""),
                 metadata={"source": "SmartLibrary"}
             )
-        logger.info("SmartAgentBus initialized from SmartLibrary.")
-    
-    async def _lazy_register_from_library(self, capability_id: str):
+        
+        logger.info(f"Initialized {len(self.providers)} providers from library")
+
+    async def health_check(self) -> Dict[str, Any]:
         """
-        If a requested capability is missing, search SmartLibrary and register matching records.
+        Get system health status.
+        
+        Returns:
+            Dictionary with health metrics
         """
-        logger.info(f"Capability '{capability_id}' not found in AgentBus. Searching SmartLibrary...")
-        matches = await self.smart_library.search_capabilities(
-            query=capability_id,
-            min_confidence=0.5,
-            limit=5
-        )
-        for record in matches:
-            capabilities = record.get("metadata", {}).get("capabilities", [])
-            if not capabilities:
-                capabilities = [self._derive_default_capability(record)]
-            await self.register_provider(
-                name=record["name"],
-                capabilities=capabilities,
-                provider_type=record["record_type"],
-                description=record.get("description", ""),
-                metadata={"source": "SmartLibrary", "similarity": record.get("similarity")}
-            )
-        logger.info(f"Registered {len(matches)} records for capability '{capability_id}'.")
-    
-    async def _log_execution(self, capability: str, input_content: Dict[str, Any], result: Dict[str, Any]):
-        log_entry = {
+        return {
+            "status": "healthy",
             "timestamp": datetime.utcnow().isoformat(),
-            "capability": capability,
-            "input": input_content,
-            "execution_result": result
+            "stats": {
+                "providers": len(self.providers),
+                "capabilities": len(self.capabilities),
+                "tripped_circuits": sum(
+                    1 for cb in self.circuit_breakers.values()
+                    if cb["failures"] >= 3 and (time.time() - cb["last_failure"]) < 300
+                )
+            },
+            "storage": {
+                "providers": self.provider_storage_path,
+                "chromadb": self.chroma_client._path,
+                "logs": self.log_path
+            }
         }
-        logs = []
-        if os.path.exists(self.log_path):
-            try:
-                with open(self.log_path, "r") as f:
-                    logs = json.load(f)
-            except Exception as e:
-                logger.warning(f"Could not read previous logs: {e}")
-        logs.append(log_entry)
+
+    async def clear_logs(self) -> None:
+        """Clear all execution logs."""
         try:
-            with open(self.log_path, "w") as f:
-                json.dump(logs, f, indent=2, default=str)
+            if Path(self.log_path).exists():
+                Path(self.log_path).unlink()
+                logger.info("Cleared all execution logs")
         except Exception as e:
-            logger.error(f"Failed to write execution log: {e}")
-
-
+            logger.error(f"Failed to clear logs: {str(e)}")
