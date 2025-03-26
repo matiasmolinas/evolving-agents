@@ -73,6 +73,25 @@ similar_agents = await smart_library.semantic_search(
 await agent_bus.initialize_from_library()
 ```
 
+### Dependency Management System
+
+The framework includes a robust dependency container to manage component dependencies:
+
+```python
+# Create a dependency container
+container = DependencyContainer()
+
+# Register core components
+container.register('llm_service', llm_service)
+container.register('smart_library', smart_library)
+
+# Initialize all components with proper dependency wiring
+await container.initialize()
+
+# Get any component
+system_agent = container.get('system_agent')
+```
+
 ### Workflow Generation
 
 Create and execute multi-agent workflows from natural language requirements:
@@ -131,6 +150,16 @@ The `examples/forms/run_conversational_form.py` demonstrates:
 - Dynamic conversation flow
 - Validation and conditional logic
 
+## Architecture
+
+The framework uses a three-phase initialization pattern to manage dependencies:
+
+1. **Registration Phase**: Components are registered with the dependency container
+2. **Wiring Phase**: Components receive their dependencies
+3. **Initialization Phase**: Components complete their setup with proper dependencies
+
+This approach eliminates circular reference issues and makes the system more modular and testable.
+
 ## Why Another Agent Toolkit?
 
 Most agent frameworks focus on creating individual agents, not agent ecosystems that can build themselves. Key differences:
@@ -161,6 +190,7 @@ pip install evolving-agents-framework
 - **Vector Search**: Integrated ChromaDB for semantic capability discovery
 - **Hot Reloading**: Components can be modified without restarting
 - **Detailed Logging**: Execution logs for debugging and auditing
+- **Dependency Management**: Comprehensive dependency injection system to manage circular references
 
 ## License
 
