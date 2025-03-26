@@ -12,6 +12,7 @@ import chromadb
 import numpy as np
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.smart_library.smart_library import SmartLibrary
+from evolving_agents.core.dependency_container import DependencyContainer
 from beeai_framework.agents.react import ReActAgent
 
 logger = logging.getLogger(__name__)
@@ -30,12 +31,13 @@ class SmartAgentBus:
 
     def __init__(
         self,
-        smart_library: SmartLibrary,
+        smart_library: Optional[SmartLibrary] = None,
         system_agent: Optional[ReActAgent] = None,
         llm_service: Optional[LLMService] = None,
         storage_path: str = "agent_registry.json",
         chroma_path: str = "./agent_db",
-        log_path: str = "agent_execution_logs.json"
+        log_path: str = "agent_execution_logs.json",
+        container: Optional[DependencyContainer] = None
     ):
         """
         Initialize the Agent Bus.
@@ -47,18 +49,31 @@ class SmartAgentBus:
             storage_path: Path for agent registry storage
             chroma_path: Path for ChromaDB storage
             log_path: Path for execution logs
+            container: Optional dependency container for managing component dependencies
         """
-        self.smart_library = smart_library
-        self.system_agent = system_agent
-        self.llm_service = llm_service or LLMService()
+        # Resolve dependencies from container if provided
+        if container:
+            self.smart_library = smart_library or container.get('smart_library')
+            self.system_agent = system_agent
+            self.llm_service = llm_service or container.get('llm_service')
+        else:
+            self.smart_library = smart_library
+            self.system_agent = system_agent
+            self.llm_service = llm_service or LLMService()
+        
         self.log_path = log_path
+        self._initialized = False
+
+        # Register with container if provided
+        if container and not container.has('agent_bus'):
+            container.register('agent_bus', self)
 
         # Initialize components
         self._init_agent_database(chroma_path)
         self._init_agent_registry(storage_path)
-        self._load_agents_from_library()
-
-        logger.info(f"AgentBus initialized with {len(self.agents)} registered agents")
+        
+        # Don't load agents immediately - will do this during initialize_from_library
+        logger.info(f"AgentBus initialized with registry at {storage_path}")
 
     def _init_agent_database(self, chroma_path: str) -> None:
         """Initialize the ChromaDB agent database."""
@@ -77,6 +92,13 @@ class SmartAgentBus:
 
     async def initialize_from_library(self) -> None:
         """Initialize agents from SmartLibrary records."""
+        if self._initialized:
+            return
+            
+        if not self.smart_library:
+            logger.warning("Cannot initialize from library: SmartLibrary not provided")
+            return
+            
         for record in self.smart_library.records:
             if record.get("status") != "active":
                 continue
@@ -103,6 +125,7 @@ class SmartAgentBus:
                 metadata={"source": "SmartLibrary"}
             )
         
+        self._initialized = True
         logger.info(f"Initialized {len(self.agents)} agents from library")
 
     def _load_registry(self) -> None:
@@ -128,39 +151,6 @@ class SmartAgentBus:
             json.dump(data, f, indent=2)
         logger.debug(f"Saved {len(self.agents)} agents to registry")
 
-    def _load_agents_from_library(self) -> None:
-        """Load agents from SmartLibrary records."""
-        for record in self.smart_library.records:
-            if record.get("status") != "active":
-                continue
-                
-            # Skip if already registered
-            if any(a["name"] == record["name"] for a in self.agents.values()):
-                continue
-                
-            capabilities = record.get("metadata", {}).get("capabilities", [])
-            if not capabilities:
-                capabilities = [{
-                    "id": f"{record['name'].lower().replace(' ', '_')}_default",
-                    "name": record["name"],
-                    "description": record.get("description", ""),
-                    "confidence": 0.8
-                }]
-            
-            agent_id = f"agent_{uuid.uuid4().hex[:8]}"
-            self.agents[agent_id] = {
-                "id": agent_id,
-                "name": record["name"],
-                "description": record.get("description", ""),
-                "type": record.get("record_type", "GENERIC"),
-                "capabilities": capabilities,
-                "metadata": record.get("metadata", {}),
-                "status": "active",
-                "registered_at": datetime.utcnow().isoformat(),
-                "last_seen": datetime.utcnow().isoformat()
-            }
-            logger.debug(f"Loaded agent from library: {record['name']}")
-
     async def _index_agent(self, agent: Dict[str, Any]) -> None:
         """Index an agent for semantic search."""
         semantic_text = (
@@ -172,6 +162,9 @@ class SmartAgentBus:
         
         embedding = await self.llm_service.embed(semantic_text)
         
+        # Convert capabilities list to a string to avoid ChromaDB error
+        capabilities_str = ",".join([c["id"] for c in agent.get("capabilities", [])])
+        
         self.agent_collection.add(
             ids=[agent["id"]],
             embeddings=[embedding],
@@ -179,7 +172,7 @@ class SmartAgentBus:
             metadatas=[{
                 "name": agent["name"],
                 "type": agent.get("type", ""),
-                "capabilities": [c["id"] for c in agent.get("capabilities", [])],
+                "capabilities": capabilities_str,  # Store as string instead of list
                 "created_at": datetime.utcnow().isoformat()
             }]
         )
@@ -327,6 +320,7 @@ class SmartAgentBus:
                     continue
                     
                 if required_capabilities:
+                    # Get capabilities from the stored agent data (not from metadata)
                     agent_caps = {c["id"] for c in agent["capabilities"]}
                     if not all(req_cap in agent_caps for req_cap in required_capabilities):
                         continue
