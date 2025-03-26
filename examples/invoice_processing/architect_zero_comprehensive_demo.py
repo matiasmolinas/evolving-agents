@@ -12,6 +12,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.agents.architect_zero import create_architect_zero
+from evolving_agents.core.dependency_container import DependencyContainer
 
 # Configure logging
 logging.basicConfig(
@@ -54,7 +55,7 @@ def clean_previous_files():
     """Remove previous files to start fresh."""
     files_to_remove = [
         "smart_library.json",
-        "agent_bus.json",
+        "agent_registry.json",
         "architect_interaction.txt",
         "invoice_workflow.yaml",
         "workflow_execution_result.json",
@@ -226,36 +227,39 @@ async def main():
     # First, set up some initial components in the smart library
     await setup_library()
     
+    # Create a dependency container to manage component dependencies
+    container = DependencyContainer()
+    
     # Initialize core components
     llm_service = LLMService(provider="openai", model="gpt-4o")
-    smart_library = SmartLibrary("smart_library.json")
-    agent_bus = SmartAgentBus(
-        smart_library=smart_library,
-        system_agent=None,  # We'll set this after system_agent is created
-        storage_path="smart_agent_bus.json", 
-        log_path="agent_bus_logs.json"
-    )
+    container.register('llm_service', llm_service)
     
-    # Create the system agent
-    system_agent = await SystemAgentFactory.create_agent(
-        llm_service=llm_service,
-        smart_library=smart_library,
-        agent_bus=agent_bus
+    smart_library = SmartLibrary("smart_library.json", container=container)
+    container.register('smart_library', smart_library)
+    
+    # Create firmware
+    from evolving_agents.firmware.firmware import Firmware
+    firmware = Firmware()
+    container.register('firmware', firmware)
+    
+    # Create agent bus with null system agent
+    agent_bus = SmartAgentBus(
+        storage_path="agent_registry.json", 
+        log_path="agent_bus_logs.json",
+        container=container
     )
-
-    # Update the agent_bus with the system_agent
-    agent_bus.system_agent = system_agent
-
-    # Initialize from library
+    container.register('agent_bus', agent_bus)
+    
+    # Create system agent
+    system_agent = await SystemAgentFactory.create_agent(container=container)
+    container.register('system_agent', system_agent)
+    
+    # Initialize components
+    await smart_library.initialize()
     await agent_bus.initialize_from_library()
     
-    # Create the Architect-Zero agent
-    architect_agent = await create_architect_zero(
-        llm_service=llm_service,
-        smart_library=smart_library,
-        agent_bus=agent_bus,
-        system_agent_factory=SystemAgentFactory.create_agent
-    )
+    # Create the Architect-Zero agent using the container
+    architect_agent = await create_architect_zero(container=container)
     
     # Define invoice processing task requirements
     task_requirement = """

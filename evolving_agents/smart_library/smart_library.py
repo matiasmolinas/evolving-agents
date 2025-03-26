@@ -1,5 +1,3 @@
-# evolving_agents/core/smart_library.py
-
 import os
 import json
 import logging
@@ -14,6 +12,11 @@ import numpy as np
 import chromadb
 from evolving_agents.core.llm_service import LLMService
 
+# Import DependencyContainer using TYPE_CHECKING to avoid circular import
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from evolving_agents.core.dependency_container import DependencyContainer
+
 logger = logging.getLogger(__name__)
 
 class SmartLibrary:
@@ -27,7 +30,8 @@ class SmartLibrary:
         vector_db_path: str = "./vector_db",
         llm_service: Optional[LLMService] = None,
         use_cache: bool = True,
-        cache_dir: str = ".llm_cache"
+        cache_dir: str = ".llm_cache",
+        container: Optional["DependencyContainer"] = None
     ):
         """
         Initialize the SmartLibrary.
@@ -38,14 +42,29 @@ class SmartLibrary:
             llm_service: Optional pre-configured LLM service 
             use_cache: Whether to use caching for LLM operations
             cache_dir: Directory for the LLM cache
+            container: Optional dependency container for managing component dependencies
         """
         self.storage_path = storage_path
         self.records = []
+        self.container = container
+        self._initialized = False
         
         # Initialize LLM service for embeddings if not provided
-        self.llm_service = llm_service or LLMService(use_cache=use_cache, cache_dir=cache_dir)
+        if container and container.has('llm_service'):
+            self.llm_service = llm_service or container.get('llm_service')
+        else:
+            self.llm_service = llm_service or LLMService(use_cache=use_cache, cache_dir=cache_dir)
         
-        # Initialize ChromaDB
+        # Register with container if provided
+        if container and not container.has('smart_library'):
+            container.register('smart_library', self)
+        
+        # Initialize vector DB and load library on creation
+        self._init_vector_db(vector_db_path)
+        self._load_library()
+        
+    def _init_vector_db(self, vector_db_path: str = "./vector_db"):
+        """Initialize the vector database connection."""
         try:
             self.chroma_client = chromadb.PersistentClient(path=vector_db_path)
             
@@ -57,8 +76,6 @@ class SmartLibrary:
         except Exception as e:
             logger.error(f"Error initializing vector database: {str(e)}")
             self.collection = None
-        
-        self._load_library()
     
     def _load_library(self):
         """Load the library from storage."""
@@ -77,6 +94,19 @@ class SmartLibrary:
         else:
             logger.info(f"No existing library found at {self.storage_path}. Creating new library.")
             self.records = []
+    
+    async def initialize(self):
+        """Complete library initialization and integration with other components."""
+        if self._initialized:
+            return
+            
+        # Initialize agent bus from library if available
+        if self.container and self.container.has('agent_bus'):
+            agent_bus = self.container.get('agent_bus')
+            if hasattr(agent_bus, 'initialize_from_library'):
+                await agent_bus.initialize_from_library()
+        
+        self._initialized = True
     
     def _get_record_vector_text(self, record: Dict[str, Any]) -> str:
         """

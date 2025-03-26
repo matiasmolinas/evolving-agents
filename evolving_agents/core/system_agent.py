@@ -20,6 +20,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
+from evolving_agents.core.dependency_container import DependencyContainer
 
 # Import workflow components with fixed imports
 from evolving_agents.workflow.workflow_processor import WorkflowProcessor
@@ -37,10 +38,11 @@ class SystemAgentFactory:
     
     @staticmethod
     async def create_agent(
-        llm_service: LLMService,
+        llm_service: Optional[LLMService] = None,
         smart_library: Optional[SmartLibrary] = None,
         agent_bus = None,
-        memory_type: str = "token"
+        memory_type: str = "token",
+        container: Optional[DependencyContainer] = None
     ) -> ReActAgent:
         """
         Create and configure a SystemAgent as a pure BeeAI ReActAgent.
@@ -50,19 +52,31 @@ class SystemAgentFactory:
             smart_library: Optional SmartLibrary instance (will create if not provided)
             agent_bus: Optional AgentBus instance (will create if not provided)
             memory_type: Memory type for the agent ("token" or "unconstrained")
+            container: Optional dependency container for managing component dependencies
             
         Returns:
             Fully configured SystemAgent as a BeeAI ReActAgent
         """
+        # Resolve dependencies from container if provided
+        if container:
+            llm_service = llm_service or container.get('llm_service')
+            smart_library = smart_library or container.get('smart_library')
+            agent_bus = agent_bus or container.get('agent_bus')
+            firmware = container.get('firmware') if container.has('firmware') else Firmware()
+        else:
+            # Get the chat model from LLM service
+            if not llm_service:
+                raise ValueError("LLM service must be provided if not using dependency container")
+            
+            # Initialize SmartLibrary if not provided
+            if not smart_library:
+                smart_library = SmartLibrary("system_library.json")
+            
+            # Create firmware instance
+            firmware = Firmware()
+        
         # Get the chat model from LLM service
         chat_model = llm_service.chat_model
-        
-        # Initialize SmartLibrary if not provided
-        if not smart_library:
-            smart_library = SmartLibrary("system_library.json")
-        
-        # Create firmware instance
-        firmware = Firmware()
         
         # Initialize or use provided agent_bus
         if not agent_bus:
@@ -70,6 +84,7 @@ class SystemAgentFactory:
             agent_bus = SmartAgentBus(
                 smart_library=smart_library,
                 system_agent=None,  # We'll set this after system_agent is created
+                llm_service=llm_service,
                 storage_path="smart_agent_bus.json", 
                 log_path="agent_bus_logs.json"
             )
@@ -146,5 +161,17 @@ class SystemAgentFactory:
         system_agent.tools = tools_dict
         system_agent.workflow_processor = workflow_processor
         system_agent.workflow_generator = workflow_generator
+        
+        # Register with agent_bus to complete circular reference
+        if hasattr(agent_bus, 'system_agent') and agent_bus.system_agent is None:
+            agent_bus.system_agent = system_agent
+        
+        # Register with container if provided
+        if container and not container.has('system_agent'):
+            container.register('system_agent', system_agent)
+            
+        # Initialize components from library if needed
+        if hasattr(agent_bus, 'initialize_from_library'):
+            await agent_bus.initialize_from_library()
         
         return system_agent
