@@ -8,6 +8,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
+from evolving_agents.core.dependency_container import DependencyContainer
 
 import os
 from dotenv import load_dotenv
@@ -29,32 +30,39 @@ async def run_smart_autocomplete(
         inputs: List of dictionaries containing texts from different sources
         output_path: Where to save the autocomplete suggestions
     """
+    # Create dependency container to manage component dependencies
+    container = DependencyContainer()
+    
     # Step 1: Set up core services
     llm_service = LLMService(provider="openai", model="gpt-4o")
-    smart_library = SmartLibrary("smart_autocomplete_library.json")
+    container.register('llm_service', llm_service)
     
-    # Step 2: Create the system agent
-    system_agent = await SystemAgentFactory.create_agent(
-        llm_service=llm_service,
-        smart_library=smart_library
-    )
-
-    # Step 3: Create and initialize the Smart Agent Bus
+    smart_library = SmartLibrary("smart_autocomplete_library.json", container=container)
+    container.register('smart_library', smart_library)
+    
+    # Create firmware for component creation
+    from evolving_agents.firmware.firmware import Firmware
+    firmware = Firmware()
+    container.register('firmware', firmware)
+    
+    # Step 2: Create agent bus with null system agent
     agent_bus = SmartAgentBus(
-        smart_library=smart_library,
-        system_agent=system_agent,
         storage_path="smart_agent_bus.json",
-        log_path="agent_bus_logs.json"
+        log_path="agent_bus_logs.json",
+        container=container
     )
+    container.register('agent_bus', agent_bus)
+    
+    # Step 3: Create the system agent
+    system_agent = await SystemAgentFactory.create_agent(container=container)
+    container.register('system_agent', system_agent)
+    
+    # Initialize components
+    await smart_library.initialize()
     await agent_bus.initialize_from_library()
 
-    # Step 4: Create the architect agent
-    architect = await create_architect_zero(
-        llm_service=llm_service,
-        smart_library=smart_library,
-        agent_bus=agent_bus,
-        system_agent_factory=SystemAgentFactory.create_agent
-    )
+    # Step 4: Create the architect agent using the container
+    architect = await create_architect_zero(container=container)
 
     # Step 5: Format inputs into a single context object
     formatted_inputs = json.dumps(inputs, indent=2)

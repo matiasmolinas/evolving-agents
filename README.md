@@ -26,7 +26,7 @@ python examples/invoice_processing/architect_zero_comprehensive_demo.py
 - **Semantic Capability Matching**: SmartAgentBus for discovering and routing requests by capability
 - **Component Reuse**: Smart Library to discover, reuse, and adapt existing components
 - **Framework Agnostic**: Works with BeeAI, OpenAI Agents SDK, and custom frameworks
-- **Governance Firmware**: Built-in guardrails to ensure agents stay within safe boundaries
+- **Governance Firmware**: Built-in guardrails to ensure agents stay within safe boundaries and comply with domain-specific regulations
 - **Self-Building Capabilities**: Agents can design and implement entire agent systems
 
 ## Key Concepts
@@ -144,7 +144,15 @@ The `examples/agent_evolution/openai_agent_evolution_demo.py` demonstrates:
 - Domain adaptation
 - A/B testing to compare agent versions
 
-### 4. Conversational Forms
+### 4. BeeAI Agent Evolution
+The `examples/agent_evolution/beeai_agent_evolution_demo.py` showcases:
+- Creating and evolving BeeAI framework-based agents and tools
+- Different evolution strategies including standard, domain adaptation, and aggressive transformation
+- Testing evolved components with realistic scenarios
+- Component comparison and library health analysis
+- Implicit System Agent tool usage via natural language prompts
+
+### 5. Conversational Forms
 The `examples/forms/run_conversational_form.py` demonstrates:
 - Natural language form definition
 - Dynamic conversation flow
@@ -173,6 +181,8 @@ Most agent frameworks focus on creating individual agents, not agent ecosystems 
 
 Our governance system ensures safe operation of autonomous agents:
 
+- **Domain Compliance**: Firmware provides domain-specific regulations and compliance guidelines
+- **Governance Guardrails**: Ensures agents operate within approved boundaries
 - **Capability Validation**: All registered capabilities are validated
 - **Circuit Breakers**: Prevent cascading failures
 - **Execution Logging**: Complete audit trail of all operations
