@@ -13,9 +13,6 @@ cd evolving-agents
 pip install -r requirements.txt
 pip install -e .
 
-# Install OpenAI Agents SDK (optional)
-pip install -r requirements-openai-agents.txt
-
 # Run the Architect-Zero example
 python examples/invoice_processing/architect_zero_comprehensive_demo.py
 ```
