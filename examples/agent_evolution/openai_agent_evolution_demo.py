@@ -1,5 +1,3 @@
-
-
 import asyncio
 import logging
 import os
@@ -19,6 +17,8 @@ from evolving_agents.providers.registry import ProviderRegistry
 from evolving_agents.providers.beeai_provider import BeeAIProvider
 from evolving_agents.providers.openai_agents_provider import OpenAIAgentsProvider
 from evolving_agents.agents.agent_factory import AgentFactory
+from evolving_agents.core.dependency_container import DependencyContainer
+from evolving_agents.firmware.firmware import Firmware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -105,6 +105,243 @@ TERMINATION:
 Either party may terminate with 30 days written notice.
 """
 
+async def use_llm_for_analysis(llm_service: LLMService, text: str, analysis_type: str) -> str:
+    """
+    Use LLM service to analyze text instead of hardcoded logic
+    
+    Args:
+        llm_service: The LLM service to use
+        text: The text to analyze
+        analysis_type: Type of analysis to perform
+        
+    Returns:
+        Analysis result as string
+    """
+    prompt = f"""
+    Analyze the following text as a {analysis_type} document:
+    
+    {text}
+    
+    Please extract all key information and return a structured analysis.
+    
+    For invoices: Extract invoice number, date, vendor, items, costs, subtotal, tax, total.
+    For medical records: Extract patient info, visit details, vitals, assessment, and plan.
+    For contracts: Extract parties, services, terms, payment details, and termination conditions.
+    
+    Return your analysis in a structured, readable format.
+    """
+    
+    result = await llm_service.generate(prompt)
+    return result
+
+async def text_analysis_demo(llm_service: LLMService, system_agent):
+    """
+    Demonstrate text analysis using LLM service vs hardcoded logic
+    
+    Args:
+        llm_service: The LLM service to use
+        system_agent: The system agent
+    """
+    print("\n" + "-"*80)
+    print("TEXT ANALYSIS DEMO: LLM SERVICE VS HARDCODED LOGIC")
+    print("-"*80)
+    
+    # 1. LLM-based invoice analysis
+    print("\nAnalyzing invoice using LLM service...")
+    start_time = time.time()
+    llm_invoice_analysis = await use_llm_for_analysis(llm_service, SAMPLE_INVOICE, "invoice")
+    llm_time = time.time() - start_time
+    
+    # 2. Simple regex-based invoice analysis (hardcoded)
+    print("\nAnalyzing invoice using hardcoded regex logic...")
+    start_time = time.time()
+    
+    # Simple regex extraction
+    import re
+    hardcoded_analysis = {}
+    
+    # Extract invoice number
+    invoice_match = re.search(r'INVOICE #(\d+)', SAMPLE_INVOICE)
+    if invoice_match:
+        hardcoded_analysis["invoice_number"] = invoice_match.group(1)
+    
+    # Extract date
+    date_match = re.search(r'Date: ([\d-]+)', SAMPLE_INVOICE)
+    if date_match:
+        hardcoded_analysis["date"] = date_match.group(1)
+    
+    # Extract vendor
+    vendor_match = re.search(r'Vendor: ([^\n]+)', SAMPLE_INVOICE)
+    if vendor_match:
+        hardcoded_analysis["vendor"] = vendor_match.group(1)
+    
+    # Extract totals
+    subtotal_match = re.search(r'Subtotal: \$([0-9,.]+)', SAMPLE_INVOICE)
+    if subtotal_match:
+        hardcoded_analysis["subtotal"] = subtotal_match.group(1)
+    
+    tax_match = re.search(r'Tax [^:]+: \$([0-9,.]+)', SAMPLE_INVOICE)
+    if tax_match:
+        hardcoded_analysis["tax"] = tax_match.group(1)
+    
+    total_match = re.search(r'Total Due: \$([0-9,.]+)', SAMPLE_INVOICE)
+    if total_match:
+        hardcoded_analysis["total"] = total_match.group(1)
+    
+    hardcoded_time = time.time() - start_time
+    
+    # 3. System agent approach (using tools and SmartLibrary)
+    print("\nAnalyzing invoice using System Agent with SmartLibrary tools...")
+    start_time = time.time()
+    
+    system_prompt = """
+    Analyze this invoice document using your SmartLibrary tools. 
+    First, search for any existing invoice processing components in the library.
+    If you don't find appropriate components, create a new one for invoice analysis.
+    Then use the best available component to process this invoice:
+    
+    ```
+    """ + SAMPLE_INVOICE + """
+    ```
+    
+    Extract all key information and provide a structured analysis.
+    """
+    
+    system_response = await system_agent.run(system_prompt)
+    system_time = time.time() - start_time
+    
+    # Print comparison
+    print("\n" + "-"*30)
+    print("ANALYSIS COMPARISON")
+    print("-"*30)
+    print(f"\n1. LLM Analysis (took {llm_time:.2f}s):")
+    print(llm_invoice_analysis[:500] + "..." if len(llm_invoice_analysis) > 500 else llm_invoice_analysis)
+    
+    print(f"\n2. Hardcoded Regex Analysis (took {hardcoded_time:.2f}s):")
+    print(json.dumps(hardcoded_analysis, indent=2))
+    
+    print(f"\n3. System Agent Analysis (took {system_time:.2f}s):")
+    print(system_response.result.text[:500] + "..." if len(system_response.result.text) > 500 else system_response.result.text)
+    
+    # Analyze and provide insights
+    print("\n" + "-"*30)
+    print("COMPARISON INSIGHTS")
+    print("-"*30)
+    
+    insights = f"""
+    PERFORMANCE COMPARISON:
+    - Hardcoded Regex: {hardcoded_time:.2f}s (fastest, but most limited)
+    - LLM Service: {llm_time:.2f}s (slower, but flexible)
+    - System Agent: {system_time:.2f}s (slowest, but most comprehensive)
+    
+    QUALITY COMPARISON:
+    - Hardcoded Regex: Extracts only specifically programmed fields
+    - LLM Service: Extracts more information with better formatting
+    - System Agent: Leverages SmartLibrary intelligence and provides the most comprehensive analysis
+    
+    WHEN TO USE EACH:
+    - Hardcoded Logic: When speed is critical and the format is consistent
+    - LLM Service: When flexibility is needed without library overhead
+    - System Agent: When you need the full power of component reuse and evolution
+    """
+    
+    print(insights)
+
+async def demonstrate_system_agent_tools(system_agent, library: SmartLibrary, llm_service: LLMService):
+    """
+    Demonstrate system agent using its tools to interact with SmartLibrary
+    
+    Args:
+        system_agent: The system agent
+        library: The smart library
+        llm_service: The LLM service
+    """
+    print("\n" + "-"*80)
+    print("SYSTEM AGENT TOOLS DEMONSTRATION")
+    print("-"*80)
+    
+    # 1. Demonstrate SearchComponentTool
+    print("\n1. DEMONSTRATING SEARCH COMPONENT TOOL")
+    search_prompt = """
+    Use your SearchComponentTool to find components in the SmartLibrary that can process invoices.
+    Return all matching components with their similarity scores.
+    If no components are found, indicate that clearly.
+    """
+    
+    print("\nSearching for invoice processing components...")
+    search_response = await system_agent.run(search_prompt)
+    print("\nSearch results:")
+    print(search_response.result.text)
+    
+    # 2. Demonstrate CreateComponentTool
+    print("\n2. DEMONSTRATING CREATE COMPONENT TOOL")
+    create_prompt = """
+    Use your CreateComponentTool to create a new component called "AdvancedInvoiceExtractor" 
+    in the SmartLibrary.
+    
+    The component should:
+    - Be of type TOOL
+    - Belong to the "finance" domain
+    - Extract detailed information from invoices including line items
+    - Validate mathematical calculations (subtotal + tax = total)
+    - Return the extracted data in clean JSON format
+    
+    Provide complete code for this component.
+    """
+    
+    print("\nCreating a new invoice extractor component...")
+    create_response = await system_agent.run(create_prompt)
+    print("\nComponent creation result:")
+    print(create_response.result.text)
+    
+    # 3. Demonstrate EvolveComponentTool
+    # First find a component to evolve
+    component_name = "InvoiceProcessor_V1"
+    component = await library.find_record_by_name(component_name, "AGENT")
+    
+    if component:
+        print(f"\n3. DEMONSTRATING EVOLVE COMPONENT TOOL (evolving {component_name})")
+        evolve_prompt = f"""
+        Use your EvolveComponentTool to evolve the existing component "{component_name}"
+        into a more advanced version.
+        
+        The evolved component should:
+        - Have improved JSON formatting
+        - Add calculation verification (subtotal + tax = total)
+        - Handle multiple invoice formats
+        - Add error detection logic
+        - Improve performance
+        
+        Name the evolved component "{component_name}_Evolved".
+        """
+        
+        print(f"\nEvolving {component_name}...")
+        evolve_response = await system_agent.run(evolve_prompt)
+        print("\nComponent evolution result:")
+        print(evolve_response.result.text)
+    else:
+        print(f"\n3. SKIPPING EVOLVE COMPONENT TOOL (component {component_name} not found)")
+    
+    # 4. Use system agent to process a document using library components
+    print("\n4. USING SYSTEM AGENT WITH LIBRARY COMPONENTS")
+    process_prompt = """
+    Please process this invoice using the best available component in the SmartLibrary:
+    
+    ```
+    """ + SAMPLE_INVOICE + """
+    ```
+    
+    First search for appropriate invoice processing components,
+    then use the most suitable one to extract all information from this invoice.
+    
+    If no suitable component exists, please create one, then use it.
+    """
+    
+    print("\nProcessing invoice using SmartLibrary components...")
+    process_response = await system_agent.run(process_prompt)
+    print("\nProcessing result:")
+    print(process_response.result.text)
+
 async def setup_evolution_demo_library():
     """Create a library with an initial OpenAI agent for the evolution demo"""
     library_path = "openai_evolution_demo.json"
@@ -120,7 +357,9 @@ async def setup_evolution_demo_library():
     
     print("Setting up initial OpenAI agent for evolution demo...")
     
-    # Create initial invoice processor agent
+    # Create a few sample components in the library
+    
+    # 1. Create basic invoice processor agent
     await library.create_record(
         name="InvoiceProcessor_V1",
         record_type="AGENT",
@@ -165,6 +404,117 @@ async def process_invoice(invoice_text):
         tags=["openai", "invoice", "finance"]
     )
     print("✓ Created initial InvoiceProcessor_V1 agent")
+    
+    # 2. Create a basic invoice parser tool
+    await library.create_record(
+        name="BasicInvoiceParser",
+        record_type="TOOL",
+        domain="finance",
+        description="Simple tool for parsing basic invoice information using regex patterns",
+        code_snippet='''
+import re
+from typing import Dict, Any
+
+def parse_invoice(invoice_text: str) -> Dict[str, Any]:
+    """Parse invoice text using regex patterns to extract key information."""
+    result = {}
+    
+    # Extract invoice number
+    invoice_match = re.search(r'INVOICE #(\d+)', invoice_text, re.IGNORECASE)
+    if invoice_match:
+        result["invoice_number"] = invoice_match.group(1)
+    
+    # Extract date
+    date_match = re.search(r'Date:?\s*([\d-/]+)', invoice_text, re.IGNORECASE)
+    if date_match:
+        result["date"] = date_match.group(1)
+    
+    # Extract vendor
+    vendor_match = re.search(r'Vendor:?\s*([^\n]+)', invoice_text, re.IGNORECASE)
+    if vendor_match:
+        result["vendor"] = vendor_match.group(1).strip()
+    
+    # Extract totals
+    subtotal_match = re.search(r'Subtotal:?\s*\$?([0-9,.]+)', invoice_text, re.IGNORECASE)
+    if subtotal_match:
+        result["subtotal"] = subtotal_match.group(1)
+    
+    tax_match = re.search(r'Tax[^:]*:?\s*\$?([0-9,.]+)', invoice_text, re.IGNORECASE)
+    if tax_match:
+        result["tax"] = tax_match.group(1)
+    
+    total_match = re.search(r'Total[^:]*:?\s*\$?([0-9,.]+)', invoice_text, re.IGNORECASE)
+    if total_match:
+        result["total"] = total_match.group(1)
+    
+    return result
+''',
+        version="1.0.0",
+        tags=["invoice", "parser", "finance", "regex"]
+    )
+    print("✓ Created BasicInvoiceParser tool")
+    
+    # 3. Create a contract analyzer tool
+    await library.create_record(
+        name="SimpleContractAnalyzer",
+        record_type="TOOL",
+        domain="legal",
+        description="Tool for extracting basic information from legal contracts",
+        code_snippet='''
+import re
+from typing import Dict, Any
+
+def analyze_contract(contract_text: str) -> Dict[str, Any]:
+    """Extract key information from a legal contract."""
+    result = {
+        "parties": [],
+        "dates": {},
+        "payment_terms": [],
+        "services": []
+    }
+    
+    # Extract parties
+    party_matches = re.findall(r'([A-Z][A-Za-z\s]+(?:Ltd\.|Inc\.|Corp\.|Corporation|Company)[^\n]*)', contract_text)
+    for party in party_matches:
+        result["parties"].append(party.strip())
+    
+    # Extract dates
+    date_matches = re.findall(r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[.\s]+\d{1,2}[,.\s]+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', contract_text)
+    if date_matches:
+        result["dates"]["found_dates"] = date_matches
+    
+    # Look for specific date types
+    effective_match = re.search(r'(?:effective|commencement|commence|commences|start|beginning)(?:\s+date)?(?:\s+on)?(?:\s+of)?(?:\s+is)?[:\s]+([^\.]+)', contract_text, re.IGNORECASE)
+    if effective_match:
+        result["dates"]["effective_date"] = effective_match.group(1).strip()
+    
+    termination_match = re.search(r'(?:terminat(?:es|ion)|expir(?:es|ation)|end(?:ing|s)?)(?:\s+date)?(?:\s+on)?(?:\s+of)?(?:\s+is)?[:\s]+([^\.]+)', contract_text, re.IGNORECASE)
+    if termination_match:
+        result["dates"]["termination_date"] = termination_match.group(1).strip()
+    
+    # Extract payment terms
+    payment_match = re.search(r'Payment\s+Terms?[:\s]+([^\n.]+)', contract_text, re.IGNORECASE)
+    if payment_match:
+        result["payment_terms"].append(payment_match.group(1).strip())
+    
+    # Look for NET X payment terms
+    net_terms = re.findall(r'Net[:\s]+(\d+)', contract_text, re.IGNORECASE)
+    if net_terms:
+        result["payment_terms"].extend([f"Net {term}" for term in net_terms])
+    
+    # Extract services or deliverables
+    services_section = re.search(r'(?:SERVICES|DELIVERABLES)[:\s]+(.*?)(?=\n\s*\n[A-Z]+\s*:|$)', contract_text, re.DOTALL | re.IGNORECASE)
+    if services_section:
+        services_text = services_section.group(1).strip()
+        services_list = re.findall(r'\d+\.\s*([^\n]+)', services_text)
+        result["services"] = services_list if services_list else [services_text]
+    
+    return result
+''',
+        version="1.0.0",
+        tags=["contract", "legal", "analysis"]
+    )
+    print("✓ Created SimpleContractAnalyzer tool")
     
     print(f"\nLibrary setup complete at: {library_path}")
     return library_path
@@ -244,39 +594,51 @@ class AgentExperienceTracker:
 async def main():
     try:
         print("\n" + "="*80)
-        print("OPENAI AGENT EVOLUTION DEMONSTRATION")
+        print("ENHANCED SYSTEM AGENT AND SMART LIBRARY DEMONSTRATION")
         print("="*80)
         
-        # Initialize components
+        # Initialize components with dependency container
+        container = DependencyContainer()
+        
+        # Set up library
         library_path = await setup_evolution_demo_library()
-        library = SmartLibrary(library_path)
+        
+        # Initialize services
         llm_service = LLMService(provider="openai", model="gpt-4o")
+        container.register('llm_service', llm_service)
+        
+        library = SmartLibrary(library_path, container=container)
+        container.register('smart_library', library)
+        
+        # Create firmware component
+        firmware = Firmware()
+        container.register('firmware', firmware)
+        
+        # Create agent bus
         agent_bus = SmartAgentBus(
-            smart_library=library,
-            system_agent=None,  # We'll set this after system_agent is created
             storage_path="smart_agent_bus.json", 
-            log_path="agent_bus_logs.json"
+            log_path="agent_bus_logs.json",
+            container=container
         )
+        container.register('agent_bus', agent_bus)
         
         # Set up provider registry
         provider_registry = ProviderRegistry()
         provider_registry.register_provider(BeeAIProvider(llm_service))
         provider_registry.register_provider(OpenAIAgentsProvider(llm_service))
+        container.register('provider_registry', provider_registry)
         
         # Create agent factory
         agent_factory = AgentFactory(library, llm_service, provider_registry)
+        container.register('agent_factory', agent_factory)
         
         # Initialize System Agent
-        system_agent = await SystemAgentFactory.create_agent(
-            llm_service=llm_service,
-            smart_library=library,
-            agent_bus=agent_bus
-        )
-
-        # Update the agent_bus with the system_agent
-        agent_bus.system_agent = system_agent
-
-        # Initialize from library
+        print("\nInitializing System Agent...")
+        system_agent = await SystemAgentFactory.create_agent(container=container)
+        container.register('system_agent', system_agent)
+        
+        # Initialize components
+        await library.initialize()
         await agent_bus.initialize_from_library()
         
         # Create agent experience tracker
@@ -284,343 +646,72 @@ async def main():
         
         # Get the initial agent record
         initial_agent_record = await library.find_record_by_name("InvoiceProcessor_V1", "AGENT")
-        initial_agent_id = initial_agent_record["id"]
+        if initial_agent_record:
+            initial_agent_id = initial_agent_record["id"]
+            print(f"✓ Found InvoiceProcessor_V1 agent with ID: {initial_agent_id}")
         
-        # PHASE 1: Register and test the initial agent
+        # DEMONSTRATION 1: Text Analysis Comparison
+        await text_analysis_demo(llm_service, system_agent)
+        
+        # DEMONSTRATION 2: System Agent Tools
+        await demonstrate_system_agent_tools(system_agent, library, llm_service)
+        
+        # DEMONSTRATION 3: Evolution via System Agent
         print("\n" + "-"*80)
-        print("PHASE 1: REGISTER AND TEST INITIAL AGENT")
+        print("AGENT EVOLUTION VIA SYSTEM AGENT")
         print("-"*80)
         
-        register_prompt = """
-        Check if the agent 'InvoiceProcessor_V1' is registered with the Agent Bus.
-        If not, please register it so it's available for use in our system.
+        evolution_prompt = """
+        Please demonstrate the process of evolving the "InvoiceProcessor_V1" agent using the following steps:
+        
+        1. First, search for the agent in the SmartLibrary using your SearchComponentTool
+        2. Analyze the agent's current capabilities and architecture
+        3. Create an evolved "InvoiceProcessor_V2" agent using your CreateComponentTool with these improvements:
+           - Better structured JSON output
+           - Validation of calculations (subtotal + tax = total)
+           - Detection of due dates and payment terms
+           - Improved error handling
+        4. Compare the original and evolved agents, highlighting the differences
+        
+        Please clearly explain what you're doing at each step, showing how the tools work.
         """
         
-        print("\nRegistering the agent with the Agent Bus...")
-        register_response = await system_agent.run(register_prompt)
-        print(f"Registration result: {register_response.result.text}")
+        print("\nPrompting System Agent to demonstrate evolution process...")
+        evolution_response = await system_agent.run(evolution_prompt)
         
-        # Test inputs
-        test_inputs = [
-            f"Process this invoice and extract all important information: {SAMPLE_INVOICE}",
-            "Extract the vendor, date, and total from this invoice: Invoice #9876 from Acme Corp, dated 2023-04-22, for $543.21",
-            "Is this a valid invoice? It has no total amount: Invoice #5555 from XYZ Services, dated 2023-06-10"
-        ]
-        
-        print("\nTesting the agent with sample inputs...")
-        
-        for i, input_text in enumerate(test_inputs):
-            test_prompt = f"""
-            Use the InvoiceProcessor_V1 agent to process this input:
-            
-            {input_text}
-            
-            Extract all relevant information and return the results.
-            """
-            
-            print(f"\nTest {i+1}: Processing invoice...")
-            start_time = time.time()
-            test_response = await system_agent.run(test_prompt)
-            response_time = time.time() - start_time
-            
-            # Record the experience
-            experience_tracker.record_invocation(
-                initial_agent_id,
-                initial_agent_record["name"],
-                "finance",
-                input_text,
-                True,  # Assuming success
-                response_time
-            )
-            
-            print(f"Response (in {response_time:.2f}s):")
-            print(test_response.result.text[:300] + "..." if len(test_response.result.text) > 300 else test_response.result.text)
-        
-        # PHASE 2: Standard Evolution - Improving capabilities
-        print("\n" + "-"*80)
-        print("PHASE 2: STANDARD EVOLUTION - IMPROVING CAPABILITIES")
-        print("-"*80)
-        
-        # Get the agent's experience
-        agent_experience = experience_tracker.get_agent_experience(initial_agent_id)
-        avg_response_time = sum([input_data["time"] for input_data in agent_experience.get("inputs", [])]) / max(1, len(agent_experience.get("inputs", [])))
-        
-        standard_evolution_prompt = f"""
-        I need to evolve our InvoiceProcessor_V1 agent with the standard evolution strategy. 
-        
-        Current agent information:
-        - Name: InvoiceProcessor_V1
-        - Domain: finance
-        - Framework: openai-agents
-        - Experience: {agent_experience.get("total_invocations", 0)} invocations
-        - Average response time: {avg_response_time:.2f} seconds
-        
-        Please create an evolved version with these improvements:
-        1. Better structured output in JSON format
-        2. Validation of calculations (subtotal + tax = total)
-        3. Ability to handle multiple invoice formats
-        4. Detection of due dates and payment terms
-        
-        The evolved agent should be named 'InvoiceProcessor_V2' and keep the same underlying framework.
-        """
-        
-        print("\nPrompting SystemAgent to evolve the agent with standard strategy...")
-        evolution_response = await system_agent.run(standard_evolution_prompt)
-        
-        print("\nEvolution result:")
+        print("\nEvolution demonstration:")
         print(evolution_response.result.text)
         
-        # Find the evolved agent
-        evolved_agent_record = await library.find_record_by_name("InvoiceProcessor_V2", "AGENT")
-        if evolved_agent_record:
-            evolved_agent_id = evolved_agent_record["id"]
-            print(f"✓ Found evolved agent: {evolved_agent_record['name']}")
-            
-            # Record the evolution
-            experience_tracker.record_evolution(
-                initial_agent_id, 
-                evolved_agent_id, 
-                "standard", 
-                "Improved JSON output, calculation verification, multiple formats, recommendations"
-            )
-            
-            # Test the evolved agent
-            test_prompt = f"""
-            Use the evolved InvoiceProcessor_V2 agent to process this invoice:
-            
-            {SAMPLE_INVOICE}
-            
-            I expect to see the improvements we made including structured JSON output, 
-            validation of calculations, and any relevant recommendations.
-            """
-            
-            print("\nTesting the evolved agent...")
-            start_time = time.time()
-            evolved_test_response = await system_agent.run(test_prompt)
-            response_time = time.time() - start_time
-            
-            # Record the experience
-            experience_tracker.record_invocation(
-                evolved_agent_id,
-                evolved_agent_record["name"],
-                "finance",
-                SAMPLE_INVOICE,
-                True,
-                response_time
-            )
-            
-            print(f"\nEvolved agent response (in {response_time:.2f}s):")
-            print(evolved_test_response.result.text[:300] + "..." if len(evolved_test_response.result.text) > 300 else evolved_test_response.result.text)
-            
-            # PHASE 3: Domain Adaptation - Medical Records
-            print("\n" + "-"*80)
-            print("PHASE 3: DOMAIN ADAPTATION - MEDICAL RECORDS")
-            print("-"*80)
-            
-            domain_adaptation_prompt = f"""
-            I need to adapt our evolved InvoiceProcessor_V2 agent to handle medical records using domain adaptation.
-            
-            Current agent:
-            - Name: InvoiceProcessor_V2
-            - Domain: finance
-            - Purpose: processing invoices
-            
-            Target domain: healthcare
-            
-            Please create a domain-adapted agent that can:
-            1. Extract patient information (name, ID, DOB)
-            2. Extract visit details (date, reason for visit)
-            3. Extract vital signs
-            4. Extract assessment and plan
-            
-            Create a new agent called 'MedicalRecordProcessor_V1' with the appropriate domain.
-            
-            Sample medical record:
-            {SAMPLE_MEDICAL_RECORD}
-            """
-            
-            print("\nPrompting SystemAgent to adapt the agent to the medical domain...")
-            adaptation_response = await system_agent.run(domain_adaptation_prompt)
-            
-            print("\nDomain adaptation result:")
-            print(adaptation_response.result.text)
-            
-            # Find the medical agent
-            medical_agent_record = await library.find_record_by_name("MedicalRecordProcessor_V1", "AGENT")
-            if medical_agent_record:
-                medical_agent_id = medical_agent_record["id"]
-                print(f"✓ Found medical domain agent: {medical_agent_record['name']}")
-                
-                # Record the domain adaptation
-                experience_tracker.record_evolution(
-                    evolved_agent_id,
-                    medical_agent_id,
-                    "domain_adaptation",
-                    "Adapted from invoice processing to medical record processing"
-                )
-                
-                # Test the medical agent
-                medical_test_prompt = f"""
-                Use the MedicalRecordProcessor_V1 agent to process this medical record:
-                
-                {SAMPLE_MEDICAL_RECORD}
-                
-                Extract all relevant patient information, vital signs, assessment, and plan.
-                """
-                
-                print("\nTesting the medical domain agent...")
-                start_time = time.time()
-                medical_test_response = await system_agent.run(medical_test_prompt)
-                response_time = time.time() - start_time
-                
-                # Record the experience
-                experience_tracker.record_invocation(
-                    medical_agent_id,
-                    medical_agent_record["name"],
-                    "healthcare",
-                    SAMPLE_MEDICAL_RECORD,
-                    True,
-                    response_time
-                )
-                
-                print(f"\nMedical agent response (in {response_time:.2f}s):")
-                print(medical_test_response.result.text[:300] + "..." if len(medical_test_response.result.text) > 300 else medical_test_response.result.text)
-                
-                # PHASE 4: Compare Agents - A/B Testing
-                print("\n" + "-"*80)
-                print("PHASE 4: COMPARE AGENTS - A/B TESTING")
-                print("-"*80)
-                
-                comparison_prompt = f"""
-                I need to compare the performance of our original InvoiceProcessor_V1 agent 
-                with the evolved InvoiceProcessor_V2 agent.
-                
-                Please run both agents on the following invoice:
-                {SAMPLE_INVOICE}
-                
-                Evaluate both outputs on these criteria:
-                1. Accuracy of extraction
-                2. Completeness of output
-                3. Structured format
-                4. Validation checks
-                5. Response quality
-                
-                Provide a detailed comparison with scores for each criterion (1-10), 
-                declare a winner, and explain why one is better than the other.
-                """
-                
-                print("\nPrompting SystemAgent to compare original and evolved agents...")
-                comparison_response = await system_agent.run(comparison_prompt)
-                
-                print("\nComparison result:")
-                print(comparison_response.result.text)
-                
-                # PHASE 5: Aggressive Evolution
-                print("\n" + "-"*80)
-                print("PHASE 5: AGGRESSIVE EVOLUTION - CONTRACT ANALYZER")
-                print("-"*80)
-                
-                aggressive_evolution_prompt = f"""
-                I need to perform an aggressive evolution of our InvoiceProcessor_V2 agent to create 
-                a completely new type of document processor - a ContractAnalyzer.
-                
-                This is a more radical change than standard evolution or domain adaptation.
-                The new agent should:
-                
-                1. Parse and extract key details from legal contracts
-                2. Identify parties, effective dates, and termination conditions
-                3. Extract services, fees, and payment terms
-                4. Highlight key obligations and potential legal risks
-                5. Provide a legal compliance check
-                
-                Create a new agent called 'ContractAnalyzer_V1' with domain 'legal'
-                and framework 'openai-agents'.
-                
-                Sample contract:
-                {SAMPLE_CONTRACT}
-                """
-                
-                print("\nPrompting SystemAgent to aggressively evolve the agent into a contract analyzer...")
-                aggressive_response = await system_agent.run(aggressive_evolution_prompt)
-                
-                print("\nAggressive evolution result:")
-                print(aggressive_response.result.text)
-                
-                # Find the contract agent
-                contract_agent_record = await library.find_record_by_name("ContractAnalyzer_V1", "AGENT")
-                if contract_agent_record:
-                    contract_agent_id = contract_agent_record["id"]
-                    print(f"✓ Found contract analyzer agent: {contract_agent_record['name']}")
-                    
-                    # Record the aggressive evolution
-                    experience_tracker.record_evolution(
-                        evolved_agent_id,
-                        contract_agent_id,
-                        "aggressive",
-                        "Radically transformed from invoice processor to contract analyzer"
-                    )
-                    
-                    # Test the contract agent
-                    contract_test_prompt = f"""
-                    Use the ContractAnalyzer_V1 agent to analyze this contract:
-                    
-                    {SAMPLE_CONTRACT}
-                    
-                    Extract all parties, terms, services, payment details, and highlight
-                    any potential legal concerns.
-                    """
-                    
-                    print("\nTesting the contract analyzer agent...")
-                    start_time = time.time()
-                    contract_test_response = await system_agent.run(contract_test_prompt)
-                    response_time = time.time() - start_time
-                    
-                    # Record the experience
-                    experience_tracker.record_invocation(
-                        contract_agent_id,
-                        contract_agent_record["name"],
-                        "legal",
-                        SAMPLE_CONTRACT,
-                        True,
-                        response_time
-                    )
-                    
-                    print(f"\nContract analyzer response (in {response_time:.2f}s):")
-                    print(contract_test_response.result.text[:300] + "..." if len(contract_test_response.result.text) > 300 else contract_test_response.result.text)
-                
-                # PHASE 6: Final Evolution Assessment
-                print("\n" + "-"*80)
-                print("PHASE 6: FINAL EVOLUTION ASSESSMENT")
-                print("-"*80)
-                
-                assessment_prompt = """
-                Please provide a comprehensive assessment of our agent evolution process.
-                
-                Our agents have gone through several types of evolution:
-                1. Standard evolution: InvoiceProcessor_V1 → InvoiceProcessor_V2
-                2. Domain adaptation: InvoiceProcessor_V2 → MedicalRecordProcessor_V1
-                3. Aggressive evolution: InvoiceProcessor_V2 → ContractAnalyzer_V1
-                
-                For each evolution type:
-                - Evaluate the effectiveness of the evolution approach
-                - Identify strengths and weaknesses
-                - Provide suggestions for improving the evolution process
-                
-                Also provide general remarks on how the OpenAI Agents SDK integration
-                has enhanced our Evolving Agents Framework.
-                """
-                
-                print("\nPrompting SystemAgent for a final evolution assessment...")
-                assessment_response = await system_agent.run(assessment_prompt)
-                
-                print("\nFinal evolution assessment:")
-                print(assessment_response.result.text)
-            else:
-                print("✗ Medical domain agent not found")
-        else:
-            print("✗ Evolved agent not found")
+        # DEMONSTRATION 4: Cross-Domain Adaptation
+        print("\n" + "-"*80)
+        print("CROSS-DOMAIN ADAPTATION DEMONSTRATION")
+        print("-"*80)
         
-        print("\nEvolution demonstration completed successfully!")
+        adaptation_prompt = f"""
+        Please demonstrate how to adapt document processing across different domains using the SmartLibrary.
+        
+        We have:
+        - Invoice processors in the finance domain
+        - A need to process documents in the medical and legal domains
+        
+        Using your tools, please:
+        
+        1. Analyze the components we already have in the SmartLibrary
+        2. Show how to adapt an invoice processor to handle medical records
+        3. Create a new MedicalRecordProcessor based on invoice processing techniques
+        4. Test the new processor on this sample: {SAMPLE_MEDICAL_RECORD}
+        5. Explain the adaptation strategies you used
+        
+        Please clearly explain each step of your process.
+        """
+        
+        print("\nPrompting System Agent to demonstrate cross-domain adaptation...")
+        adaptation_response = await system_agent.run(adaptation_prompt)
+        
+        print("\nCross-domain adaptation demonstration:")
+        print(adaptation_response.result.text)
+        
+        print("\nDemonstration completed successfully!")
         
     except Exception as e:
         logger.error(f"Error: {str(e)}")

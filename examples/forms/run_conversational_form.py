@@ -9,6 +9,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
+from evolving_agents.core.dependency_container import DependencyContainer
 
 import os
 from dotenv import load_dotenv
@@ -19,38 +20,39 @@ load_dotenv()
 async def create_conversational_form(form_prompt: str, form_id: str = "feedback_form"):
     """Create a conversational form based on natural language description."""
     
+    # Create dependency container to manage component dependencies
+    container = DependencyContainer()
+    
     # Initialize services
     llm_service = LLMService(provider="openai", model="gpt-4o")
+    container.register('llm_service', llm_service)
     
     # Make sure library directory exists
     if not os.path.exists("form_library.json"):
         with open("form_library.json", "w") as f:
             f.write("[]")
     
-    smart_library = SmartLibrary("form_library.json")
+    smart_library = SmartLibrary("form_library.json", container=container)
+    container.register('smart_library', smart_library)
+    
+    # Create agent bus with null system agent
+    agent_bus = SmartAgentBus(
+        storage_path="form_agent_bus.json",
+        log_path="form_agent_logs.json",
+        container=container
+    )
+    container.register('agent_bus', agent_bus)
     
     # Create the system agent
-    system_agent = await SystemAgentFactory.create_agent(
-        llm_service=llm_service,
-        smart_library=smart_library
-    )
+    system_agent = await SystemAgentFactory.create_agent(container=container)
+    container.register('system_agent', system_agent)
     
-    # Create and initialize the Smart Agent Bus
-    agent_bus = SmartAgentBus(
-        smart_library=smart_library,
-        system_agent=system_agent,
-        storage_path="form_agent_bus.json",
-        log_path="form_agent_logs.json"
-    )
+    # Initialize components
+    await smart_library.initialize()
     await agent_bus.initialize_from_library()
     
-    # Create the architect agent
-    architect = await create_architect_zero(
-        llm_service=llm_service,
-        smart_library=smart_library,
-        agent_bus=agent_bus,
-        system_agent_factory=SystemAgentFactory.create_agent
-    )
+    # Create the architect agent using the container
+    architect = await create_architect_zero(container=container)
     
     # Run the architect to create the form system
     form_creation_prompt = f"""
@@ -149,21 +151,30 @@ async def create_conversational_form(form_prompt: str, form_id: str = "feedback_
 async def fill_out_form(form_id: str, user_responses: list):
     """Process a user filling out the conversational form."""
     
+    # Create dependency container to manage component dependencies
+    container = DependencyContainer()
+    
     # Initialize services
     llm_service = LLMService(provider="openai", model="gpt-4o")
-    smart_library = SmartLibrary("form_library.json")
+    container.register('llm_service', llm_service)
+    
+    smart_library = SmartLibrary("form_library.json", container=container)
+    container.register('smart_library', smart_library)
+    
+    # Create agent bus with null system agent
+    agent_bus = SmartAgentBus(
+        storage_path="form_agent_bus.json",
+        log_path="form_agent_logs.json",
+        container=container
+    )
+    container.register('agent_bus', agent_bus)
     
     # Create the system agent
-    system_agent = await SystemAgentFactory.create_agent(
-        llm_service=llm_service,
-        smart_library=smart_library
-    )
+    system_agent = await SystemAgentFactory.create_agent(container=container)
+    container.register('system_agent', system_agent)
     
-    # Create and initialize the Smart Agent Bus
-    agent_bus = SmartAgentBus(
-        smart_library=smart_library,
-        system_agent=system_agent
-    )
+    # Initialize components
+    await smart_library.initialize()
     await agent_bus.initialize_from_library()
     
     # Load the form definition
