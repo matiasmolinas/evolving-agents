@@ -3,6 +3,8 @@
 import logging
 import yaml
 from typing import Dict, Any, Optional
+import json
+import sys
 
 # Import the interface instead of the concrete class
 from evolving_agents.core.base import IAgent
@@ -27,13 +29,14 @@ class WorkflowProcessor:
         """Set the agent after initialization."""
         self.agent = agent
     
-    async def process_workflow(self, workflow_yaml: str) -> Dict[str, Any]:
+    async def process_workflow(self, workflow_yaml: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Process a workflow from a YAML string.
         
         Args:
             workflow_yaml: YAML string defining the workflow
-            
+            params: Optional parameters to pass to the workflow
+                
         Returns:
             Execution results
         """
@@ -56,9 +59,14 @@ class WorkflowProcessor:
         
         logger.info(f"Executing scenario: {scenario_name} in domain: {domain}")
         
+        # Include params in the prompt if provided
+        params_section = ""
+        if params:
+            params_section = f"\nParameters:\n{json.dumps(params, indent=2)}"
+        
         # Run the workflow using the agent's run method
         prompt = f"""
-        I need to process this workflow YAML for domain '{domain}':
+        I need to process this workflow YAML for domain '{domain}'{params_section}:
         
         ```yaml
         {workflow_yaml}
@@ -68,6 +76,7 @@ class WorkflowProcessor:
         For each step, indicate the step type, what action was performed, and the outcome.
         
         When executing tools or agents, show the input and output for each execution.
+        When you see placeholders like {{params.some_variable}}, replace them with the corresponding value from the parameters.
         """
         
         response = await self.agent.run(prompt)
