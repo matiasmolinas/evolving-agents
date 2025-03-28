@@ -1,5 +1,6 @@
 import logging
 import json
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel, Field
 
@@ -24,13 +25,12 @@ class ArchitectZeroAgentInitializer:
     Architect-Zero agent that analyzes task requirements and designs complete 
     agent-based solutions.
     
-    This agent can:
-    1. Analyze task requirements in natural language
-    2. Design a workflow of agents and tools to complete the task
-    3. Generate agent/tool entries for the smart library
-    4. Create YAML workflows to execute the solution
-    5. Leverage existing components when possible through the smart library
-    6. Create new agents and tools from scratch when necessary
+    This agent serves as a solution designer that:
+    1. Analyzes task requirements in natural language
+    2. Designs a workflow of agents and tools to complete the task
+    3. Generates component designs with appropriate specifications
+    4. Creates YAML workflows that can be executed by the System Agent
+    5. Provides guidance on component reuse, evolution, and creation
     """
     
     @staticmethod
@@ -38,8 +38,6 @@ class ArchitectZeroAgentInitializer:
         llm_service: Optional[LLMService] = None,
         smart_library: Optional[SmartLibrary] = None,
         agent_bus: Optional[SmartAgentBus] = None,
-        system_agent_factory: Optional[callable] = None,
-        tools: Optional[List[Tool]] = None,
         container: Optional[DependencyContainer] = None
     ) -> ReActAgent:
         """
@@ -49,8 +47,6 @@ class ArchitectZeroAgentInitializer:
             llm_service: LLM service for text generation
             smart_library: Smart library for component management
             agent_bus: Agent bus for component communication
-            system_agent_factory: Optional factory function for creating the system agent
-            tools: Optional additional tools to provide to the agent
             container: Optional dependency container for managing component dependencies
             
         Returns:
@@ -62,70 +58,51 @@ class ArchitectZeroAgentInitializer:
             smart_library = smart_library or container.get('smart_library')
             agent_bus = agent_bus or container.get('agent_bus')
             
-            # Check if system_agent already exists in container
+            # Get system agent if it exists in the container
             system_agent = container.get('system_agent') if container.has('system_agent') else None
         else:
             system_agent = None
+            if not llm_service:
+                raise ValueError("LLM service must be provided when not using a dependency container")
         
         # Get the chat model from LLM service
         chat_model = llm_service.chat_model
-        
-        # Create the system agent if not already available
-        if not system_agent:
-            if system_agent_factory:
-                # Use the provided factory function
-                system_agent = await system_agent_factory(
-                    llm_service=llm_service,
-                    smart_library=smart_library,
-                    agent_bus=agent_bus,
-                    container=container
-                )
-            else:
-                # Create using the default factory
-                system_agent = await SystemAgentFactory.create_agent(
-                    llm_service=llm_service,
-                    smart_library=smart_library,
-                    agent_bus=agent_bus,
-                    container=container
-                )
-
-        # Update the agent_bus with the system_agent if needed
-        if agent_bus and agent_bus.system_agent is None:
-            agent_bus.system_agent = system_agent
-
-        # Initialize components from library if needed
-        if agent_bus and hasattr(agent_bus, 'initialize_from_library'):
-            await agent_bus.initialize_from_library()
         
         # Initialize SmartLibrary if needed
         if smart_library and hasattr(smart_library, 'initialize'):
             await smart_library.initialize()
         
-        # Create workflow generator
-        workflow_generator = WorkflowGenerator(llm_service, smart_library)
-        workflow_generator.set_agent(system_agent)
+        # Get workflow generator - will use existing or create a new one
+        if container and container.has('workflow_generator'):
+            workflow_generator = container.get('workflow_generator')
+        else:
+            workflow_generator = WorkflowGenerator(llm_service, smart_library)
+            if system_agent:
+                workflow_generator.set_agent(system_agent)
+            if container:
+                container.register('workflow_generator', workflow_generator)
         
         # Create tools for the architect agent
         architect_tools = [
             AnalyzeRequirementsTool(llm_service, smart_library),
-            DesignWorkflowTool(llm_service, workflow_generator, smart_library),
-            GenerateLibraryEntriesHool(llm_service, smart_library),
-            CreateWorkflowTool(workflow_generator),
-            ExecuteWorkflowTool(system_agent)
+            DesignSolutionTool(llm_service, smart_library),
+            ComponentSpecificationTool(llm_service, smart_library),
+            GenerateWorkflowTool(workflow_generator)
         ]
-        
-        # Add any additional tools provided
-        if tools:
-            architect_tools.extend(tools)
         
         # Create agent metadata
         meta = AgentMeta(
             name="Architect-Zero",
             description=(
-                "I am Architect-Zero, responsible for designing and creating agent-based solutions "
-                "from natural language task requirements. I can analyze requirements, design workflows, "
-                "create library entries, generate YAML workflows, and execute solutions using the "
-                "evolving agents toolkit."
+                "I am Architect-Zero, specialized in solution design and architecture. "
+                "I analyze requirements, design component-based solutions, create specifications, "
+                "and generate workflow designs to be executed by the System Agent. I focus on "
+                "high-level architecture rather than implementation details."
+            ),
+            extra_description=(
+                "I work closely with the System Agent, which handles execution and implementation. "
+                "My role is to design and architect solutions that can be created and executed "
+                "by other agents in the ecosystem."
             ),
             tools=architect_tools
         )
@@ -138,6 +115,60 @@ class ArchitectZeroAgentInitializer:
             meta=meta
         )
         
+        # Add tools dictionary for direct access
+        tools_dict = {
+            "AnalyzeRequirementsTool": architect_tools[0],
+            "DesignSolutionTool": architect_tools[1],
+            "ComponentSpecificationTool": architect_tools[2],
+            "GenerateWorkflowTool": architect_tools[3]
+        }
+        agent.tools = tools_dict
+        
+        # Register with agent bus if provided
+        if agent_bus:
+            # Create serializable metadata (no agent instance)
+            serializable_metadata = {
+                "role": "architecture_designer",
+                "creation_timestamp": datetime.now().isoformat(),
+                "tool_count": len(architect_tools),
+                "framework": "beeai"
+            }
+            
+            # Register agent in the bus
+            await agent_bus.register_agent(
+                name="Architect-Zero",
+                capabilities=[
+                    {
+                        "id": "solution_design",
+                        "name": "Solution Design",
+                        "description": "Design complete agent-based solutions from requirements",
+                        "confidence": 0.95
+                    },
+                    {
+                        "id": "requirements_analysis",
+                        "name": "Requirements Analysis",
+                        "description": "Analyze task requirements to identify needed components",
+                        "confidence": 0.9
+                    },
+                    {
+                        "id": "workflow_generation",
+                        "name": "Workflow Generation",
+                        "description": "Generate workflows for complex agent-based solutions",
+                        "confidence": 0.85
+                    },
+                    {
+                        "id": "component_specification",
+                        "name": "Component Specification",
+                        "description": "Create detailed specifications for components",
+                        "confidence": 0.9
+                    }
+                ],
+                agent_type="ARCHITECT",
+                description="Solution architect agent that designs agent-based solutions",
+                metadata=serializable_metadata,  # Only serializable metadata here
+                agent_instance=agent  # Pass agent instance separately if supported
+            )
+        
         # Register with container if provided
         if container and not container.has('architect_agent'):
             container.register('architect_agent', agent)
@@ -145,33 +176,31 @@ class ArchitectZeroAgentInitializer:
         return agent
 
 
-# Custom tools for Architect-Zero
-
 # Input schemas for the tools
 class AnalyzeRequirementsInput(BaseModel):
     """Input schema for the AnalyzeRequirementsTool."""
     task_requirements: str = Field(description="Task requirements in natural language")
+    domain: Optional[str] = Field(None, description="Optional domain hint for the analysis")
+    constraints: Optional[str] = Field(None, description="Optional constraints to consider")
 
-class DesignWorkflowInput(BaseModel):
-    """Input schema for the DesignWorkflowTool."""
+class DesignSolutionInput(BaseModel):
+    """Input schema for the DesignSolutionTool."""
     requirements_analysis: Dict[str, Any] = Field(description="Analysis from AnalyzeRequirementsTool")
+    solution_type: Optional[str] = Field("agent_based", description="Type of solution to design (agent_based, pipeline, etc.)")
+    optimization_focus: Optional[str] = Field(None, description="What to optimize for (speed, accuracy, etc.)")
 
-class GenerateLibraryEntriesInput(BaseModel):
-    """Input schema for the GenerateLibraryEntriesHool."""
-    workflow_design: Dict[str, Any] = Field(description="Workflow design from DesignWorkflowTool")
+class ComponentSpecInput(BaseModel):
+    """Input schema for the ComponentSpecificationTool."""
+    solution_design: Dict[str, Any] = Field(description="Solution design from DesignSolutionTool")
+    component_name: Optional[str] = Field(None, description="Specific component to generate a spec for (or all if None)")
+    detail_level: Optional[str] = Field("standard", description="Level of detail in the specification (basic, standard, detailed)")
 
-class CreateWorkflowInput(BaseModel):
-    """Input schema for the CreateWorkflowTool."""
-    workflow_design: Dict[str, Any] = Field(description="Workflow design from DesignWorkflowTool")
-    library_entries: Dict[str, Any] = Field(description="Library entries from GenerateLibraryEntriesHool")
-
-class ExecuteWorkflowInput(BaseModel):
-    """Input schema for the ExecuteWorkflowTool."""
-    yaml_workflow: str = Field(description="YAML workflow to execute")
-    execution_params: Dict[str, Any] = Field(
-        default={}, 
-        description="Optional parameters for workflow execution"
-    )
+class GenerateWorkflowInput(BaseModel):
+    """Input schema for the GenerateWorkflowTool."""
+    solution_design: Dict[str, Any] = Field(description="Solution design from DesignSolutionTool")
+    component_specs: Optional[Dict[str, Any]] = Field(None, description="Component specifications from ComponentSpecificationTool")
+    workflow_name: Optional[str] = Field(None, description="Name for the workflow")
+    include_comments: Optional[bool] = Field(True, description="Whether to include explanatory comments in the workflow")
 
 
 class AnalyzeRequirementsTool(Tool[AnalyzeRequirementsInput, None, StringToolOutput]):
@@ -207,12 +236,15 @@ class AnalyzeRequirementsTool(Tool[AnalyzeRequirementsInput, None, StringToolOut
         Returns:
             Analysis results including required components and capabilities
         """
+        domain_hint = f"\nDOMAIN HINT: {input.domain}" if input.domain else ""
+        constraints = f"\nCONSTRAINTS: {input.constraints}" if input.constraints else ""
+        
         # Prompt the LLM to analyze the requirements
         analysis_prompt = f"""
         Analyze the following task requirements and identify the necessary components:
 
         TASK REQUIREMENTS:
-        {input.task_requirements}
+        {input.task_requirements}{domain_hint}{constraints}
 
         Please provide:
         1. A clear summary of the task's objective
@@ -221,6 +253,7 @@ class AnalyzeRequirementsTool(Tool[AnalyzeRequirementsInput, None, StringToolOut
         4. A list of required tools with their purpose
         5. The key capabilities needed by these components
         6. Any constraints or special considerations
+        7. Any data or resources that would be needed
 
         Format your response as a structured JSON object with these sections.
         """
@@ -234,60 +267,68 @@ class AnalyzeRequirementsTool(Tool[AnalyzeRequirementsInput, None, StringToolOut
             
             # Check for existing components in the library that match requirements
             existing_components = []
-            for agent in analysis.get("required_agents", []):
-                agent_name = agent.get("name", "")
-                agent_purpose = agent.get("purpose", "")
-                
-                # Search for similar agents in the library
-                similar_agents = await self.library.semantic_search(
-                    f"agent that can {agent_purpose}",
-                    record_type="AGENT",
-                    limit=3
-                )
-                
-                if similar_agents:
-                    existing_components.append({
-                        "type": "AGENT",
-                        "name": agent_name,
-                        "purpose": agent_purpose,
-                        "similar_existing_components": [
-                            {
-                                "id": sa[0]["id"],
-                                "name": sa[0]["name"],
-                                "similarity": sa[1],
-                                "record_type": sa[0]["record_type"]
-                            }
-                            for sa in similar_agents
-                        ]
-                    })
             
-            # Similarly for tools
-            for tool in analysis.get("required_tools", []):
-                tool_name = tool.get("name", "")
-                tool_purpose = tool.get("purpose", "")
-                
-                # Search for similar tools in the library
-                similar_tools = await self.library.semantic_search(
-                    f"tool that can {tool_purpose}",
-                    record_type="TOOL",
-                    limit=3
-                )
-                
-                if similar_tools:
-                    existing_components.append({
-                        "type": "TOOL",
-                        "name": tool_name,
-                        "purpose": tool_purpose,
-                        "similar_existing_components": [
-                            {
-                                "id": st[0]["id"],
-                                "name": st[0]["name"],
-                                "similarity": st[1],
-                                "record_type": st[0]["record_type"]
-                            }
-                            for st in similar_tools
-                        ]
-                    })
+            # Check for agents
+            if "required_agents" in analysis:
+                for agent in analysis["required_agents"]:
+                    agent_name = agent.get("name", "")
+                    agent_purpose = agent.get("purpose", "")
+                    
+                    # Search for similar agents in the library
+                    search_query = f"agent that can {agent_purpose}"
+                    similar_agents = await self.library.semantic_search(
+                        search_query,
+                        record_type="AGENT",
+                        limit=3,
+                        threshold=0.6
+                    )
+                    
+                    if similar_agents:
+                        existing_components.append({
+                            "type": "AGENT",
+                            "name": agent_name,
+                            "purpose": agent_purpose,
+                            "similar_existing_components": [
+                                {
+                                    "id": sa[0]["id"],
+                                    "name": sa[0]["name"],
+                                    "similarity": sa[1],
+                                    "description": sa[0].get("description", "")
+                                }
+                                for sa in similar_agents
+                            ]
+                        })
+            
+            # Check for tools
+            if "required_tools" in analysis:
+                for tool in analysis["required_tools"]:
+                    tool_name = tool.get("name", "")
+                    tool_purpose = tool.get("purpose", "")
+                    
+                    # Search for similar tools in the library
+                    search_query = f"tool that can {tool_purpose}"
+                    similar_tools = await self.library.semantic_search(
+                        search_query,
+                        record_type="TOOL",
+                        limit=3,
+                        threshold=0.6
+                    )
+                    
+                    if similar_tools:
+                        existing_components.append({
+                            "type": "TOOL",
+                            "name": tool_name,
+                            "purpose": tool_purpose,
+                            "similar_existing_components": [
+                                {
+                                    "id": st[0]["id"],
+                                    "name": st[0]["name"],
+                                    "similarity": st[1],
+                                    "description": st[0].get("description", "")
+                                }
+                                for st in similar_tools
+                            ]
+                        })
             
             # Add the existing components to the analysis
             analysis["existing_components"] = existing_components
@@ -304,22 +345,16 @@ class AnalyzeRequirementsTool(Tool[AnalyzeRequirementsInput, None, StringToolOut
             return StringToolOutput(json.dumps(error_response, indent=2))
 
 
-class DesignWorkflowTool(Tool[DesignWorkflowInput, None, StringToolOutput]):
-    """Tool for designing a workflow based on the requirements analysis."""
+class DesignSolutionTool(Tool[DesignSolutionInput, None, StringToolOutput]):
+    """Tool for designing a solution based on the requirements analysis."""
     
-    name = "DesignWorkflowTool"
-    description = "Design a workflow of agents and tools to fulfill the task requirements"
-    input_schema = DesignWorkflowInput
+    name = "DesignSolutionTool"
+    description = "Design a complete solution including component architecture and interactions"
+    input_schema = DesignSolutionInput
     
-    def __init__(
-        self, 
-        llm_service: LLMService, 
-        workflow_generator: WorkflowGenerator,
-        smart_library: SmartLibrary
-    ):
+    def __init__(self, llm_service: LLMService, smart_library: SmartLibrary):
         super().__init__()
         self.llm = llm_service
-        self.workflow_generator = workflow_generator
         self.library = smart_library
     
     def _create_emitter(self) -> Emitter:
@@ -330,36 +365,40 @@ class DesignWorkflowTool(Tool[DesignWorkflowInput, None, StringToolOutput]):
     
     async def _run(
         self, 
-        input: DesignWorkflowInput, 
+        input: DesignSolutionInput, 
         options: Optional[Dict[str, Any]] = None, 
         context: Optional[RunContext] = None
     ) -> StringToolOutput:
         """
-        Design a workflow based on requirements analysis.
+        Design a complete solution based on requirements analysis.
         
         Args:
-            input: Analysis from AnalyzeRequirementsTool
+            input: Analysis from AnalyzeRequirementsTool and design parameters
             
         Returns:
-            Workflow design including sequence, component relations, and data flow
+            Comprehensive solution design
         """
-        # Extract task objective and requirements
+        # Extract key information from the analysis
         task_objective = input.requirements_analysis.get("task_objective", "")
         domains = input.requirements_analysis.get("domains", [])
         required_agents = input.requirements_analysis.get("required_agents", [])
         required_tools = input.requirements_analysis.get("required_tools", [])
-        capabilities = input.requirements_analysis.get("required_capabilities", [])
         existing_components = input.requirements_analysis.get("existing_components", [])
         
-        # Prompt the LLM to design the workflow
+        # Determine optimization focus
+        optimization_notes = ""
+        if input.optimization_focus:
+            optimization_notes = f"\nOPTIMIZATION FOCUS: Optimize the solution for {input.optimization_focus}."
+        
+        # Prompt the LLM to design the solution
         design_prompt = f"""
-        Design a complete workflow for the following task:
+        Design a complete {input.solution_type} solution for the following task:
 
         TASK OBJECTIVE:
         {task_objective}
 
         DOMAINS:
-        {', '.join(domains) if isinstance(domains, list) else domains}
+        {json.dumps(domains, indent=2) if isinstance(domains, list) else domains}
 
         REQUIRED AGENTS:
         {json.dumps(required_agents, indent=2)}
@@ -367,92 +406,52 @@ class DesignWorkflowTool(Tool[DesignWorkflowInput, None, StringToolOutput]):
         REQUIRED TOOLS:
         {json.dumps(required_tools, indent=2)}
 
-        EXISTING COMPONENTS IN LIBRARY:
-        {json.dumps(existing_components, indent=2)}
+        EXISTING COMPONENTS:
+        {json.dumps(existing_components, indent=2)}{optimization_notes}
 
-        Please create a workflow design that:
-        1. Specifies the sequence of operations
-        2. Shows how agents interact with each other and with tools
-        3. Defines the data flow between components
-        4. Leverages existing components where possible (reuse)
-        5. Identifies components that need to be evolved from existing ones
-        6. Specifies components that need to be created from scratch
-
+        Please create a comprehensive solution design with these sections:
+        
+        1. "overview": A high-level overview of the solution approach
+        2. "architecture": The architectural pattern and component organization
+        3. "components": A list of all components (both new and existing) with:
+           - "name": Component name
+           - "type": AGENT or TOOL
+           - "purpose": What the component does
+           - "action": "reuse" (use existing), "evolve" (modify existing), or "create" (new)
+           - "existing_component_id": ID of existing component to reuse or evolve (if applicable)
+           - "interfaces": Input/output interfaces
+        4. "workflow": The sequence of operations and data flow between components
+        5. "implementation_strategy": How to implement this solution (using SystemAgent)
+        
         Format your response as a structured JSON object with these sections.
         """
         
-        # Generate workflow design
+        # Generate solution design
         design_response = await self.llm.generate(design_prompt)
         
         try:
             # Parse the JSON response
-            workflow_design = json.loads(design_response)
+            solution_design = json.loads(design_response)
             
-            # Generate a pseudo-YAML representation for visualization
-            yaml_representation = await self._generate_yaml_representation(workflow_design)
-            workflow_design["yaml_preview"] = yaml_representation
-            
-            return StringToolOutput(json.dumps(workflow_design, indent=2))
+            # Return the solution design
+            return StringToolOutput(json.dumps(solution_design, indent=2))
         
         except json.JSONDecodeError:
             # If parsing fails, return a structured error
             error_response = {
                 "status": "error",
-                "message": "Failed to parse workflow design response as JSON",
+                "message": "Failed to parse solution design response as JSON",
                 "raw_response": design_response
             }
             return StringToolOutput(json.dumps(error_response, indent=2))
+
+
+class ComponentSpecificationTool(Tool[ComponentSpecInput, None, StringToolOutput]):
+    """Tool for generating detailed component specifications."""
     
-    async def _generate_yaml_representation(self, workflow_design: Dict[str, Any]) -> str:
-        """Generate a YAML representation of the workflow design for visualization."""
-        sequence = workflow_design.get("sequence", [])
-        components = workflow_design.get("components", [])
-        data_flow = workflow_design.get("data_flow", [])
-        
-        yaml_prompt = f"""
-        Convert this workflow design to a YAML workflow representation:
-
-        SEQUENCE:
-        {json.dumps(sequence, indent=2)}
-
-        COMPONENTS:
-        {json.dumps(components, indent=2)}
-
-        DATA FLOW:
-        {json.dumps(data_flow, indent=2)}
-
-        The YAML should follow this structure:
-        ```yaml
-        scenario_name: [task name]
-        domain: [domain]
-        description: [description]
-
-        steps:
-          - type: "CREATE" or "EXECUTE" or "DEFINE"
-            item_type: "AGENT" or "TOOL"
-            name: [component name]
-            [additional parameters as needed]
-        ```
-
-        Return only the YAML content.
-        """
-        
-        yaml_response = await self.llm.generate(yaml_prompt)
-        
-        # Clean up the response to extract just the YAML
-        if "```yaml" in yaml_response and "```" in yaml_response:
-            yaml_content = yaml_response.split("```yaml")[1].split("```")[0].strip()
-            return yaml_content
-        
-        return yaml_response
-
-
-class GenerateLibraryEntriesHool(Tool[GenerateLibraryEntriesInput, None, StringToolOutput]):
-    """Tool for generating Smart Library entries for the components needed."""
-    
-    name = "GenerateLibraryEntriesHool"
-    description = "Generate entries for the Smart Library based on the workflow design"
-    input_schema = GenerateLibraryEntriesInput
+    name = "ComponentSpecificationTool"
+    description = "Generate detailed specifications for components in the solution design"
+    input_schema = ComponentSpecInput
     
     def __init__(self, llm_service: LLMService, smart_library: SmartLibrary):
         super().__init__()
@@ -461,231 +460,173 @@ class GenerateLibraryEntriesHool(Tool[GenerateLibraryEntriesInput, None, StringT
     
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(
-            namespace=["tool", "architect", "generate"],
+            namespace=["tool", "architect", "specify"],
             creator=self,
         )
     
     async def _run(
         self, 
-        input: GenerateLibraryEntriesInput, 
+        input: ComponentSpecInput, 
         options: Optional[Dict[str, Any]] = None, 
         context: Optional[RunContext] = None
     ) -> StringToolOutput:
         """
-        Generate library entries for the components in the workflow.
+        Generate detailed specifications for components.
         
         Args:
-            input: Workflow design from DesignWorkflowTool
+            input: Solution design and component to specify
             
         Returns:
-            Generated library entries for new and evolved components
+            Detailed component specifications
         """
-        components = input.workflow_design.get("components", [])
-        reuse_components = [c for c in components if c.get("action") == "reuse"]
-        evolve_components = [c for c in components if c.get("action") == "evolve"]
-        create_components = [c for c in components if c.get("action") == "create"]
+        components = input.solution_design.get("components", [])
+        specifications = {}
         
-        library_entries = {
-            "reuse": [],
-            "evolve": [],
-            "create": []
-        }
+        # Filter for a specific component if requested
+        if input.component_name:
+            components = [c for c in components if c.get("name") == input.component_name]
+            if not components:
+                return StringToolOutput(json.dumps({
+                    "status": "error",
+                    "message": f"Component '{input.component_name}' not found in the solution design"
+                }, indent=2))
         
-        # Process components to reuse
-        for component in reuse_components:
-            component_id = component.get("existing_component_id")
-            if component_id:
-                record = await self.library.find_record_by_id(component_id)
-                if record:
-                    library_entries["reuse"].append({
-                        "id": record["id"],
-                        "name": record["name"],
-                        "type": record["record_type"],
-                        "role_in_workflow": component.get("role", "")
-                    })
-        
-        # Process components to evolve
-        for component in evolve_components:
-            parent_id = component.get("parent_component_id")
-            if parent_id:
-                parent_record = await self.library.find_record_by_id(parent_id)
-                if parent_record:
-                    # Generate evolved code for this component
-                    evolved_entry = await self._generate_evolved_component(
-                        parent_record,
-                        component
-                    )
-                    library_entries["evolve"].append(evolved_entry)
-        
-        # Process components to create
-        for component in create_components:
-            # Generate new code for this component
-            new_entry = await self._generate_new_component(component)
-            library_entries["create"].append(new_entry)
+        # Process each component (or just the specified one)
+        for component in components:
+            component_name = component.get("name")
+            component_type = component.get("type")
+            component_purpose = component.get("purpose")
+            component_action = component.get("action", "create")
+            existing_id = component.get("existing_component_id")
+            
+            # Get existing component details if we're reusing or evolving
+            existing_component = None
+            if existing_id and component_action in ["reuse", "evolve"]:
+                existing_component = await self.library.find_record_by_id(existing_id)
+            
+            # Generate the specification for this component
+            spec = await self._generate_component_spec(
+                component, 
+                existing_component, 
+                input.detail_level
+            )
+            
+            specifications[component_name] = spec
         
         result = {
             "status": "success",
-            "library_entries": library_entries
+            "component_count": len(specifications),
+            "specifications": specifications
         }
         
         return StringToolOutput(json.dumps(result, indent=2))
     
-    async def _generate_evolved_component(
+    async def _generate_component_spec(
         self, 
-        parent_record: Dict[str, Any],
-        component_spec: Dict[str, Any]
+        component: Dict[str, Any], 
+        existing_component: Optional[Dict[str, Any]], 
+        detail_level: str
     ) -> Dict[str, Any]:
-        """Generate code for an evolved component."""
-        component_name = component_spec.get("name", "")
-        component_type = component_spec.get("type", "AGENT")
-        component_purpose = component_spec.get("purpose", "")
-        evolution_changes = component_spec.get("evolution_changes", "")
+        """Generate a detailed specification for a component."""
+        component_name = component.get("name")
+        component_type = component.get("type")
+        component_purpose = component.get("purpose")
+        component_action = component.get("action", "create")
         
-        # Prompt the LLM to evolve the component
-        evolution_prompt = f"""
-        Evolve this existing component:
-
-        PARENT COMPONENT:
-        Name: {parent_record['name']}
-        Type: {parent_record['record_type']}
-        Description: {parent_record['description']}
+        # Build the prompt based on the component action
+        if component_action == "reuse":
+            prompt = f"""
+            Create a specification for reusing this existing component:
+            
+            COMPONENT:
+            Name: {component_name}
+            Type: {component_type}
+            Purpose: {component_purpose}
+            
+            EXISTING COMPONENT:
+            {json.dumps(existing_component, indent=2) if existing_component else "Not available"}
+            
+            DETAIL LEVEL: {detail_level}
+            
+            Generate a specification for reusing this component that includes:
+            1. A detailed description
+            2. Input/output interfaces
+            3. Required configurations
+            4. Usage instructions
+            5. Integration guidelines
+            
+            Format as JSON.
+            """
+        elif component_action == "evolve":
+            prompt = f"""
+            Create a specification for evolving this existing component:
+            
+            COMPONENT:
+            Name: {component_name}
+            Type: {component_type}
+            Purpose: {component_purpose}
+            
+            EXISTING COMPONENT:
+            {json.dumps(existing_component, indent=2) if existing_component else "Not available"}
+            
+            DETAIL LEVEL: {detail_level}
+            
+            Generate a specification for evolving this component that includes:
+            1. A detailed description
+            2. Required changes/additions
+            3. Input/output interfaces
+            4. Implementation guidelines
+            5. Evolution strategy
+            
+            Format as JSON.
+            """
+        else:  # create
+            prompt = f"""
+            Create a specification for building this new component:
+            
+            COMPONENT:
+            Name: {component_name}
+            Type: {component_type}
+            Purpose: {component_purpose}
+            
+            DETAIL LEVEL: {detail_level}
+            
+            Generate a detailed specification for creating this component that includes:
+            1. A detailed description
+            2. Required capabilities
+            3. Input/output interfaces
+            4. Implementation requirements
+            5. Required tools or dependencies
+            6. Recommended framework
+            
+            Format as JSON.
+            """
         
-        ORIGINAL CODE:
-        ```
-        {parent_record['code_snippet']}
-        ```
-
-        NEW REQUIREMENTS:
-        Component Name: {component_name}
-        Component Type: {component_type}
-        Purpose: {component_purpose}
-        Required Changes: {evolution_changes}
-
-        Please generate an evolved version of this component that fulfills the new requirements.
-        Return the updated component as a JSON object with these fields:
-        - name: The component name
-        - record_type: "AGENT" or "TOOL"
-        - domain: The component domain
-        - description: Detailed description of the component
-        - code_snippet: The complete code for the component
-        - version: Incremented version (e.g., if original is 1.0.0, use 1.0.1)
-        - changes: Summary of changes made
-        """
-        
-        # Generate evolved component
-        evolution_response = await self.llm.generate(evolution_prompt)
+        # Generate the specification
+        spec_response = await self.llm.generate(prompt)
         
         try:
             # Parse the JSON response
-            evolved_component = json.loads(evolution_response)
-            evolved_component["parent_id"] = parent_record["id"]
-            return evolved_component
-        
+            specification = json.loads(spec_response)
+            return specification
         except json.JSONDecodeError:
-            # If parsing fails, create a structured representation
+            # If parsing fails, return a structured approximation
             return {
                 "name": component_name,
-                "record_type": component_type,
-                "domain": parent_record.get("domain", "general"),
-                "description": component_purpose,
-                "code_snippet": evolution_response,
-                "version": self._increment_version(parent_record.get("version", "1.0.0")),
-                "parent_id": parent_record["id"],
-                "changes": evolution_changes,
-                "error": "Failed to parse as JSON, using raw response"
+                "type": component_type,
+                "purpose": component_purpose,
+                "action": component_action,
+                "description": "Failed to parse specification as JSON",
+                "raw_specification": spec_response
             }
+
+
+class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
+    """Tool for generating a YAML workflow from the solution design."""
     
-    async def _generate_new_component(self, component_spec: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate code for a new component from scratch."""
-        component_name = component_spec.get("name", "")
-        component_type = component_spec.get("type", "AGENT")
-        component_purpose = component_spec.get("purpose", "")
-        capabilities = component_spec.get("capabilities", [])
-        
-        # Determine template type based on component type
-        template_type = "agent" if component_type == "AGENT" else "tool"
-        
-        # Prompt the LLM to create the component
-        creation_prompt = f"""
-        Create a new {component_type.lower()} from scratch:
-
-        COMPONENT DETAILS:
-        Name: {component_name}
-        Type: {component_type}
-        Purpose: {component_purpose}
-        Required Capabilities: {', '.join(capabilities) if isinstance(capabilities, list) else str(capabilities)}
-
-        Generate a complete implementation for this component using the BeeAI framework.
-        
-        If creating an AGENT, the code should define a class that:
-        - Provides a create_agent static method that returns a ReActAgent
-        - Properly configures the agent with tools and metadata
-        
-        If creating a TOOL, the code should define a class that:
-        - Extends the Tool class from BeeAI
-        - Implements the _run method
-        - Defines appropriate input schema
-
-        Return the component as a JSON object with these fields:
-        - name: The component name
-        - record_type: "AGENT" or "TOOL"
-        - domain: The component domain
-        - description: Detailed description of the component
-        - code_snippet: The complete code for the component
-        - version: Initial version (1.0.0)
-        """
-        
-        # Generate new component
-        creation_response = await self.llm.generate(creation_prompt)
-        
-        try:
-            # Parse the JSON response
-            new_component = json.loads(creation_response)
-            return new_component
-        
-        except json.JSONDecodeError:
-            # If parsing fails, create a structured representation
-            domain = "general"
-            if isinstance(capabilities, list):
-                for capability in capabilities:
-                    if "finance" in str(capability).lower():
-                        domain = "finance"
-                    elif "medical" in str(capability).lower() or "health" in str(capability).lower():
-                        domain = "medical"
-                    elif "document" in str(capability).lower():
-                        domain = "document_processing"
-            
-            return {
-                "name": component_name,
-                "record_type": component_type,
-                "domain": domain,
-                "description": component_purpose,
-                "code_snippet": creation_response,
-                "version": "1.0.0",
-                "error": "Failed to parse as JSON, using raw response"
-            }
-    
-    def _increment_version(self, version: str) -> str:
-        """Increment the patch version number."""
-        parts = version.split(".")
-        if len(parts) < 3:
-            parts += ["0"] * (3 - len(parts))
-            
-        # Increment patch version
-        try:
-            patch = int(parts[2]) + 1
-            return f"{parts[0]}.{parts[1]}.{patch}"
-        except (ValueError, IndexError):
-            # If version format is invalid, just append .1
-            return f"{version}.1"
-
-
-class CreateWorkflowTool(Tool[CreateWorkflowInput, None, StringToolOutput]):
-    """Tool for creating a YAML workflow from the workflow design."""
-    
-    name = "CreateWorkflowTool"
-    description = "Create a complete YAML workflow based on the workflow design and library entries"
-    input_schema = CreateWorkflowInput
+    name = "GenerateWorkflowTool"
+    description = "Generate a YAML workflow from the solution design that can be executed by the System Agent"
+    input_schema = GenerateWorkflowInput
     
     def __init__(self, workflow_generator: WorkflowGenerator):
         super().__init__()
@@ -699,103 +640,92 @@ class CreateWorkflowTool(Tool[CreateWorkflowInput, None, StringToolOutput]):
     
     async def _run(
         self, 
-        input: CreateWorkflowInput, 
+        input: GenerateWorkflowInput, 
         options: Optional[Dict[str, Any]] = None, 
         context: Optional[RunContext] = None
     ) -> StringToolOutput:
         """
-        Create a YAML workflow from the workflow design and library entries.
+        Generate a YAML workflow from the solution design.
         
         Args:
-            input: Dict containing workflow_design and library_entries
+            input: Solution design and optional parameters
             
         Returns:
-            Complete YAML workflow ready for execution
+            Generated YAML workflow
         """
-        # Generate the workflow YAML
-        yaml_workflow = await self.workflow_generator.generate_workflow_from_design(
-            input.workflow_design, 
-            input.library_entries
-        )
+        workflow_name = input.workflow_name or "generated_workflow"
+        solution_overview = input.solution_design.get("overview", "")
         
+        # Extract workflow sequence from the solution design
+        workflow_sequence = input.solution_design.get("workflow", [])
+        components = input.solution_design.get("components", [])
+        
+        # Generate the YAML workflow
+        yaml_prompt = f"""
+        Convert this solution design to a YAML workflow representation:
+
+        WORKFLOW NAME: {workflow_name}
+        
+        OVERVIEW:
+        {solution_overview}
+
+        COMPONENTS:
+        {json.dumps(components, indent=2)}
+
+        WORKFLOW SEQUENCE:
+        {json.dumps(workflow_sequence, indent=2)}
+
+        CREATE a YAML workflow that follows this structure:
+        ```yaml
+        scenario_name: "{workflow_name}"
+        domain: "[domain from the solution design]"
+        description: "[brief description from the solution design]"
+
+        steps:
+          - type: "[CREATE/EXECUTE/DEFINE]"
+            item_type: "[AGENT/TOOL]"
+            name: "[component name]"
+            [additional parameters as needed]
+            
+          # Add steps for each component and workflow sequence item
+          # Include component creation before component execution
+        ```
+
+        The workflow should:
+        1. Create any new components needed
+        2. Execute the components in the correct sequence
+        3. Pass data between components as needed
+        4. Include any required DEFINE steps for parameters
+        5. {f"Include explanatory comments" if input.include_comments else "Minimize comments"}
+
+        Return only the YAML content.
+        """
+        
+        # Generate the YAML workflow content
+        yaml_workflow = await self.workflow_generator.llm.generate(yaml_prompt)
+        
+        # Extract YAML content if wrapped in code blocks
+        if "```yaml" in yaml_workflow and "```" in yaml_workflow:
+            yaml_content = yaml_workflow.split("```yaml")[1].split("```")[0].strip()
+        elif "```" in yaml_workflow:
+            yaml_content = yaml_workflow.split("```")[1].strip()
+        else:
+            yaml_content = yaml_workflow.strip()
+        
+        # Format the result
         result = {
             "status": "success",
-            "yaml_workflow": yaml_workflow,
-            "message": "YAML workflow created successfully"
+            "workflow_name": workflow_name,
+            "yaml_workflow": yaml_content,
+            "execution_guidance": [
+                "This workflow can be executed using the System Agent's workflow processor",
+                "Review and adjust the workflow before execution if needed",
+                "Make sure all required components exist in the library",
+                "You can execute this workflow using the System Agent's process_workflow method"
+            ]
         }
         
         return StringToolOutput(json.dumps(result, indent=2))
-
-
-class ExecuteWorkflowTool(Tool[ExecuteWorkflowInput, None, StringToolOutput]):
-    """Tool for executing a workflow using the system agent."""
-    
-    name = "ExecuteWorkflowTool"
-    description = "Execute a YAML workflow using the system agent"
-    input_schema = ExecuteWorkflowInput
-    
-    def __init__(self, system_agent: ReActAgent):
-        super().__init__()
-        self.system_agent = system_agent
-    
-    def _create_emitter(self) -> Emitter:
-        return Emitter.root().child(
-            namespace=["tool", "architect", "execute"],
-            creator=self,
-        )
-    
-    async def _run(
-        self, 
-        input: ExecuteWorkflowInput, 
-        options: Optional[Dict[str, Any]] = None, 
-        context: Optional[RunContext] = None
-    ) -> StringToolOutput:
-        """
-        Execute a workflow using the system agent.
-        
-        Args:
-            input: Dict containing yaml_workflow and optional execution_params
-            
-        Returns:
-            Workflow execution results
-        """
-        try:
-            # Check for process_workflow method (which is more likely to exist)
-            if hasattr(self.system_agent.workflow_processor, "process_workflow"):
-                # Execute the workflow
-                result = await self.system_agent.workflow_processor.process_workflow(
-                    yaml_content=input.yaml_workflow,
-                    params=input.execution_params
-                )
-            # Alternative method names that might exist
-            elif hasattr(self.system_agent.workflow_processor, "execute_workflow"):
-                result = await self.system_agent.workflow_processor.execute_workflow(
-                    input.yaml_workflow,
-                    input.execution_params
-                )
-            else:
-                # If neither method exists, return an error
-                return StringToolOutput(json.dumps({
-                    "status": "error",
-                    "message": "Workflow processor does not have a suitable execution method",
-                    "available_methods": str(dir(self.system_agent.workflow_processor))
-                }, indent=2))
-            
-            response = {
-                "status": "success" if result.get("status") != "error" else "error",
-                "execution_results": result,
-                "message": "Workflow executed successfully" if result.get("status") != "error" else f"Workflow execution failed: {result.get('message')}"
-            }
-            
-            return StringToolOutput(json.dumps(response, indent=2))
-            
-        except Exception as e:
-            import traceback
-            return StringToolOutput(json.dumps({
-                "status": "error",
-                "message": f"Error executing workflow: {str(e)}",
-                "traceback": traceback.format_exc()
-            }, indent=2))
 
 
 # Main function to create the Architect-Zero agent
@@ -803,7 +733,6 @@ async def create_architect_zero(
     llm_service: Optional[LLMService] = None,
     smart_library: Optional[SmartLibrary] = None,
     agent_bus: Optional[SmartAgentBus] = None,
-    system_agent_factory: Optional[callable] = None,
     container: Optional[DependencyContainer] = None
 ) -> ReActAgent:
     """
@@ -813,7 +742,6 @@ async def create_architect_zero(
         llm_service: LLM service for text generation
         smart_library: Smart library for component management
         agent_bus: Agent bus for component communication
-        system_agent_factory: Optional factory function for creating the system agent
         container: Optional dependency container for managing component dependencies
         
     Returns:
@@ -823,6 +751,5 @@ async def create_architect_zero(
         llm_service=llm_service,
         smart_library=smart_library,
         agent_bus=agent_bus,
-        system_agent_factory=system_agent_factory,
         container=container
     )

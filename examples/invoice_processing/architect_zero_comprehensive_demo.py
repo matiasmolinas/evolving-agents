@@ -1,10 +1,10 @@
-# examples/invoice_processing/architect_zero_comprehensive_demo.py
+# examples/invoice_processing/architect_zero_system_demo.py
 
 import asyncio
 import logging
 import json
 import os
-import re
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
 from evolving_agents.core.llm_service import LLMService
@@ -55,20 +55,24 @@ def clean_previous_files():
     """Remove previous files to start fresh."""
     files_to_remove = [
         "smart_library.json",
-        "agent_registry.json",
-        "architect_interaction.txt",
+        "smart_agent_bus.json",
+        "agent_bus_logs.json",
+        ".llm_cache",  # Clear the cache to avoid empty responses
+        "architect_design.json",
         "invoice_workflow.yaml",
-        "workflow_execution_result.json",
-        "detailed_invoice_analysis.txt",
-        "direct_invoice_analysis.txt",
-        "invoice_processor_id.txt"
+        "sample_invoice.txt",
+        "workflow_output.json"
     ]
     
     for file_path in files_to_remove:
         if os.path.exists(file_path):
             try:
-                os.remove(file_path)
-                logger.info(f"Removed previous file: {file_path}")
+                if os.path.isdir(file_path):
+                    import shutil
+                    shutil.rmtree(file_path)
+                else:
+                    os.remove(file_path)
+                logger.info(f"Removed previous file/directory: {file_path}")
             except Exception as e:
                 logger.warning(f"Failed to remove {file_path}: {str(e)}")
 
@@ -224,41 +228,53 @@ async def main():
     # Clean up previous files
     clean_previous_files()
     
+    # Save sample invoice to a file for reference
+    with open("sample_invoice.txt", "w") as f:
+        f.write(SAMPLE_INVOICE)
+    
     # First, set up some initial components in the smart library
     await setup_library()
     
-    # Create a dependency container to manage component dependencies
+    # Create dependency container to manage component dependencies
     container = DependencyContainer()
     
-    # Initialize core components
+    # Step 1: Set up core services
     llm_service = LLMService(provider="openai", model="gpt-4o")
     container.register('llm_service', llm_service)
     
     smart_library = SmartLibrary("smart_library.json", container=container)
     container.register('smart_library', smart_library)
     
-    # Create firmware
+    # Create firmware for component creation
     from evolving_agents.firmware.firmware import Firmware
     firmware = Firmware()
     container.register('firmware', firmware)
     
-    # Create agent bus with null system agent
+    # Step 2: Create agent bus
     agent_bus = SmartAgentBus(
-        storage_path="agent_registry.json", 
+        storage_path="smart_agent_bus.json",
         log_path="agent_bus_logs.json",
+        smart_library=smart_library,
+        llm_service=llm_service,
         container=container
     )
     container.register('agent_bus', agent_bus)
     
-    # Create system agent
+    # Step 3: Create the system agent
     system_agent = await SystemAgentFactory.create_agent(container=container)
     container.register('system_agent', system_agent)
     
-    # Initialize components
+    # Initialize components (but don't try to initialize from library yet)
     await smart_library.initialize()
-    await agent_bus.initialize_from_library()
     
-    # Create the Architect-Zero agent using the container
+    # Wait until library is initialized before setting up the agent bus
+    agent_bus.system_agent = system_agent
+    
+    # At this point, library exists and agent bus is connected to system agent
+    # Let's manually create some agents from the library instead of using initialize_from_library
+    await initialize_agents_manually(agent_bus, smart_library)
+    
+    # Step 4: Create the architect agent using the standard function
     architect_agent = await create_architect_zero(container=container)
     
     # Define invoice processing task requirements
@@ -273,395 +289,403 @@ async def main():
     
     The system should leverage existing components from the library when possible,
     evolve them where improvements are needed, and create new components for missing functionality.
-    
-    Please generate a complete workflow for this invoice processing system.
     """
     
     # Print the task
     logger.info("=== TASK REQUIREMENTS ===")
     logger.info(task_requirement)
     
-    # Run the architect agent to design the system
-    logger.info("\n=== RUNNING ARCHITECT-ZERO AGENT ===")
     try:
-        # Execute the architect agent as a ReAct agent
-        result = await architect_agent.run(task_requirement)
+        # Step 5: Run the Architect agent with the task
+        logger.info("\n=== RUNNING ARCHITECT AGENT ===")
+        architect_result = await architect_agent.run(task_requirement)
         
-        # Save the full agent interaction
-        with open("architect_interaction.txt", "w") as f:
-            f.write(f"TASK REQUIREMENT:\n{task_requirement}\n\n")
-            f.write(f"AGENT THOUGHT PROCESS:\n{result.result.text}")
-        
-        logger.info("Architect-Zero completed successfully - see 'architect_interaction.txt' for full output")
-        
-        # Extract workflow from the result
-        yaml_content = extract_yaml_workflow(result.result.text)
-        if yaml_content:
-            # Save the workflow to a file
-            with open("invoice_workflow.yaml", "w") as f:
-                f.write(yaml_content)
+        # Save the architect's design
+        design_output = architect_result.result.text if hasattr(architect_result, 'result') else str(architect_result)
+        with open("architect_design.json", "w") as f:
+            f.write(design_output)
             
-            logger.info("Generated workflow saved to invoice_workflow.yaml")
+        logger.info("Architect design saved to architect_design.json")
+        
+        # Step 6: Extract and save the workflow YAML if it exists in the result
+        yaml_workflow = None
+        
+        # Try to find a YAML workflow in the result
+        if "```yaml" in design_output and "```" in design_output:
+            yaml_sections = design_output.split("```yaml")
+            for section in yaml_sections[1:]:
+                if "```" in section:
+                    yaml_workflow = section.split("```")[0].strip()
+                    break
+        
+        # If we found a YAML workflow, save it
+        if yaml_workflow:
+            with open("invoice_workflow.yaml", "w") as f:
+                f.write(yaml_workflow)
+                
+            logger.info("Workflow YAML extracted and saved to invoice_workflow.yaml")
         else:
-            logger.warning("No YAML workflow found in the result")
-            # Ask the LLM to generate one based on the response
-            yaml_workflow = await generate_workflow_from_response(llm_service, result.result.text)
-            if yaml_workflow:
-                with open("invoice_workflow.yaml", "w") as f:
-                    f.write(yaml_workflow)
-                logger.info("Generated workflow saved to invoice_workflow.yaml")
+            # Create a manual workflow if no valid YAML found
+            logger.info("No valid YAML workflow found in the architect's output. Creating a manual workflow.")
+            yaml_workflow = create_manual_workflow()
+            
+            with open("invoice_workflow_manual.yaml", "w") as f:
+                f.write(yaml_workflow)
+                
+            logger.info("Manual workflow saved to invoice_workflow_manual.yaml")
         
-        # Try to execute the workflow with sample invoice data
-        logger.info("\n=== EXECUTING GENERATED WORKFLOW ===")
-        execution_result = None
-        try:
-            # If we have a workflow, try to execute it
-            if os.path.exists("invoice_workflow.yaml"):
-                with open("invoice_workflow.yaml", "r") as f:
-                    yaml_content = f.read()
+        # Step 7: Execute the workflow with the system agent
+        if yaml_workflow and system_agent:
+            logger.info("\n=== EXECUTING WORKFLOW ===")
+            logger.info("Executing the workflow using the System Agent...")
+            
+            execution_result = await system_agent.workflow_processor.process_workflow(
+                yaml_workflow,  # As positional argument 
+                params={"invoice_text": SAMPLE_INVOICE}
+            )
+            
+            # Save the execution result
+            with open("workflow_output.json", "w") as f:
+                json.dump(execution_result, f, indent=2)
                 
-                # Replace placeholder with actual invoice
-                yaml_content = yaml_content.replace("dummy", SAMPLE_INVOICE)
-                yaml_content = yaml_content.replace("{invoice_text}", SAMPLE_INVOICE)
-                
-                # Use the workflow processor to execute it
-                # Check available methods on workflow processor
-                processor_methods = dir(system_agent.workflow_processor)
-                logger.info(f"Available workflow processor methods: {[m for m in processor_methods if not m.startswith('_')]}")
-                
-                # Inspect the process_workflow method signature
-                if hasattr(system_agent.workflow_processor, "process_workflow"):
-                    import inspect
-                    sig = inspect.signature(system_agent.workflow_processor.process_workflow)
-                    logger.info(f"process_workflow method signature: {sig}")
-                    
-                    # Execute the workflow with the only parameter it accepts
-                    execution_result = await system_agent.workflow_processor.process_workflow(yaml_content)
-                    
-                    logger.info(f"Workflow execution result: {json.dumps(execution_result, indent=2)}")
-                    
-                    # Save execution result
-                    with open("workflow_execution_result.json", "w") as f:
-                        json.dump(execution_result, f, indent=2)
-                    
-                    logger.info("Workflow execution result saved to workflow_execution_result.json")
+            logger.info("Workflow execution completed. Result saved to workflow_output.json")
+            
+            # Display the execution result
+            if "result" in execution_result:
+                logger.info("\n=== EXECUTION RESULTS ===")
+                result = execution_result["result"]
+                if isinstance(result, dict):
+                    if "summary" in result:
+                        logger.info(f"Summary: {result['summary']}")
+                    else:
+                        logger.info(f"Result: {json.dumps(result, indent=2)}")
                 else:
-                    logger.warning("Workflow processor doesn't have process_workflow method - skipping execution")
-                    
-                    # Try alternative methods
-                    if hasattr(system_agent.workflow_processor, "execute_workflow"):
-                        execution_result = await system_agent.workflow_processor.execute_workflow(yaml_content)
-                        logger.info(f"Workflow execution result: {json.dumps(execution_result, indent=2)}")
-            else:
-                logger.warning("No workflow file found - skipping execution")
-                
-        except Exception as e:
-            logger.error(f"Error executing workflow: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+                    logger.info(f"Result: {result}")
         
-        # Extract and display the actual processed invoice data if available
-        try:
-            if execution_result and "status" in execution_result and execution_result["status"] == "success":
-                logger.info("\n=== INVOICE PROCESSING RESULTS ===")
-                
-                # Try to find any invoice processor agent
-                processor_candidates = []
-                for record in smart_library.records:
-                    if record["record_type"] == "AGENT" and "invoice" in record["name"].lower():
-                        processor_candidates.append(record)
-                        
-                if processor_candidates:
-                    # Sort by creation date (newest first)
-                    processor_candidates.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-                    processor_agent_record = processor_candidates[0]
-                    
-                    # Save the agent ID for potential reuse
-                    with open("invoice_processor_id.txt", "w") as f:
-                        f.write(processor_agent_record["id"])
-                    
-                    logger.info(f"\n=== RUNNING {processor_agent_record['name']} DIRECTLY ===")
-                    
-                    try:
-                        # Create the processor agent
-                        from evolving_agents.agents.agent_factory import AgentFactory
-                        agent_factory = AgentFactory(smart_library, llm_service, None)
-                        
-                        processor_agent = await agent_factory.create_agent(processor_agent_record)
-                        
-                        # Check if the agent was created successfully
-                        if processor_agent:
-                            # The agent is created as a ReActAgent, so we need to use the run method directly
-                            if hasattr(processor_agent, "run"):
-                                try:
-                                    # Use the run method directly
-                                    prompt = f"Please process this invoice and provide a detailed analysis with extracted data, verification results, and a structured summary:\n\n{SAMPLE_INVOICE}"
-                                    run_result = await processor_agent.run(prompt=prompt)
-                                    
-                                    # Extract the result
-                                    if hasattr(run_result, "result") and hasattr(run_result.result, "text"):
-                                        result_text = run_result.result.text
-                                        logger.info("Direct execution result:")
-                                        logger.info(result_text)
-                                        
-                                        # Save detailed result
-                                        with open("detailed_invoice_analysis.txt", "w") as f:
-                                            f.write(result_text)
-                                        
-                                        logger.info("Detailed invoice analysis saved to detailed_invoice_analysis.txt")
-                                    else:
-                                        logger.error(f"Unexpected result structure: {run_result}")
-                                except Exception as e:
-                                    logger.error(f"Error running agent directly: {str(e)}")
-                                    import traceback
-                                    logger.error(traceback.format_exc())
-                            else:
-                                logger.error(f"Agent doesn't have 'run' method: {type(processor_agent)}")
-                        else:
-                            logger.error("Failed to create processor agent")
-                            
-                    except Exception as e:
-                        logger.error(f"Error executing agent directly: {str(e)}")
-                        import traceback
-                        logger.error(traceback.format_exc())
-                else:
-                    # If no invoice processor found, log this
-                    logger.warning("No invoice processor agent found in library")
-                
-                # Generate a final invoice analysis using the LLM directly regardless of what happened above
-                logger.info("\n=== GENERATING INVOICE ANALYSIS DIRECTLY ===")
-                analysis_prompt = f"""
-                Analyze this invoice and provide a detailed breakdown:
-                
-                {SAMPLE_INVOICE}
-                
-                Please provide:
-                1. Extracted key information (invoice #, date, vendor, etc.)
-                2. Line items with quantities and amounts
-                3. Verification of calculations (subtotal + tax = total)
-                4. Any potential errors or inconsistencies
-                5. A structured summary with insights
-                
-                Format your response as a clear, structured analysis.
-                """
-                
-                direct_analysis = await llm_service.generate(analysis_prompt)
-                
-                # Save direct analysis
-                with open("direct_invoice_analysis.txt", "w") as f:
-                    f.write(direct_analysis)
-                    
-                logger.info("Generated direct invoice analysis and saved to direct_invoice_analysis.txt")
-        except Exception as e:
-            logger.error(f"Error getting detailed invoice results: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-    
     except Exception as e:
-        logger.error(f"Error running Architect-Zero: {str(e)}")
+        logger.error(f"Error in architect process: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
 
-def extract_yaml_workflow(text):
-    """Extract YAML workflow from the agent's response."""
-    # Try to extract code between ```yaml and ``` markers
-    yaml_match = re.search(r'```yaml\s*\n(.*?)\n\s*```', text, re.DOTALL)
-    if yaml_match:
-        yaml_content = yaml_match.group(1).strip()
-    else:
-        # Try with different syntax
-        yaml_match2 = re.search(r'```\s*\n(scenario_name:.*?)\n\s*```', text, re.DOTALL)
-        if yaml_match2:
-            yaml_content = yaml_match2.group(1).strip()
-        else:
-            # Try to extract code between yaml: and any other markdown section
-            yaml_section_match = re.search(r'yaml_workflow["\']?:\s*["\']?(.*?)(?:(?=["\']?,\s*["\']?\w+["\']?:)|$)', 
-                                         text, re.DOTALL)
-            if yaml_section_match:
-                content = yaml_section_match.group(1).strip()
-                # Remove any trailing quotes
-                if content.endswith('"') or content.endswith("'"):
-                    content = content[:-1]
-                # Remove any leading quotes
-                if content.startswith('"') or content.startswith("'"):
-                    content = content[1:]
-                yaml_content = content
-            else:
-                # More fallbacks...
-                yaml_section = None
-                if "YAML Workflow:" in text:
-                    parts = text.split("YAML Workflow:")
-                    if len(parts) > 1:
-                        yaml_section = parts[1].strip()
-                        # Find where it ends (next heading or end of text)
-                        heading_match = re.search(r'\n#', yaml_section)
-                        if heading_match:
-                            yaml_section = yaml_section[:heading_match.start()].strip()
-                
-                if yaml_section and yaml_section.strip().startswith('scenario_name:'):
-                    yaml_content = yaml_section
-                else:
-                    # Look for YAML content without a specific header
-                    lines = text.split('\n')
-                    yaml_lines = []
-                    collecting = False
-                    
-                    for line in lines:
-                        if not collecting and line.strip().startswith('scenario_name:'):
-                            collecting = True
-                            yaml_lines.append(line)
-                        elif collecting:
-                            if line.strip().startswith('#') or line.strip().startswith('```'):
-                                break
-                            yaml_lines.append(line)
-                    
-                    if yaml_lines:
-                        yaml_content = '\n'.join(yaml_lines)
-                    else:
-                        return None
+async def initialize_agents_manually(agent_bus, smart_library):
+    """Manually register agents from the library to avoid issues."""
+    logger.info("Initializing agents manually from library")
     
-    # Check if the YAML includes an EXECUTE step with user_input
-    if "user_input:" in yaml_content and not "INVOICE #" in yaml_content:
-        # Replace the user_input with our sample invoice
-        lines = yaml_content.split('\n')
-        for i, line in enumerate(lines):
-            if "user_input:" in line:
-                # Indent level
-                indent = line[:line.index("user_input:")]
-                # Replace this line and add the sample invoice
-                lines[i] = f"{indent}user_input: |\n"
-                for invoice_line in SAMPLE_INVOICE.strip().split('\n'):
-                    lines.insert(i+1, f"{indent}  {invoice_line}")
-                break
+    for record in smart_library.records:
+        if record.get("status") != "active":
+            continue
+            
+        # Skip if already registered
+        agent_name = record["name"]
+        if any(a.get("name") == agent_name for a in agent_bus.agents.values()):
+            continue
         
-        yaml_content = '\n'.join(lines)
-    
-    return yaml_content
+        # Create capabilities - make sure we don't use any non-serializable objects
+        capabilities = []
+        
+        # Ensure each capability is a proper dictionary
+        if "metadata" in record and "capabilities" in record["metadata"]:
+            raw_capabilities = record["metadata"]["capabilities"]
+            # Convert any non-dict capabilities to dicts
+            for cap in raw_capabilities:
+                if isinstance(cap, dict):
+                    capabilities.append(cap)
+                elif isinstance(cap, str):
+                    capabilities.append({
+                        "id": cap.lower().replace(" ", "_"),
+                        "name": cap,
+                        "description": f"Ability to {cap.lower()}",
+                        "confidence": 0.8
+                    })
+                # Skip any non-string, non-dict capabilities
+        
+        # If no capabilities found, create a default one
+        if not capabilities:
+            capabilities = [{
+                "id": f"{agent_name.lower().replace(' ', '_')}_default",
+                "name": agent_name,
+                "description": record.get("description", ""),
+                "confidence": 0.8
+            }]
+        
+        # Ensure we only have serializable metadata
+        metadata = {"source": "SmartLibrary"}
+        if "metadata" in record:
+            # Copy only serializable fields from record metadata
+            for key, value in record["metadata"].items():
+                if key != "capabilities" and isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                    metadata[key] = value
+        
+        try:
+            # Register the agent
+            await agent_bus.register_agent(
+                name=agent_name,
+                description=record.get("description", ""),
+                capabilities=capabilities,
+                agent_type=record.get("record_type", "GENERIC"),
+                metadata=metadata
+            )
+            logger.info(f"Registered agent from library: {agent_name}")
+        except Exception as e:
+            logger.error(f"Error registering agent {agent_name}: {str(e)}")
 
-async def generate_workflow_from_response(llm_service, full_text):
-    """Use the LLM to extract or generate a YAML workflow from the response."""
-    prompt = f"""
-    Create a complete YAML workflow for an advanced invoice processing system.
-    
-    The workflow MUST include:
-    1. A definition for an "AdvancedInvoiceProcessor" agent as the main orchestrator
-    2. Definitions for specialized component agents (not tools) for different invoice processing tasks
-    3. Creation steps for all defined components
-    4. Execution of the AdvancedInvoiceProcessor agent with the sample invoice
-    
-    REQUIRED COMPONENTS:
-    - AdvancedInvoiceProcessor (AGENT - main orchestrator)
-    - DocumentAnalyzer (AGENT)
-    - DataExtractor (AGENT)
-    - CalculationVerifier (AGENT)
-    - SummaryGenerator (AGENT)
-    - ErrorDetector (AGENT)
-    
-    SAMPLE INVOICE:
-    {SAMPLE_INVOICE}
+def create_manual_workflow():
+    """Create a manual workflow in case the architect doesn't generate a valid one."""
+    return """scenario_name: Advanced Invoice Processing System
+domain: document_processing
+description: A comprehensive system for processing invoices with verification and summarization
 
-    YAML FORMAT:
-    ```yaml
-    scenario_name: Advanced Invoice Processing System
-    domain: document_processing
-    description: A system to process invoice documents with advanced capabilities
+steps:
+  # Define our advanced document analyzer
+  - type: "DEFINE"
+    item_type: "TOOL"
+    name: "AdvancedDocumentAnalyzer"
+    description: "A sophisticated tool for detecting invoice documents with high confidence"
+    code_snippet: |
+      from typing import Dict, Any
+      from pydantic import BaseModel, Field
+      import re
 
-    steps:
-      # Define the AdvancedInvoiceProcessor orchestrator agent (REQUIRED)
-      - type: "DEFINE"
-        item_type: "AGENT"
-        name: "AdvancedInvoiceProcessor"
-        description: "Main agent that orchestrates the invoice processing workflow"
-        code_snippet: |
-          from typing import List, Dict, Any, Optional
-          import re
+      from beeai_framework.context import RunContext
+      from beeai_framework.emitter.emitter import Emitter
+      from beeai_framework.tools.tool import StringToolOutput, Tool, ToolRunOptions
 
-          from beeai_framework.agents.react import ReActAgent
-          from beeai_framework.agents.types import AgentMeta
-          from beeai_framework.memory import TokenMemory
-          from beeai_framework.backend.chat import ChatModel
-          from beeai_framework.tools.tool import Tool
+      class DocumentAnalyzerInput(BaseModel):
+          text: str = Field(description="Document text to analyze")
 
-          class AdvancedInvoiceProcessorInitializer:
-              \"\"\"
-              Advanced invoice processor that orchestrates specialized components
-              to analyze, extract, verify, and summarize invoice information.
-              \"\"\"
+      class AdvancedDocumentAnalyzer(Tool[DocumentAnalyzerInput, ToolRunOptions, StringToolOutput]):
+          \"\"\"A sophisticated tool for detecting document types with high confidence.\"\"\"
+          name = "AdvancedDocumentAnalyzer"
+          description = "Analyzes document content using multiple heuristics for higher confidence"
+          input_schema = DocumentAnalyzerInput
+
+          def _create_emitter(self) -> Emitter:
+              return Emitter.root().child(
+                  namespace=["tool", "document", "analyzer", "advanced"],
+                  creator=self,
+              )
+          
+          async def _run(self, input: DocumentAnalyzerInput, options: ToolRunOptions | None, context: RunContext) -> StringToolOutput:
+              \"\"\"Analyze document text to determine its type with high confidence.\"\"\"
+              doc_text = input.text.lower()
               
-              @staticmethod
-              def create_agent(llm: ChatModel, tools: Optional[List[Tool]] = None) -> ReActAgent:
-                  \"\"\"Create and configure the invoice processor agent.\"\"\"
-                  # Use empty tools list if none provided
-                  if tools is None:
-                      tools = []
+              # Multiple detection features
+              features = {
+                  "invoice_keywords": ["invoice", "bill", "statement"],
+                  "date_patterns": len(re.findall(r'date:|due date:', doc_text, re.IGNORECASE)),
+                  "monetary_values": len(re.findall(r'\\$\\d+\\.\\d{2}', doc_text)),
+                  "total_indicators": len(re.findall(r'total|subtotal|amount due|balance', doc_text, re.IGNORECASE)),
+                  "invoice_number": 1 if re.search(r'invoice #|invoice no|invoice number', doc_text, re.IGNORECASE) else 0,
+                  "vendor_info": 1 if re.search(r'vendor|from|seller', doc_text, re.IGNORECASE) else 0,
+                  "line_items": len(re.findall(r'\\d+\\..*?\\$\\d+|\\d+\\s+x\\s+', doc_text))
+              }
+              
+              # Calculate confidence for invoice detection
+              invoice_indicators = 0
+              for keyword in features["invoice_keywords"]:
+                  if keyword in doc_text:
+                      invoice_indicators += 1
                       
-                  # Define agent metadata
-                  meta = AgentMeta(
-                      name="AdvancedInvoiceProcessor",
-                      description=(
-                          "I am an advanced invoice processing agent that orchestrates specialized components "
-                          "to analyze, extract, verify, and summarize invoice information."
-                      ),
-                      tools=tools
+              # Sophisticated confidence calculation
+              invoice_confidence = 0.0
+              if invoice_indicators > 0:
+                  base_confidence = 0.5 + (invoice_indicators * 0.1)  # 0.6-0.8 based on keywords
+                  feature_score = (
+                      min(features["date_patterns"], 2) * 0.05 +
+                      min(features["monetary_values"], 5) * 0.02 +
+                      min(features["total_indicators"], 3) * 0.05 +
+                      features["invoice_number"] * 0.1 +
+                      features["vendor_info"] * 0.05 +
+                      min(features["line_items"], 3) * 0.03
                   )
-                  
-                  # Create the agent
-                  agent = ReActAgent(
-                      llm=llm,
-                      tools=tools,
-                      memory=TokenMemory(llm),
-                      meta=meta
-                  )
-                  
-                  return agent
-          
-      # Define other component agents
-      - type: "DEFINE"
-        item_type: "AGENT"
-        name: "DocumentAnalyzer"
-        description: "Agent that analyzes document structure and identifies invoice types"
-        code_snippet: |
-          # Agent implementation code
-          
-      # ... other component definitions
-      
-      # Create all agents (REQUIRED)
-      - type: "CREATE"
-        item_type: "AGENT"
-        name: "AdvancedInvoiceProcessor"
-      
-      # ... other agent creations
-      
-      # Execute the AdvancedInvoiceProcessor (REQUIRED)
-      - type: "EXECUTE"
-        item_type: "AGENT"
-        name: "AdvancedInvoiceProcessor"
-        user_input: |
-          Process this invoice:
-          
-          {SAMPLE_INVOICE}
-    ```
+                  invoice_confidence = min(0.95, base_confidence + feature_score)
+              
+              # Determine document type
+              doc_type = "unknown"
+              if invoice_confidence > 0.7:
+                  doc_type = "invoice"
+              elif "receipt" in doc_text and invoice_confidence > 0.4:
+                  doc_type = "receipt"
+                  invoice_confidence = min(0.9, invoice_confidence + 0.1)
+              
+              result = {
+                  "type": doc_type,
+                  "confidence": round(invoice_confidence, 2),
+                  "features": features
+              }
+              
+              import json
+              return StringToolOutput(json.dumps(result, indent=2))
 
-    Return only the YAML workflow without explanation.
-    """
+  # Define an advanced invoice processor 
+  - type: "DEFINE"
+    item_type: "AGENT"
+    name: "AdvancedInvoiceProcessor"
+    description: "An advanced agent that processes invoices with comprehensive information extraction and verification"
+    code_snippet: |
+      from typing import List, Dict, Any, Optional
+      import re
+      import json
+
+      from beeai_framework.agents.react import ReActAgent
+      from beeai_framework.agents.types import AgentMeta
+      from beeai_framework.memory import TokenMemory
+      from beeai_framework.backend.chat import ChatModel
+      from beeai_framework.tools.tool import Tool
+
+      class AdvancedInvoiceProcessorInitializer:
+          \"\"\"
+          Advanced invoice processing agent that extracts comprehensive information,
+          verifies calculations, and generates structured insights.
+          \"\"\"
+          
+          @staticmethod
+          def create_agent(llm: ChatModel, tools: Optional[List[Tool]] = None) -> ReActAgent:
+              \"\"\"Create and configure the advanced invoice processor agent.\"\"\"
+              if tools is None:
+                  tools = []
+                  
+              meta = AgentMeta(
+                  name="AdvancedInvoiceProcessor",
+                  description=(
+                      "I am an advanced invoice processing agent that extracts comprehensive information, "
+                      "verifies calculations, and generates insights."
+                  ),
+                  tools=tools
+              )
+              
+              agent = ReActAgent(
+                  llm=llm,
+                  tools=tools,
+                  memory=TokenMemory(llm),
+                  meta=meta
+              )
+              
+              return agent
+          
+          @staticmethod
+          async def process_invoice(invoice_text: str) -> Dict[str, Any]:
+              \"\"\"
+              Process an invoice to extract comprehensive information.
+              
+              Args:
+                  invoice_text: The text of the invoice to process
+                  
+              Returns:
+                  Extracted invoice information with verification
+              \"\"\"
+              # Extract core information
+              invoice_num_match = re.search(r'INVOICE\\s*#?([\\w-]+)', invoice_text, re.IGNORECASE)
+              invoice_num = invoice_num_match.group(1) if invoice_num_match else "Unknown"
+              
+              date_match = re.search(r'Date:?\\s*([\\w\\d/-]+)', invoice_text, re.IGNORECASE)
+              date = date_match.group(1).strip() if date_match else "Unknown"
+              
+              vendor_match = re.search(r'Vendor:?\\s*([^\\n]+)', invoice_text, re.IGNORECASE)
+              vendor = vendor_match.group(1).strip() if vendor_match else "Unknown"
+              
+              # Extract billing information
+              bill_to_match = re.search(r'Bill\\s*To:([^\\n]+(?:\\n[^\\n]+)*?)\\n\\s*\\n', invoice_text, re.IGNORECASE)
+              bill_to = bill_to_match.group(1).strip() if bill_to_match else "Unknown"
+              
+              # Extract financial information
+              subtotal_match = re.search(r'Subtotal:?\\s*\\$?([\\d,.]+)', invoice_text, re.IGNORECASE)
+              subtotal_str = subtotal_match.group(1).strip() if subtotal_match else "0.00"
+              subtotal = float(subtotal_str.replace(',', ''))
+              
+              tax_match = re.search(r'Tax\\s*(?:\\([^)]*\\))?:?\\s*\\$?([\\d,.]+)', invoice_text, re.IGNORECASE)
+              tax_str = tax_match.group(1).strip() if tax_match else "0.00"
+              tax = float(tax_str.replace(',', ''))
+              
+              total_match = re.search(r'Total\\s*(?:Due|Amount)?:?\\s*\\$?([\\d,.]+)', invoice_text, re.IGNORECASE)
+              total_str = total_match.group(1).strip() if total_match else "0.00"
+              total = float(total_str.replace(',', ''))
+              
+              # Extract line items using regex pattern matching
+              items_section_match = re.search(r'Items?:?([^\\n]*(?:\\n[^\\n]+)*?)\\n\\s*(?:Subtotal|Total|Tax)', invoice_text, re.IGNORECASE)
+              items_text = items_section_match.group(1) if items_section_match else ""
+              
+              # Parse individual line items
+              items = []
+              for line in items_text.split('\\n'):
+                  if not line.strip():
+                      continue
+                      
+                  # Try different patterns for line items
+                  item_match = re.search(r'(\d+)\.\s+([^-$]+)\s*-\s*\$?([0-9,.]+)(?:\s*\((\d+)\s*units?\))?', line)
+                  if item_match:
+                      name = item_match.group(2).strip()
+                      unit_price = float(item_match.group(3).replace(',', ''))
+                      quantity = int(item_match.group(4)) if item_match.group(4) else 1
+                      item_total = unit_price * quantity
+                      
+                      items.append({
+                          "name": name,
+                          "unit_price": unit_price,
+                          "quantity": quantity,
+                          "total": item_total
+                      })
+              
+              # Calculate expected total
+              calculated_total = subtotal + tax
+              total_matches = abs(calculated_total - total) < 0.01
+              
+              # Calculate subtotal from line items
+              items_total = sum(item["total"] for item in items)
+              subtotal_matches = abs(items_total - subtotal) < 0.01
+              
+              # Create verification section
+              verification = {
+                  "total_calculation_correct": total_matches,
+                  "subtotal_matches_line_items": subtotal_matches,
+                  "discrepancies": []
+              }
+              
+              if not total_matches:
+                  verification["discrepancies"].append(f"Total (${total:.2f}) doesn't match Subtotal + Tax (${calculated_total:.2f})")
+                  
+              if not subtotal_matches and items:
+                  verification["discrepancies"].append(f"Subtotal (${subtotal:.2f}) doesn't match sum of line items (${items_total:.2f})")
+              
+              # Create summary
+              summary = f"Invoice #{invoice_num} from {vendor} dated {date} for ${total:.2f}"
+              if verification["discrepancies"]:
+                  summary += " has calculation discrepancies that should be reviewed."
+              else:
+                  summary += " has been verified with all calculations correct."
+              
+              return {
+                  "invoice_number": invoice_num,
+                  "date": date,
+                  "vendor": vendor,
+                  "bill_to": bill_to,
+                  "items": items,
+                  "subtotal": subtotal,
+                  "tax": tax,
+                  "total": total,
+                  "verification": verification,
+                  "summary": summary
+              }
+
+  # Execute the workflow
+  - type: "EXECUTE"
+    item_type: "TOOL"
+    name: "AdvancedDocumentAnalyzer"
+    input:
+      text: "{{params.invoice_text}}"
+    output_var: "document_analysis"
     
-    response = await llm_service.generate(prompt)
+  - type: "EXECUTE"
+    item_type: "AGENT"
+    name: "AdvancedInvoiceProcessor"
+    method: "process_invoice"
+    input: "{{params.invoice_text}}"
+    output_var: "invoice_data"
+    condition: "document_analysis.type == 'invoice'"
     
-    # Extract the YAML
-    yaml_match = re.search(r'```yaml\s*\n(.*?)\n\s*```', response, re.DOTALL)
-    if yaml_match:
-        return yaml_match.group(1).strip()
-    
-    # If not found with yaml marker, try without specific language
-    yaml_match2 = re.search(r'```\s*\n(scenario_name:.*?)\n\s*```', response, re.DOTALL)
-    if yaml_match2:
-        return yaml_match2.group(1).strip()
-    
-    # If still not found, return the full response if it looks like YAML
-    if response.strip().startswith('scenario_name:'):
-        return response.strip()
-    
-    return None
+  - type: "RETURN"
+    value: "{{invoice_data}}"
+"""
 
 if __name__ == "__main__":
     asyncio.run(main())

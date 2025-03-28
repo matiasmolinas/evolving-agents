@@ -245,7 +245,8 @@ class SmartAgentBus:
         description: str,
         capabilities: List[Dict[str, Any]],
         agent_type: str = "GENERIC",
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        agent_instance = None  # New parameter, not stored in JSON
     ) -> str:
         """
         Register a new agent with the bus.
@@ -255,26 +256,44 @@ class SmartAgentBus:
             description: What this agent does
             capabilities: List of capabilities the agent provides
             agent_type: Type of agent (GENERIC, SPECIALIZED, etc.)
-            metadata: Additional agent configuration
-            
+            metadata: Additional agent configuration (must be JSON serializable)
+            agent_instance: Actual agent instance (not serialized, kept in memory)
+                
         Returns:
             Agent ID
         """
         agent_id = f"agent_{uuid.uuid4().hex[:8]}"
         
+        # Ensure metadata is serializable by creating a clean copy
+        clean_metadata = {}
+        if metadata:
+            for k, v in metadata.items():
+                # Only keep serializable values
+                if isinstance(v, (str, int, float, bool, list, dict, type(None))):
+                    clean_metadata[k] = v
+        
+        # Create the agent record (serializable)
         agent = {
             "id": agent_id,
             "name": name,
             "description": description,
             "type": agent_type,
             "capabilities": capabilities,
-            "metadata": metadata or {},
+            "metadata": clean_metadata,
             "status": "active",
             "registered_at": datetime.utcnow().isoformat(),
             "last_seen": datetime.utcnow().isoformat()
         }
         
+        # Store the serializable record
         self.agents[agent_id] = agent
+        
+        # If agent instance is provided, store it in a separate in-memory dictionary
+        if agent_instance is not None:
+            if not hasattr(self, '_agent_instances'):
+                self._agent_instances = {}
+            self._agent_instances[agent_id] = agent_instance
+        
         await self._index_agent(agent)
         await self._save_registry()
         
@@ -409,6 +428,20 @@ class SmartAgentBus:
         task: Dict[str, Any]
     ) -> Any:
         """Execute a task using the specified agent."""
+        agent_id = agent["id"]
+        
+        # Check if we have a live instance of this agent
+        if hasattr(self, '_agent_instances') and agent_id in self._agent_instances:
+            agent_instance = self._agent_instances[agent_id]
+            
+            # If the agent is a ReActAgent with run method
+            if hasattr(agent_instance, 'run') and callable(agent_instance.run):
+                try:
+                    task_text = task.get("text", json.dumps(task))
+                    return await agent_instance.run(task_text)
+                except Exception as e:
+                    raise RuntimeError(f"Agent execution with instance failed: {str(e)}")
+        
         # Check for direct execution function
         execute_func = agent.get("metadata", {}).get("execute")
         if execute_func and callable(execute_func):

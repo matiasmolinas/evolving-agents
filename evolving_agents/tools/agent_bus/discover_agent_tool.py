@@ -1,4 +1,4 @@
-# evolving_agents/tools/agent_bus/discover_capability_tool.py
+# evolving_agents/tools/agent_bus/discover_agent_tool.py
 
 from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel, Field
@@ -9,24 +9,24 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter.emitter import Emitter
 
 class DiscoverInput(BaseModel):
-    """Input schema for the DiscoverCapabilityTool."""
+    """Input schema for the DiscoverAgentTool."""
     query: Optional[str] = Field(None, description="Search query for capabilities")
     capability_id: Optional[str] = Field(None, description="Specific capability ID to look for")
-    provider_type: Optional[str] = Field(None, description="Filter by provider type (AGENT or TOOL)")
+    agent_type: Optional[str] = Field(None, description="Filter by agent type")
     min_confidence: float = Field(0.5, description="Minimum confidence level required (0.0-1.0)")
     limit: int = Field(10, description="Maximum number of results to return")
 
-class DiscoverCapabilityTool(Tool[DiscoverInput, None, StringToolOutput]):
+class DiscoverAgentTool(Tool[DiscoverInput, None, StringToolOutput]):
     """
-    Tool for discovering capabilities and providers in the Agent Bus.
+    Tool for discovering agents and their capabilities in the Agent Bus.
     """
-    name = "DiscoverCapabilityTool"
-    description = "Discover available capabilities and providers in the agent ecosystem"
+    name = "DiscoverAgentTool"
+    description = "Discover available agents and their capabilities in the ecosystem"
     input_schema = DiscoverInput
     
     def __init__(
         self, 
-        agent_bus,  # We'll use a generic reference to avoid circular imports
+        agent_bus,
         options: Optional[Dict[str, Any]] = None
     ):
         super().__init__(options=options or {})
@@ -40,43 +40,36 @@ class DiscoverCapabilityTool(Tool[DiscoverInput, None, StringToolOutput]):
     
     async def _run(self, input: DiscoverInput, options: Optional[Dict[str, Any]] = None, context: Optional[RunContext] = None) -> StringToolOutput:
         """
-        Discover capabilities and providers in the Agent Bus.
-        
-        Args:
-            input: Discovery parameters
-        
-        Returns:
-            StringToolOutput containing the discovery results in JSON format
+        Discover agents and capabilities in the Agent Bus.
         """
         try:
             if input.capability_id:
-                # Find specific capability
-                providers = await self.agent_bus.find_providers_for_capability(
+                # Find agents with specific capability
+                agents = await self.agent_bus.find_agents_for_capability(
                     capability=input.capability_id,
                     min_confidence=input.min_confidence,
-                    provider_type=input.provider_type
+                    agent_type=input.agent_type
                 )
                 
                 result = {
                     "status": "success",
                     "capability": input.capability_id,
-                    "provider_count": len(providers),
-                    "providers": []
+                    "agent_count": len(agents),
+                    "agents": []
                 }
                 
-                for provider in providers:
-                    # Find the specific capability details
+                for agent in agents:
                     capability_details = None
-                    for cap in provider.get("capabilities", []):
+                    for cap in agent.get("capabilities", []):
                         if cap.get("id") == input.capability_id:
                             capability_details = cap
                             break
                     
-                    result["providers"].append({
-                        "id": provider["id"],
-                        "name": provider["name"],
-                        "type": provider.get("provider_type", "AGENT"),
-                        "description": provider.get("description", "No description"),
+                    result["agents"].append({
+                        "id": agent["id"],
+                        "name": agent["name"],
+                        "type": agent.get("type", "AGENT"),
+                        "description": agent.get("description", "No description"),
                         "capability_confidence": capability_details.get("confidence", 0.0) if capability_details else 0.0
                     })
                 
@@ -85,7 +78,7 @@ class DiscoverCapabilityTool(Tool[DiscoverInput, None, StringToolOutput]):
                 capabilities = await self.agent_bus.search_capabilities(
                     query=input.query,
                     min_confidence=input.min_confidence,
-                    provider_type=input.provider_type,
+                    agent_type=input.agent_type,
                     limit=input.limit
                 )
                 
@@ -101,20 +94,20 @@ class DiscoverCapabilityTool(Tool[DiscoverInput, None, StringToolOutput]):
                         "id": capability["id"],
                         "name": capability["name"],
                         "description": capability.get("description", "No description"),
-                        "providers": [
+                        "agents": [
                             {
-                                "id": p["id"],
-                                "name": p["name"],
-                                "confidence": p.get("confidence", 0.0)
+                                "id": a["id"],
+                                "name": a["name"],
+                                "confidence": a.get("confidence", 0.0)
                             }
-                            for p in capability.get("providers", [])
+                            for a in capability.get("agents", [])
                         ]
                     })
                 
             else:
                 # List all capabilities
                 all_capabilities = await self.agent_bus.list_all_capabilities(
-                    provider_type=input.provider_type,
+                    agent_type=input.agent_type,
                     min_confidence=input.min_confidence,
                     limit=input.limit
                 )
@@ -130,7 +123,7 @@ class DiscoverCapabilityTool(Tool[DiscoverInput, None, StringToolOutput]):
                         "id": capability["id"],
                         "name": capability["name"],
                         "description": capability.get("description", "No description"),
-                        "provider_count": len(capability.get("providers", []))
+                        "agent_count": len(capability.get("agents", []))
                     })
             
             return StringToolOutput(json.dumps(result, indent=2))
@@ -143,72 +136,29 @@ class DiscoverCapabilityTool(Tool[DiscoverInput, None, StringToolOutput]):
                 "details": traceback.format_exc()
             }, indent=2))
     
-    async def list_providers(self, provider_type: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        List all registered providers.
-        
-        Args:
-            provider_type: Optional filter by provider type
-            
-        Returns:
-            List of providers
-        """
-        return await self.agent_bus.list_all_providers(provider_type)
+    async def list_agents(self, agent_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List all registered agents."""
+        return await self.agent_bus.list_all_agents(agent_type)
     
-    async def find_provider(self, capability: str, min_confidence: float = 0.5) -> Optional[Dict[str, Any]]:
-        """
-        Find a provider for a specific capability.
-        
-        Args:
-            capability: Capability to search for
-            min_confidence: Minimum confidence level required
-            
-        Returns:
-            Best matching provider or None if not found
-        """
-        providers = await self.agent_bus.find_providers_for_capability(
+    async def find_agent(self, capability: str, min_confidence: float = 0.5) -> Optional[Dict[str, Any]]:
+        """Find an agent for a specific capability."""
+        agents = await self.agent_bus.find_agents_for_capability(
             capability=capability,
             min_confidence=min_confidence
         )
         
-        if not providers:
+        if not agents:
             return None
             
-        # Return the provider with the highest confidence
-        return max(providers, key=lambda p: next(
-            (c.get("confidence", 0.0) for c in p.get("capabilities", []) 
+        return max(agents, key=lambda a: next(
+            (c.get("confidence", 0.0) for c in a.get("capabilities", []) 
              if c.get("id") == capability), 
             0.0
         ))
     
-    async def get_capabilities(self, provider_id: str) -> List[Dict[str, Any]]:
-        """
-        Get all capabilities for a specific provider.
-        
-        Args:
-            provider_id: ID of the provider
-            
-        Returns:
-            List of capabilities
-        """
-        provider = await self.agent_bus.get_provider(provider_id)
-        if not provider:
+    async def get_capabilities(self, agent_id: str) -> List[Dict[str, Any]]:
+        """Get all capabilities for a specific agent."""
+        agent = await self.agent_bus.get_agent(agent_id)
+        if not agent:
             return []
-            
-        return provider.get("capabilities", [])
-    
-    async def search_capabilities(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Search for capabilities matching a query.
-        
-        Args:
-            query: Search query
-            limit: Maximum number of results
-            
-        Returns:
-            List of matching capabilities
-        """
-        return await self.agent_bus.search_capabilities(
-            query=query,
-            limit=limit
-        )
+        return agent.get("capabilities", [])
