@@ -238,7 +238,7 @@ pip install -e . # Install in editable mode
 
 Explore the `examples/` directory:
 
-*   **`invoice_processing/architect_zero_comprehensive_demo_refactored.py`**: The flagship demo showing the full Design -> Generate -> Execute loop.
+*   **`invoice_processing/architect_zero_comprehensive_demo.py`**: The flagship demo showing the full Design -> Generate -> Execute loop.
 *   **`agent_evolution/`**: Demonstrates creating and evolving agents/tools using both BeeAI and OpenAI frameworks, including A/B testing.
 *   **`forms/`**: Shows how the system can design and process conversational forms based on natural language descriptions.
 *   **`autocomplete/`**: Illustrates designing a context-aware autocomplete system.
