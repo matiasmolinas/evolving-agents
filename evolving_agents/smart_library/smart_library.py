@@ -325,8 +325,8 @@ class SmartLibrary:
         return float(np.dot(vec1, vec2) / (norm1 * norm2))
     
     async def semantic_search(
-        self, 
-        query: str, 
+        self,
+        query: str,
         record_type: Optional[str] = None,
         domain: Optional[str] = None,
         limit: int = 5,
@@ -334,69 +334,74 @@ class SmartLibrary:
     ) -> List[Tuple[Dict[str, Any], float]]:
         """
         Search for records semantically similar to the query using the vector database.
-        
-        Args:
-            query: The search query (can be a functional requirement or description)
-            record_type: Optional record type filter (AGENT, TOOL, FIRMWARE)
-            domain: Optional domain filter
-            limit: Maximum number of results
-            threshold: Minimum similarity threshold (0-1)
-            
-        Returns:
-            List of (record, similarity) tuples sorted by similarity
         """
-        # Check if vector DB is available, otherwise fall back to direct search
         if not self.collection:
+            # Fallback if vector DB isn't available
+            logger.warning("Vector database not available. Falling back to direct search.")
             return await self._semantic_search_direct(query, record_type, domain, limit, threshold)
-        
-        # Prepare filters for the query
-        where_filter = {}
-        
+
+        # --- Prepare filters for ChromaDB ---
+        filters = []
         if record_type:
-            where_filter["record_type"] = record_type
-        
+            filters.append({"record_type": {"$eq": record_type}})
         if domain:
-            where_filter["domain"] = domain
-        
+            # Allow searching for domain 'general' or the specific domain
+            # filters.append({"domain": {"$eq": domain}})
+            # OR handle domain matching more flexibly if needed
+             filters.append({ # Use $or if you want to match EITHER the specific domain OR general
+                 "$or": [
+                     {"domain": {"$eq": domain}},
+                     {"domain": {"$eq": "general"}} # Optional: include general components too
+                 ]
+             })
+            # If you only want the specific domain:
+            # filters.append({"domain": {"$eq": domain}})
+
         # Always filter for active records
-        where_filter["status"] = "active"
-        
+        filters.append({"status": {"$eq": "active"}})
+
+        # Combine filters using $and
+        where_filter = None
+        if filters:
+            if len(filters) == 1:
+                 # If only one filter (e.g., just status=active), no need for $and
+                 where_filter = filters[0]
+            else:
+                 where_filter = {"$and": filters}
+
+        # --------------------------------------
+
         try:
             # Generate embedding for the query
             query_embedding = await self.llm_service.embed(query)
-            
-            # Search the vector database
+
+            # Search the vector database using the corrected where_filter
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=limit * 2,  # Query more results than needed to account for filtering
-                where=where_filter if where_filter else None,
+                n_results=limit * 2,
+                where=where_filter, # Use the constructed filter
                 include=["documents", "metadatas", "distances"]
             )
-            
-            # Transform results to the expected format
+
+            # Transform results (same as before)
             search_results = []
-            
             if not results["ids"] or not results["ids"][0]:
                 return []
-            
-            # Process results
+
             for i, result_id in enumerate(results["ids"][0]):
-                # Distance is cosine distance, convert to similarity
                 distance = results["distances"][0][i]
-                similarity = 1.0 - distance  # Convert distance to similarity
-                
+                similarity = 1.0 - distance
                 if similarity >= threshold:
-                    # Find the full record by ID
                     record = await self.find_record_by_id(result_id)
                     if record:
                         search_results.append((record, similarity))
-            
-            # No need to sort again as the vector DB already returns sorted results
+
+            # Sort by similarity (ChromaDB usually does this, but good to be sure)
+            search_results.sort(key=lambda x: x[1], reverse=True)
             return search_results[:limit]
-            
+
         except Exception as e:
-            logger.error(f"Error using vector database for search: {str(e)}. Falling back to direct search.")
-            # Fall back to direct search if vector DB fails
+            logger.error(f"Error using vector database for search: {e}. Falling back to direct search.", exc_info=True) # Add exc_info
             return await self._semantic_search_direct(query, record_type, domain, limit, threshold)
     
     async def _semantic_search_direct(
