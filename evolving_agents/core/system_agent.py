@@ -16,15 +16,14 @@ from evolving_agents.tools.agent_bus.register_agent_tool import RegisterAgentToo
 from evolving_agents.tools.agent_bus.request_agent_tool import RequestAgentTool
 from evolving_agents.tools.agent_bus.discover_agent_tool import DiscoverAgentTool
 
+from evolving_agents.workflow.generate_workflow_tool import GenerateWorkflowTool
+from evolving_agents.workflow.process_workflow_tool import ProcessWorkflowTool
+
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.dependency_container import DependencyContainer
-
-# Import workflow components
-from evolving_agents.workflow.workflow_processor import WorkflowProcessor
-from evolving_agents.workflow.workflow_generator import WorkflowGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -50,88 +49,102 @@ class SystemAgentFactory:
         else:
             if not llm_service:
                 raise ValueError("LLM service must be provided")
-            
             if not smart_library:
                 smart_library = SmartLibrary("system_library.json")
-            
             firmware = Firmware()
-        
+
         chat_model = llm_service.chat_model
-        
+
         if not agent_bus:
+             # Ensure agent_bus uses the container if provided
             agent_bus = SmartAgentBus(
                 smart_library=smart_library,
-                system_agent=None,  # Will be set later
+                system_agent=None, # Will be set later
                 llm_service=llm_service,
-                storage_path="smart_agent_bus.json", 
-                log_path="agent_bus_logs.json"
+                storage_path="smart_agent_bus.json",
+                log_path="agent_bus_logs.json",
+                container=container # Pass container here
             )
-        
-        # Create tools
+
+        # --- Create Tools ---
+        # Library Tools
         search_tool = SearchComponentTool(smart_library)
         create_tool = CreateComponentTool(smart_library, llm_service, firmware)
         evolve_tool = EvolveComponentTool(smart_library, llm_service, firmware)
+        # Agent Bus Tools
         register_tool = RegisterAgentTool(agent_bus)
         request_tool = RequestAgentTool(agent_bus)
         discover_tool = DiscoverAgentTool(agent_bus)
-        
-        workflow_processor = WorkflowProcessor()
-        workflow_generator = WorkflowGenerator(llm_service, smart_library)
-        
+        # Workflow Tools (NEW)
+        generate_workflow_tool = GenerateWorkflowTool(llm_service, smart_library)
+        process_workflow_tool = ProcessWorkflowTool() # Doesn't need direct dependencies anymore
+
+        # --- Assemble Tools for Agent ---
         tools = [
             search_tool,
             create_tool,
             evolve_tool,
             register_tool,
             request_tool,
-            discover_tool
+            discover_tool,
+            generate_workflow_tool, # Add new tool
+            process_workflow_tool   # Add new tool
         ]
-        
+
+        # Define Agent Metadata
         meta = AgentMeta(
             name="SystemAgent",
             description=(
                 "I am the System Agent, responsible for orchestrating the agent ecosystem. "
-                "I manage agent discovery, registration, and capability requests."
+                "I manage component discovery, creation, evolution, registration, capability requests, "
+                "and workflow generation/processing." # Updated description
             ),
             extra_description=(
                 "I follow the agent-centric architecture principles where everything is an agent "
-                "with capabilities. I coordinate between specialized tools."
+                "with capabilities. I coordinate between specialized tools, including workflow tools." # Updated
             ),
             tools=tools
         )
-        
+
+        # Define Memory
         memory = UnconstrainedMemory() if memory_type == "unconstrained" else TokenMemory(chat_model)
-        
+
+        # --- Create the ReActAgent ---
         system_agent = ReActAgent(
             llm=chat_model,
-            tools=tools,
+            tools=tools, # Pass the full list of tools
             memory=memory,
             meta=meta
         )
-        
-        workflow_processor.set_agent(system_agent)
-        workflow_generator.set_agent(system_agent)
-        
+
+        # --- Store Tools for Easy Access (Optional but convenient) ---
+        # Update the tools_dict mapping
         tools_dict = {
             "search_component": search_tool,
             "create_component": create_tool,
             "evolve_component": evolve_tool,
             "register_agent": register_tool,
             "request_agent": request_tool,
-            "discover_agent": discover_tool
+            "discover_agent": discover_tool,
+            "generate_workflow": generate_workflow_tool, # Add new tool mapping
+            "process_workflow": process_workflow_tool   # Add new tool mapping
         }
-        
-        system_agent.tools = tools_dict
-        system_agent.workflow_processor = workflow_processor
-        system_agent.workflow_generator = workflow_generator
-        
+        # You can still attach this dict if needed for external access, but the agent uses the list passed in constructor
+        system_agent.tools_map = tools_dict # Renamed to avoid conflict with internal 'tools'
+
+        # --- Connect Agent Bus and Container ---
+        # Set the created system_agent instance on the agent_bus if it wasn't already set
         if hasattr(agent_bus, 'system_agent') and agent_bus.system_agent is None:
             agent_bus.system_agent = system_agent
-        
+
+        # Register the final system_agent in the container if not already present
         if container and not container.has('system_agent'):
             container.register('system_agent', system_agent)
-            
+
+        # --- Final Initialization ---
+        # Initialize agent bus from library *after* everything is set up
         if hasattr(agent_bus, 'initialize_from_library'):
             await agent_bus.initialize_from_library()
-        
+
+        logger.info("SystemAgent created successfully with workflow tools integrated.")
         return system_agent
