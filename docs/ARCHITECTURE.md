@@ -178,7 +178,7 @@ sequenceDiagram
     SB->>AA: Return Result(sentiment_score)
 ```
 
-### 3.2. Workflow Generation & Execution (Refactored)
+### 3.2. Workflow Generation & Execution
 
 Workflows are designed, generated, and executed through agent interactions.
 
