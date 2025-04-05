@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 import re # Added for cleaning output
+import yaml # Import yaml for basic validation during generation (optional)
 
 # Pydantic for input validation
 from pydantic import BaseModel, Field
@@ -21,28 +22,24 @@ logger = logging.getLogger(__name__)
 
 # --- Helper Function for Safe JSON Dumping ---
 def safe_json_dumps(data: Any, indent: int = 2) -> str:
-    """Safely dump data to JSON, handling common non-serializable types like ellipsis and sets."""
+    """Safely dump data to JSON, handling common non-serializable types."""
     def default_serializer(obj):
-        if isinstance(obj, set): # Handle sets
-            return list(obj)
-        if obj is Ellipsis: # Handle ellipsis
-            return None # Replace ellipsis with None (or choose another representation like '...')
+        if isinstance(obj, set): return list(obj)
+        if obj is Ellipsis: return None
         # Let the default raise the error for other unhandled types
         try:
-            # Try standard JSONEncoder first
-            return json.JSONEncoder().encode(obj)
+            # Use ensure_ascii=False for broader character support if needed, otherwise keep default
+            return json.JSONEncoder(ensure_ascii=True).encode(obj)
         except TypeError:
-             # If standard encoder fails, raise the error clearly
              raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
     try:
-        # Use the custom handler
         return json.dumps(data, indent=indent, default=default_serializer)
     except TypeError as e:
          logger.error(f"JSON serialization failed even with custom handler: {e}", exc_info=True)
-         # Fallback: return a string representation indicating the error
          return f'{{"error": "Data not fully serializable: {e}"}}'
 # ---------------------------------------------
+
 
 # --- Input Schema ---
 class GenerateWorkflowInput(BaseModel):
@@ -72,11 +69,6 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
     ):
         """
         Initializes the GenerateWorkflowTool.
-
-        Args:
-            llm_service: The LLM service instance for generation.
-            smart_library: The SmartLibrary instance for component context.
-            options: Optional configuration for the tool.
         """
         super().__init__(options=options or {})
         self.llm = llm_service
@@ -93,21 +85,13 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
     async def _run(self, input: GenerateWorkflowInput, options: Optional[Dict[str, Any]] = None, context: Optional[RunContext] = None) -> StringToolOutput:
         """
         Generate a complete YAML workflow based on the provided input.
-
-        Args:
-            input: The validated input parameters.
-            options: Optional runtime options.
-            context: The run context.
-
-        Returns:
-            A StringToolOutput containing the status and the generated YAML workflow (or error message).
         """
         logger.info(f"Received request to generate workflow '{input.workflow_name}' in domain '{input.domain}'")
         try:
             # Prioritize structured input if available
             if input.workflow_design and input.library_entries:
                 logger.info("Generating workflow from structured design and library entries.")
-                yaml_workflow = await self._generate_from_design(
+                yaml_workflow_str = await self._generate_from_design(
                     input.workflow_name,
                     input.task_objective,
                     input.domain,
@@ -116,35 +100,59 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
                 )
             elif input.requirements:
                  logger.info("Generating workflow from natural language requirements.")
-                 yaml_workflow = await self._generate_from_requirements(
+                 yaml_workflow_str = await self._generate_from_requirements(
                      input.workflow_name,
                      input.task_objective,
                      input.domain,
                      input.requirements
                  )
             else:
-                raise ValueError("Either workflow_design/library_entries OR requirements must be provided.")
+                # If using GenerateWorkflowTool directly, one of the inputs is required
+                # If called by SystemAgent internally based on a design, workflow_design should always be present
+                # Add a check or rely on SystemAgent to provide correct input
+                logger.warning("GenerateWorkflowTool called without design or requirements. This might happen if SystemAgent failed to pass the design.")
+                # Attempt generation based on objective/domain as a fallback
+                if input.task_objective and input.domain:
+                     yaml_workflow_str = await self._generate_from_requirements(
+                         input.workflow_name,
+                         input.task_objective,
+                         input.domain,
+                         f"Generate a workflow to achieve the objective: {input.task_objective}" # Fallback requirements
+                     )
+                else:
+                    raise ValueError("Insufficient input: Need workflow_design/library_entries OR requirements OR task_objective/domain.")
+
 
             # Clean YAML response from LLM
-            cleaned_yaml = self._clean_yaml_output(yaml_workflow)
+            cleaned_yaml = self._clean_yaml_output(yaml_workflow_str)
             if not cleaned_yaml:
                  raise ValueError("LLM response did not contain extractable YAML content.")
 
+            # **Optional Basic Validation:** Try parsing the generated YAML here to catch errors early
+            try:
+                yaml.safe_load(cleaned_yaml)
+                logger.info("Generated YAML parsed successfully (basic validation).")
+            except yaml.YAMLError as e:
+                 logger.error(f"Generated YAML is invalid: {e}")
+                 logger.debug(f"Invalid YAML content:\n---\n{cleaned_yaml}\n---")
+                 # Return error or attempt correction? For now, return error.
+                 raise ValueError(f"Generated YAML failed basic validation: {e}") from e
+
             logger.info(f"Successfully generated YAML for workflow '{input.workflow_name}'.")
-            return StringToolOutput(safe_json_dumps({ # Use safe dump for final output too
-                "status": "success",
-                "workflow_name": input.workflow_name,
-                "yaml_workflow": cleaned_yaml
-            }))
+            # Return the YAML string directly
+            return StringToolOutput(cleaned_yaml) # Return raw YAML string
 
         except Exception as e:
             import traceback
             logger.error(f"Error generating workflow: {str(e)}")
-            return StringToolOutput(safe_json_dumps({ # Use safe dump for error output
+            # Return error message as JSON string
+            error_output = safe_json_dumps({
                 "status": "error",
                 "message": f"Error generating workflow: {str(e)}",
                 "details": traceback.format_exc()
-            }))
+            })
+            return StringToolOutput(error_output)
+
 
     async def _generate_from_design(
         self,
@@ -159,7 +167,7 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         evolve_components = library_entries.get("evolve", [])
         create_components = library_entries.get("create", [])
 
-        # Construct the prompt with detailed instructions and safe JSON dumping
+        # Construct the prompt with EVEN MORE detailed instructions, especially for RETURN
         workflow_prompt = f"""
         Generate a complete YAML workflow for the task: '{task_objective}' in domain '{domain}'.
 
@@ -169,54 +177,59 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         Components to Evolve: {safe_json_dumps(evolve_components)}
         Components to Create: {safe_json_dumps(create_components)}
 
-        Workflow Logic Sequence: {safe_json_dumps(workflow_design.get("sequence", []))}
-        Data Flow (for context): {safe_json_dumps(workflow_design.get("data_flow", []))}
+        Workflow Logic Sequence: {safe_json_dumps(workflow_design.get("workflow", {}).get("sequence", []))} # Adjusted key based on observed JSON
+        Data Flow (for context): {safe_json_dumps(workflow_design.get("workflow", {}).get("data_flow", []))} # Adjusted key
 
-        **YAML STRUCTURE RULES:**
-        1. The top level must have `scenario_name`, `domain`, and `description`.
-        2. Under the `steps:` key, provide a list of dictionaries.
-        3. **EACH step dictionary MUST have a `type` key.** Valid types are "DEFINE", "CREATE", "EXECUTE", "RETURN".
-        4. **DEFINE steps:** MUST include `item_type` ("AGENT" or "TOOL"), `name`, `description`, and `code_snippet`. Can optionally include `from_existing_snippet` for evolution.
-        5. **CREATE steps:** MUST include `item_type` ("AGENT" or "TOOL") and `name`. Can include `config`.
-        6. **EXECUTE steps:** MUST include `item_type` ("AGENT" or "TOOL"), `name`.
-           - **Input Specification:** The `input` field for EXECUTE steps MUST be a dictionary mapping input parameter names (like 'text' or specific schema fields) to their values. Use `{{{{params.param_name}}}}` for workflow parameters or `{{{{variable_name}}}}` for outputs from previous steps (`output_var`).
-           - Optional keys: `input`, `method`, `output_var`, `condition`.
-        7. **RETURN steps:** MUST include `value` (often referencing an `output_var` like `{{{{variable_name}}}}`).
+        **YAML STRUCTURE RULES (VERY STRICT):**
+        1.  The entire output MUST be valid YAML.
+        2.  The top level MUST be a mapping (dictionary) with keys: `scenario_name`, `domain`, `description`, and `steps`.
+        3.  `steps:` MUST contain a list (`-` syntax in YAML).
+        4.  **EACH item in the `steps` list MUST be a mapping (dictionary).** Start each step with `- ` followed by keys on new lines with indentation.
+        5.  **EACH step mapping MUST have a `type` key.** Valid types are "DEFINE", "CREATE", "EXECUTE", "RETURN".
+        6.  **DEFINE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string), `description` (string), `code_snippet` (string, use `|` for multiline). Optional: `from_existing_snippet` (string).
+        7.  **CREATE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string). Optional: `config` (mapping).
+        8.  **EXECUTE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string).
+            *   Optional: `input` (mapping). **IF `input` is present, its value MUST be a mapping (dictionary).** Keys are parameter names, values are parameter values (strings, numbers, bools, or `{{{{...}}}}` placeholders).
+            *   Optional: `output_var` (string).
+            *   Optional: `condition` (string).
+        9.  **RETURN steps:** Mapping MUST include key: `value`.
+            *   **CRITICAL: The `value` key MUST be followed by a SINGLE string**, typically a placeholder like `{{{{variable_name}}}}` referencing the output variable of a previous step.
+            *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. If you need to return multiple pieces of data, create them as a dictionary in a previous `EXECUTE` step and return the variable holding that dictionary.
 
-        **EXAMPLE STEP FORMATS:**
+        **CRITICAL YAML FORMATTING:**
+        *   Use 2 spaces for indentation.
+        *   Ensure correct list (`- `) and mapping (`key: value`) syntax.
+        *   Placeholders MUST be enclosed in double curly braces: `{{{{params.var}}}}` or `{{{{step_output_var}}}}`.
+
+        **EXAMPLE OF CORRECT RETURN STEP:**
         ```yaml
-          - type: DEFINE
-            item_type: TOOL
-            name: MyNewTool
-            description: Does something specific.
-            code_snippet: |
-              # Python code here...
-          - type: CREATE
+        steps:
+          # ... other steps ...
+          - type: EXECUTE
             item_type: AGENT
-            name: MyAgent
-            config:
-              memory_type: token
-          - type: EXECUTE # Example showing correct input structure
-            item_type: TOOL
-            name: MyNewTool
-            input: # Input MUST be a dictionary
-              text: "{{{{params.some_input}}}}" # Parameter substitution
-              mode: "detailed" # Static value
-            output_var: tool_result
-          - type: EXECUTE # Example using output from previous step
-            item_type: AGENT
-            name: ProcessingAgent
+            name: FinalProcessor
             input:
-              data_to_process: "{{{{tool_result}}}}" # Using output variable
-            output_var: final_data
-          - type: RETURN
-            value: {{{{final_data}}}}
+              data1: "{{{{step1_output}}}}"
+              data2: "{{{{step2_output}}}}"
+            output_var: final_structured_result # This variable holds the dictionary
+          - type: RETURN # Correct: value is a single placeholder string
+            value: {{{{final_structured_result}}}}
         ```
 
-        Generate the complete YAML based on the design and logic. Ensure every step strictly follows the required format, especially the `type` key and the `input` structure for EXECUTE steps.
-        Return *only* the YAML content, enclosed in ```yaml ... ``` blocks.
+        **EXAMPLE OF INCORRECT RETURN STEP (DO NOT DO THIS):**
+        ```yaml
+        steps:
+          # ... other steps ...
+          - type: RETURN # Incorrect: value has a nested mapping
+            value:
+              field1: "{{{{step1_output}}}}"
+              field2: "{{{{step2_output}}}}"
+        ```
+
+        Generate the complete YAML based on the design and logic. Ensure every step mapping and the overall structure is valid YAML. Pay meticulous attention to indentation, the structure of the `input` field in EXECUTE steps, and the SINGLE string value required for the `RETURN` step's `value` key.
+        Return *only* the raw YAML content, starting with `scenario_name:` and ending after the last step. Do NOT include ```yaml ``` markers.
         """
-        logger.debug("Generating workflow YAML from design prompt...")
+        logger.debug("Generating workflow YAML from design prompt (strict formatting, RETURN emphasis)...")
         return await self.llm.generate(workflow_prompt)
 
     async def _generate_from_requirements(
@@ -227,21 +240,19 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         requirements: str
     ) -> str:
         """Generate YAML directly from natural language requirements using LLM."""
-        # Search for potentially relevant components in the library
+        # Search logic
         logger.debug(f"Searching library for components related to requirements: {requirements[:100]}...")
         search_results = await self.library.semantic_search(
             query=requirements,
             domain=domain,
-            limit=10 # Get more results for the LLM to consider
+            limit=10
         )
         potential_components = [{
-            "name": r["name"],
-            "type": r["record_type"],
-            "description": r["description"],
-            "similarity": round(sim, 3) # Round similarity for prompt
+            "name": r["name"], "type": r["record_type"],
+            "description": r["description"], "similarity": round(sim, 3)
         } for r, sim in search_results]
 
-        # Construct the prompt with detailed instructions and safe JSON dumping
+        # Construct the prompt with EVEN MORE detailed instructions, especially for RETURN
         workflow_prompt = f"""
         Generate a complete YAML workflow based on these requirements:
 
@@ -256,91 +267,92 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         INSTRUCTIONS:
         1. Analyze the requirements to determine the necessary steps.
         2. Identify the components (agents/tools) needed for each step.
-        3. Decide whether to reuse existing components (from POTENTIAL list), evolve them, or define new ones.
+        3. Decide whether to reuse existing components, evolve them, or define new ones.
         4. Structure the workflow in YAML format adhering STRICTLY to the rules below.
         5. Ensure the workflow logically fulfills the requirements.
 
-        **YAML STRUCTURE RULES:**
-        1. Top level: `scenario_name`, `domain`, `description`.
-        2. `steps:` key holds a list of dictionaries.
-        3. **EACH step dictionary MUST have a `type` key ("DEFINE", "CREATE", "EXECUTE", "RETURN").**
-        4. **DEFINE steps:** MUST include `item_type`, `name`, `description`, `code_snippet`. Optional `from_existing_snippet`. Generate plausible code snippets if defining new components.
-        5. **CREATE steps:** MUST include `item_type`, `name`. Optional `config`.
-        6. **EXECUTE steps:** MUST include `item_type`, `name`.
-           - **Input Specification:** The `input` field MUST be a dictionary mapping input parameter names (like 'text') to values (using `{{{{params.param_name}}}}` or `{{{{variable_name}}}}`).
-           - Optional keys: `input`, `method`, `output_var`, `condition`.
-        7. **RETURN steps:** MUST include `value` (e.g., `{{{{variable_name}}}}`).
+        **YAML STRUCTURE RULES (VERY STRICT):**
+        1.  The entire output MUST be valid YAML.
+        2.  The top level MUST be a mapping (dictionary) with keys: `scenario_name`, `domain`, `description`, and `steps`.
+        3.  `steps:` MUST contain a list (`-` syntax in YAML).
+        4.  **EACH item in the `steps` list MUST be a mapping (dictionary).** Start each step with `- ` followed by keys on new lines with indentation.
+        5.  **EACH step mapping MUST have a `type` key.** Valid types are "DEFINE", "CREATE", "EXECUTE", "RETURN".
+        6.  **DEFINE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string), `description` (string), `code_snippet` (string, use `|` for multiline). Optional: `from_existing_snippet` (string). Generate plausible code snippets if defining new components.
+        7.  **CREATE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string). Optional: `config` (mapping).
+        8.  **EXECUTE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string).
+            *   Optional: `input` (mapping). **IF `input` is present, its value MUST be a mapping (dictionary).** Keys are parameter names, values are parameter values (strings, numbers, bools, or `{{{{...}}}}` placeholders).
+            *   Optional: `output_var` (string).
+            *   Optional: `condition` (string).
+        9.  **RETURN steps:** Mapping MUST include key: `value`.
+            *   **CRITICAL: The `value` key MUST be followed by a SINGLE string**, typically a placeholder like `{{{{variable_name}}}}` referencing the output variable of a previous step.
+            *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. If you need to return multiple pieces of data, create them as a dictionary in a previous `EXECUTE` step and return the variable holding that dictionary.
 
-        **EXAMPLE STEP FORMATS:**
+        **CRITICAL YAML FORMATTING:**
+        *   Use 2 spaces for indentation.
+        *   Ensure correct list (`- `) and mapping (`key: value`) syntax.
+        *   Placeholders MUST be enclosed in double curly braces: `{{{{params.var}}}}` or `{{{{step_output_var}}}}`.
+
+        **EXAMPLE OF CORRECT RETURN STEP:**
         ```yaml
-          - type: DEFINE
-            item_type: TOOL
-            name: MyNewTool
-            description: Does something specific.
-            code_snippet: |
-              # Python code here...
-          - type: CREATE
+        steps:
+          # ... other steps ...
+          - type: EXECUTE
             item_type: AGENT
-            name: MyAgent
-            config:
-              memory_type: token
-          - type: EXECUTE # Example showing correct input structure
-            item_type: TOOL
-            name: MyNewTool
-            input: # Input MUST be a dictionary
-              text: "{{{{params.some_input}}}}" # Parameter substitution
-              mode: "detailed" # Static value
-            output_var: tool_result
-          - type: RETURN
-            value: {{{{tool_result}}}}
+            name: FinalProcessor
+            input:
+              data1: "{{{{step1_output}}}}"
+              data2: "{{{{step2_output}}}}"
+            output_var: final_structured_result # This variable holds the dictionary
+          - type: RETURN # Correct: value is a single placeholder string
+            value: {{{{final_structured_result}}}}
         ```
 
-        Generate the complete YAML. Ensure every step strictly follows the required format, especially the `type` key and the `input` structure for EXECUTE steps.
-        Return *only* the YAML content, enclosed in ```yaml ... ``` blocks.
+        **EXAMPLE OF INCORRECT RETURN STEP (DO NOT DO THIS):**
+        ```yaml
+        steps:
+          # ... other steps ...
+          - type: RETURN # Incorrect: value has a nested mapping
+            value:
+              field1: "{{{{step1_output}}}}"
+              field2: "{{{{step2_output}}}}"
+        ```
+
+        Generate the complete YAML. Ensure every step mapping and the overall structure is valid YAML. Pay meticulous attention to indentation, the structure of the `input` field in EXECUTE steps, and the SINGLE string value required for the `RETURN` step's `value` key.
+        Return *only* the raw YAML content, starting with `scenario_name:` and ending after the last step. Do NOT include ```yaml ``` markers.
         """
-        logger.debug("Generating workflow YAML from requirements prompt...")
+        logger.debug("Generating workflow YAML from requirements prompt (strict formatting, RETURN emphasis)...")
         return await self.llm.generate(workflow_prompt)
 
     def _clean_yaml_output(self, yaml_output: str) -> Optional[str]:
-        """Extract YAML content from LLM response, handling markdown blocks."""
+        """Extract YAML content from LLM response, removing markdown blocks and preamble."""
         if not yaml_output:
              return None
 
-        # 1. Look for ```yaml ... ``` markdown blocks explicitly
-        match = re.search(r"```yaml\s*([\s\S]*?)\s*```", yaml_output, re.MULTILINE)
-        if match:
-            logger.debug("Extracted YAML using ```yaml block.")
-            return match.group(1).strip()
+        # Remove markdown blocks first
+        yaml_output = re.sub(r"```yaml\s*([\s\S]*?)\s*```", r"\1", yaml_output, flags=re.MULTILINE)
+        yaml_output = re.sub(r"```\s*([\s\S]*?)\s*```", r"\1", yaml_output, flags=re.MULTILINE)
 
-        # 2. Look for generic ``` ... ``` blocks if no explicit yaml block
-        match = re.search(r"```\s*([\s\S]*?)\s*```", yaml_output, re.MULTILINE)
-        if match:
-             potential_yaml = match.group(1).strip()
-             # Basic check if it looks like YAML
-             if potential_yaml.startswith("scenario_name:") or potential_yaml.startswith("- type:"):
-                  logger.debug("Extracted YAML using generic ``` block.")
-                  return potential_yaml
+        # Find the start of the actual YAML content
+        lines = yaml_output.strip().split('\n')
+        start_index = -1
+        for i, line in enumerate(lines):
+            # Look for common top-level keys
+            if line.strip().startswith("scenario_name:") or \
+               line.strip().startswith("domain:") or \
+               line.strip().startswith("description:") or \
+               line.strip().startswith("steps:"):
+                start_index = i
+                break
+            # Also handle if it starts directly with a step list item
+            elif line.strip().startswith("- type:"):
+                logger.warning("YAML seems to start directly with steps list. Wrapping with default top-level keys.")
+                reconstructed_yaml = f"scenario_name: Recovered Workflow\ndomain: general\ndescription: Recovered from steps list\nsteps:\n{yaml_output.strip()}"
+                return reconstructed_yaml.strip()
 
-        # 3. Fallback: Assume the whole string might be YAML if it starts like it
-        cleaned_output = yaml_output.strip()
-        lines = cleaned_output.split('\n')
-        if lines and (lines[0].strip().startswith("scenario_name:") or lines[0].strip().startswith("- type:")):
-            # Try to remove potential preamble/postamble text from LLM
-            yaml_lines = []
-            in_yaml = False
-            for line in lines:
-                 if line.strip().startswith("scenario_name:") or line.strip().startswith("- type:"):
-                      in_yaml = True
-                 if in_yaml:
-                      # Basic heuristic: stop if a line looks like explanatory text again
-                      if not line.startswith(' ') and ':' not in line and not line.strip().startswith('-') and len(yaml_lines) > 1:
-                           if not line.strip().startswith('#'): # Allow comments
-                                break
-                      yaml_lines.append(line)
-            if yaml_lines:
-                 logger.debug("Extracted YAML using start pattern heuristic.")
-                 return "\n".join(yaml_lines).strip()
 
-        logger.warning("Could not reliably extract YAML from LLM response. Returning raw response.")
-        # Return the original output if no reliable extraction worked, maybe with a comment
-        return f"# WARNING: Could not reliably extract YAML.\n{yaml_output.strip()}"
+        if start_index != -1:
+            # Return from the identified start line onwards
+            return "\n".join(lines[start_index:]).strip()
+        else:
+             logger.warning("Could not find standard YAML start keys. Returning cleaned response.")
+             return yaml_output.strip()
