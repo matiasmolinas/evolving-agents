@@ -108,7 +108,7 @@ Input for ArchitectZero: {{ "requirements": "Design customer support system..." 
 
 ### 3. Smart Library (Component Management & Discovery)
 
-(Description remains the same - Stores components, semantic search, versioning)
+Stores agents, tools, and firmware definitions. Enables semantic search and lifecycle management.
 
 ```python
 # Semantic component discovery (often used internally by SystemAgent)
@@ -165,15 +165,46 @@ Complex tasks are handled via a structured workflow lifecycle orchestrated *inte
 
 ### 6. Component Evolution
 
-(Description remains the same - `EvolveComponentTool` used internally by `SystemAgent`)
+Existing components can be adapted or improved using the `EvolveComponentTool` (typically invoked internally by `SystemAgent`).
+
+```python
+# Conceptual Example (within the SystemAgent's internal operation)
+evolve_prompt = f"""
+Use EvolveComponentTool to enhance agent 'id_123'.
+Changes needed: Add support for processing PDF files directly.
+Strategy: standard
+"""
+# evolve_result = await system_agent.run(evolve_prompt)
+# >> evolve_result indicates success and provides ID of the new evolved agent version.
+```
 
 ### 7. Multi-Framework Support
 
-(Description remains the same - `Providers` and `AgentFactory` used internally)
+Integrate agents/tools from different SDKs via `Providers` managed by the `AgentFactory` (used internally by tools like `CreateComponentTool`).
+
+```python
+# Example: Creating agents from different frameworks via AgentFactory
+# (AgentFactory is usually used internally by tools like CreateComponentTool)
+
+# bee_record = await smart_library.find_record_by_name("BeeAgentName")
+# openai_record = await smart_library.find_record_by_name("OpenAIAgentName")
+
+# if bee_record:
+#     bee_agent_instance = await agent_factory.create_agent(bee_record)
+#     # >> Uses BeeAIProvider internally
+
+# if openai_record:
+#     openai_agent_instance = await agent_factory.create_agent(openai_record)
+#     # >> Uses OpenAIAgentsProvider internally
+```
 
 ### 8. Governance & Firmware
 
-(Description remains the same - `Firmware` provides rules, `GuardrailsAdapter` enforces)
+Safety and operational rules are embedded via `Firmware`.
+
+*   `Firmware` provides base rules + domain-specific constraints.
+*   Prompts used by `CreateComponentTool` / `EvolveComponentTool` include firmware content.
+*   `OpenAIGuardrailsAdapter` converts firmware rules into runtime checks for OpenAI agents.
 
 ## Installation
 
@@ -207,11 +238,11 @@ pip install -e . # Install in editable mode
     ```
 
 3.  **Explore Output:** Check the generated files:
-    *   `final_processing_output.json`: Contains the final structured result from the SystemAgent executing the task, along with the agent's full output log.
+    *   `final_processing_output.json`: Contains the final structured result from the SystemAgent executing the task, along with the agent's full output log for debugging.
     *   `smart_library_demo.json`: The state of the component library after the run (shows created/evolved components).
     *   `smart_agent_bus_demo.json`: The agent registry state.
     *   `agent_bus_logs_demo.json`: Logs of agent interactions via the bus.
-    *   *(Optional Debug)* `architect_design_output.json`: The demo still saves the design blueprint generated internally for inspection.
+    *   *(Optional Debug)* `architect_design_output.json`: The demo still saves the design blueprint generated internally by ArchitectZero for inspection.
 
 ## Example Applications
 
@@ -221,6 +252,7 @@ Explore the `examples/` directory:
 *   **`agent_evolution/`**: Demonstrates creating and evolving agents/tools using both BeeAI and OpenAI frameworks.
 *   **`forms/`**: Shows how the system can design and process conversational forms.
 *   **`autocomplete/`**: Illustrates designing a context-aware autocomplete system.
+*   *(Add more examples as they are created)*
 
 ## Architecture Overview
 
