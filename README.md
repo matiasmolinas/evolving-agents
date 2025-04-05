@@ -37,9 +37,12 @@ While many frameworks focus on building individual agents, the Evolving Agents T
 
 The `SystemAgent` acts as the central nervous system and primary entry point. It's a `ReActAgent` equipped with specialized tools to manage the entire ecosystem. It receives high-level goals and autonomously plans and executes the necessary steps.
 
+**Example: Prompting the `SystemAgent` with a high-level goal**
 ```python
-# Example: Prompting the SystemAgent with a high-level goal
-high_level_prompt = """
+# Define the high-level task for the System Agent
+invoice_content = "..." # Load or define the invoice text here
+
+high_level_prompt = f"""
 **Goal:** Accurately process the provided invoice document and return structured, verified data.
 
 **Functional Requirements:**
@@ -52,32 +55,38 @@ high_level_prompt = """
 
 **Input Data:**
 ```
-{invoice_content} # Provided invoice text
+{invoice_content}
 ```
 
 **Action:** Achieve this goal using the best approach available. Create, evolve, or reuse components as needed. Return ONLY the final JSON result.
 """
 
-# --- SystemAgent Internal Process (Conceptual) ---
-# 1. Receives the high-level goal and input data.
-# 2. Analyzes the goal using its ReAct loop.
-# 3. Uses tools (SearchComponentTool, DiscoverAgentTool) to find existing capabilities.
-# 4. *If* needed (complex task, no single component):
-#    - May request a design from ArchitectZero (via RequestAgentTool).
-#    - Uses GenerateWorkflowTool internally to create YAML from the design.
-#    - Uses ProcessWorkflowTool internally to parse YAML into an execution plan.
-# 5. Executes the plan (or direct action if simple):
-#    - Uses CreateComponentTool / EvolveComponentTool for DEFINE steps.
-#    - Uses AgentFactory internally during creation.
-#    - Uses RequestAgentTool for EXECUTE steps (calling other agents/tools via the Agent Bus).
-# 6. Returns the final result specified by the plan's RETURN step (or direct execution result).
-# ----------------------------------------------------
-
+# Execute the task via the SystemAgent
 final_result_obj = await system_agent.run(high_level_prompt)
-# >> final_result_obj ideally contains the final processed JSON data
-final_json_result = extract_json_from_response(final_result_obj.result.text)
 
+# Process the final result (assuming extract_json_from_response is defined elsewhere)
+# final_json_result = extract_json_from_response(final_result_obj.result.text)
+# print(final_json_result)
 ```
+
+***SystemAgent Internal Process (Conceptual):***
+
+When the `SystemAgent` receives the `high_level_prompt`, its internal ReAct loop orchestrates the following:
+
+1.  **Receives** the high-level goal and input data.
+2.  **Analyzes** the goal using its reasoning capabilities.
+3.  **Uses Tools** (`SearchComponentTool`, `DiscoverAgentTool`) to find existing capabilities suitable for the task.
+4.  **Decides If Workflow Needed:** If the task is complex or no single component suffices, it determines a multi-step plan is necessary.
+    *   *(Optional)* It might internally request a detailed design blueprint from `ArchitectZero` using `RequestAgentTool`.
+    *   It uses `GenerateWorkflowTool` internally to create an executable YAML workflow based on the design or its analysis.
+    *   It uses `ProcessWorkflowTool` internally to parse the YAML into a step-by-step execution plan.
+5.  **Executes the Plan:** It iterates through the plan, using appropriate tools for each step:
+    *   `CreateComponentTool` or `EvolveComponentTool` for `DEFINE` steps.
+    *   Internal `AgentFactory` calls during component creation.
+    *   `RequestAgentTool` for `EXECUTE` steps, invoking other agents/tools via the `SmartAgentBus`.
+6.  **Returns Result:** It returns the final result specified by the plan's `RETURN` step (or the result of a direct action if no complex workflow was needed).
+
+*(This internal complexity is hidden from the user interacting with the `SystemAgent`)*.
 
 ### 2. Solution Design (`ArchitectZero`)
 
@@ -237,3 +246,70 @@ This project is licensed under the [Apache License Version 2.0](LICENSE).
 *   [OpenAI Agents SDK](https://platform.openai.com/docs/assistants/overview): Integrated via providers for multi-framework support.
 *   [ChromaDB](https://www.trychroma.com/): Powers semantic search capabilities in the `SmartLibrary` and `SmartAgentBus`.
 *   Original Concept Contributors: [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro)
+
+
+
+
+
+
+You are correct! That block won't render nicely on GitHub because the conceptual comments are mixed inside the ````python` block.
+
+Let's fix the formatting in the `README.md` by separating the executable Python example from the conceptual explanation of the internal process.
+
+**Replace this section in your `README.md`:**
+
+```markdown
+### 1. Agent-Centric Orchestration (`SystemAgent`)
+
+The `SystemAgent` acts as the central nervous system and primary entry point. It's a `ReActAgent` equipped with specialized tools to manage the entire ecosystem. It receives high-level goals and autonomously plans and executes the necessary steps.
+
+```python
+# Example: Prompting the SystemAgent with a high-level goal
+high_level_prompt = """
+**Goal:** Accurately process the provided invoice document and return structured, verified data.
+
+**Functional Requirements:**
+- Extract key fields: Invoice #, Date, Vendor, Bill To, Line Items (Description, Quantity, Unit Price, Item Total), Subtotal, Tax Amount, Shipping (if present), Total Due, Payment Terms, Due Date.
+- Verify calculations: The sum of line item totals should match the Subtotal. The sum of Subtotal, Tax Amount, and Shipping (if present) must match the Total Due. Report any discrepancies.
+
+**Non-Functional Requirements:**
+- High accuracy is critical.
+- Output must be a single, valid JSON object containing the extracted data and a 'verification' section (status: 'ok'/'failed', discrepancies: list).
+
+**Input Data:**
+```
+{invoice_content} # Provided invoice text
+```
+
+**Action:** Achieve this goal using the best approach available. Create, evolve, or reuse components as needed. Return ONLY the final JSON result.
+"""
+
+# --- SystemAgent Internal Process (Conceptual) ---
+# 1. Receives the high-level goal and input data.
+# 2. Analyzes the goal using its ReAct loop.
+# 3. Uses tools (SearchComponentTool, DiscoverAgentTool) to find existing capabilities.
+# 4. *If* needed (complex task, no single component):
+#    - May request a design from ArchitectZero (via RequestAgentTool).
+#    - Uses GenerateWorkflowTool internally to create YAML from the design.
+#    - Uses ProcessWorkflowTool internally to parse YAML into an execution plan.
+# 5. Executes the plan (or direct action if simple):
+#    - Uses CreateComponentTool / EvolveComponentTool for DEFINE steps.
+#    - Uses AgentFactory internally during creation.
+#    - Uses RequestAgentTool for EXECUTE steps (calling other agents/tools via the Agent Bus).
+# 6. Returns the final result specified by the plan's RETURN step (or direct execution result).
+# ----------------------------------------------------
+
+final_result_obj = await system_agent.run(high_level_prompt)
+# >> final_result_obj ideally contains the final processed JSON data
+final_json_result = extract_json_from_response(final_result_obj.result.text)
+
+```
+```
+
+**With this corrected version:**
+
+```markdown
+
+```
+
+This revised structure clearly separates the Python code example from the explanation of the internal conceptual process, making it much more readable on GitHub.
