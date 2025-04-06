@@ -54,9 +54,9 @@ high_level_prompt = f"""
 - Output must be a single, valid JSON object containing the extracted data and a 'verification' section (status: 'ok'/'failed', discrepancies: list).
 
 **Input Data:**
-```
+
 {invoice_content}
-```
+
 
 **Action:** Achieve this goal using the best approach available. Create, evolve, or reuse components as needed. Return ONLY the final JSON result.
 """

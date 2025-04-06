@@ -44,8 +44,8 @@ graph TD
         SA --> |Uses Internally| WT["Workflow Tools"]
         SA --> |Uses (Optional)| FST["Framework-Specific Tools"]
 
-        SLT -->|Interacts| SL[("Smart Library")]
-        SBT -->|Interacts| SB[("Smart Agent Bus")]
+        SLT -->|Interacts| SL["Smart Library"]
+        SBT -->|Interacts| SB["Smart Agent Bus"]
         WT ---|Generates/Parses| WorkflowPlan["Internal Workflow Plan"]
         FST -->|Interacts| ExternalSDKs["External Agent SDKs"]
 
@@ -54,8 +54,8 @@ graph TD
         SA --> |Executes Steps| FST
     end
 
-     subgraph External Interaction (Optional/Internal)
-         SA --> |Requests via Bus| ArchZ[("ArchitectZero (Optional Design)")]
+     subgraph "External Interaction (Optional/Internal)"
+         SA --> |Requests via Bus| ArchZ["ArchitectZero (Optional Design)"]
          SB --> ArchZ
          ArchZ --> SB
          SB --> SA
@@ -124,7 +124,7 @@ graph TD
     SABI -->|Monitors| CB["Circuit Breakers"]
     SABI -->|Logs to| ExecLogs["Execution Logs (System & Data)"]
 
-    subgraph Data Bus Communication (request_capability)
+    subgraph "Data Bus Communication (request_capability)"
         direction LR
         Requester --> SABI
         SABI -->|Finds Provider| Reg
@@ -282,9 +282,9 @@ Components can be improved or adapted, typically orchestrated by the `SystemAgen
 graph TD
     Start --> Need{Need for Evolution Identified}
     Need -->|Invoke via SystemAgent| ECT["EvolveComponentTool.run(parent_id, changes, strategy)"]
-    ECT -->|Gets Original| SL[("Smart Library")]
-    ECT -->|Uses| LLM[("LLM Service")]
-    ECT -->|Applies| FW[("Firmware Rules")]
+    ECT -->|Gets Original| SL["Smart Library"]
+    ECT -->|Uses| LLM["LLM Service"]
+    ECT -->|Applies| FW["Firmware Rules"]
     LLM -->|Generates| NewCode["New Code Snippet"]
     ECT -->|Calls| SLevolve["SmartLibrary.evolve_record(...)"]
     SLevolve -->|Creates| NewRecord["New Component Record (v2)"]
