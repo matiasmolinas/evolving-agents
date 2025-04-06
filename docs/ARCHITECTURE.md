@@ -42,7 +42,7 @@ graph TD
         SA --> |Uses| SLT["SmartLibrary Tools"]
         SA --> |Uses| SBT["AgentBus Tools"]
         SA --> |Uses Internally| WT["Workflow Tools"]
-        SA --> |Uses (Optional)| FST["Framework-Specific Tools"]
+        SA --> |Uses Optional| FST["Framework-Specific Tools"]
 
         SLT -->|Interacts| SL["Smart Library"]
         SBT -->|Interacts| SB["Smart Agent Bus"]
