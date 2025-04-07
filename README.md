@@ -6,6 +6,8 @@
 
 **Build complex, adaptive AI agent systems that manage themselves. Define high-level goals, and let the toolkit orchestrate the discovery, creation, execution, and even evolution of the agents and tools needed to achieve them.**
 
+![Evolving Agents Toolkit](./eat.png)
+
 EAT is a Python toolkit designed for building sophisticated, multi-agent applications where autonomy, adaptability, and robust orchestration are key. Move beyond simple agent chains and create ecosystems that can dynamically respond to requirements and improve over time, all within defined governance boundaries.
 
 ---
