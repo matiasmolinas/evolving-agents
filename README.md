@@ -53,6 +53,7 @@ graph TD
     Providers -- Creates/Manages --> Ecosystem
 
     %% Optional Design Interaction (Often Internal to SystemAgent)
+    %% MODIFIED LINE BELOW: Removed the trailing pipe |
     SA -.->|Optional: Requests Design (via Bus)| ArchZ
 
     %% Final Result Flow
