@@ -1,222 +1,97 @@
-# Evolving Agents Toolkit
+# Evolving Agents Toolkit (EAT)
 
-**Build intelligent AI agent ecosystems that orchestrate complex tasks based on high-level goals.**
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![GitHub Stars](https://img.shields.io/github/stars/matiasmolinas/evolving-agents)](https://github.com/matiasmolinas/evolving-agents/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/matiasmolinas/evolving-agents)](https://github.com/matiasmolinas/evolving-agents/network)
 
-[![License: Apache v2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-<!-- Add other badges like build status, PyPI version etc. here -->
+**Build complex, adaptive AI agent systems that manage themselves. Define high-level goals, and let the toolkit orchestrate the discovery, creation, execution, and even evolution of the agents and tools needed to achieve them.**
 
-This toolkit provides a robust, production-grade framework for building autonomous AI agents and multi-agent systems. It uniquely focuses on enabling agents to understand requirements, design solutions (potentially using specialized design agents like `ArchitectZero`), discover capabilities, evolve components, and **orchestrate complex task execution based on high-level goals**, all while operating within defined governance boundaries.
+EAT is a Python toolkit designed for building sophisticated, multi-agent applications where autonomy, adaptability, and robust orchestration are key. Move beyond simple agent chains and create ecosystems that can dynamically respond to requirements and improve over time, all within defined governance boundaries.
 
-The core philosophy is **agent-centric**: the system itself is managed and orchestrated by specialized agents (like the `SystemAgent`), which leverage tools to interact with underlying services and manage other components.
+---
 
-## Core Features
+```mermaid
+graph TD
+    User["User / Caller"] -- High-Level Goal --> SA[("SystemAgent\n(Central Orchestrator)")]:::agent
 
-*   **Goal-Oriented Orchestration:** A central `SystemAgent` acts as the primary entry point, taking high-level goals and autonomously determining the steps needed, orchestrating component creation, communication, and execution.
-*   **Intelligent Solution Design (Optional):** Agents like `ArchitectZero` can analyze requirements and design detailed multi-component solutions, providing blueprints *for the SystemAgent*.
-*   **Internal Workflow Management:** For complex tasks, the `SystemAgent` can *internally* generate, process, and execute multi-step workflow plans using specialized tools (`GenerateWorkflowTool`, `ProcessWorkflowTool`), abstracting this complexity from the caller.
-*   **Semantic Capability Discovery:** The `SmartAgentBus` allows agents to find and utilize capabilities based on natural language descriptions, enabling dynamic service discovery and routing via a logical "Data Bus".
-*   **Ecosystem Management:** The `SmartAgentBus` also provides a logical "System Bus" for managing agent registration, health, and discovery.
-*   **Intelligent Component Management:** The `SmartLibrary` provides persistent storage, semantic search (via vector embeddings), versioning, and evolution capabilities for agents and tools.
-*   **Adaptive Evolution:** Components can be evolved based on requirements, feedback, or performance data using various strategies (standard, conservative, aggressive, domain adaptation), orchestrated by the `SystemAgent`.
-*   **Multi-Framework Support:** Seamlessly integrate agents built with different frameworks (e.g., BeeAI, OpenAI Agents SDK) through a flexible provider architecture.
-*   **Governance & Safety:** Built-in `Firmware` injects rules, and guardrails (like the `OpenAIGuardrailsAdapter`) ensure safe and compliant operation.
-*   **Self-Building & Self-Improving Potential:** The architecture allows agents (like `ArchitectZero` and `SystemAgent`) to collaboratively design and implement *new* agent systems or *evolve existing components* (including framework components like the `SmartLibrary` itself) based on user needs or performance analysis.
+    subgraph Core Infrastructure & Services
+        direction LR
+        SL["Smart Library\n(Storage, Search, Versioning)"]:::service
+        SB["Smart Agent Bus\n(Discovery, Routing, Health - System/Data Bus)"]:::service
+        LLM["LLM Service\n(Reasoning, Embeddings)"]:::service
+        FW["Firmware\n(Governance Rules)"]:::service
+        Providers["Providers\n(Agent/Tool Factories)"]:::infra
+        VDB[("Vector DB\n(Semantic Search)")]:::infra
+    end
 
-## Why This Toolkit?
+    subgraph Optional Components
+        direction LR
+         ArchZ["ArchitectZero\n(Solution Design)"]:::agent
+    end
 
-While many frameworks focus on building individual agents, the Evolving Agents Toolkit focuses on creating **intelligent, self-improving agent ecosystems capable of handling complex tasks autonomously.** Key differentiators include:
+    %% Main Control Flow
+    SA -- Uses --> Tools["SystemAgent Tools\n(Search, Create, Evolve, Request, Workflow...)"]:::tool
+    SA -- Uses --> LLM
 
-1.  **High-Level Goal Execution:** Interact with the system via goals given to the `SystemAgent`, which then handles the "how" (planning, component management, execution).
-2.  **Internal Orchestration:** Complex workflows (design -> generate -> process -> execute) are managed *internally* by the `SystemAgent`, abstracting the mechanics.
-3.  **Dual-Bus Architecture:** The `SmartAgentBus` clearly separates **System Bus** operations (management, registration, discovery) from **Data Bus** operations (capability requests, inter-agent communication), providing clarity and control.
-4.  **Deep Component Lifecycle Management:** Beyond creation, the `SmartLibrary` and evolution tools support searching, reusing, versioning, and adapting components intelligently.
-5.  **Agent-Driven Ecosystem:** The `SystemAgent` isn't just a script runner; it's a `ReActAgent` using its own tools to manage the entire process, including complex workflow execution and component evolution.
-6.  **True Multi-Framework Integration:** Provides abstractions (`Providers`, `AgentFactory`) to treat agents from different SDKs as first-class citizens.
-7.  **Self-Improvement Capability:** The system is designed to analyze and potentially improve its own components, as demonstrated in the `evolve_smart_library.py` example.
+    %% Tool Interactions with Services
+    Tools -- Manages Components --> SL
+    Tools -- Registers/Requests via --> SB
+    Tools -- Uses for Creation --> Providers
+    Tools -- Influenced By --> FW
 
-## Key Concepts
+    %% Internal Service Dependencies (Simplified View)
+    SL -- Uses --> VDB
+    SB -- Uses --> VDB
+    SL -- Uses --> LLM
+    SB -- Uses --> LLM
 
-### 1. Agent-Centric Orchestration (`SystemAgent`)
+    %% Bus Interaction with Ecosystem
+    SB -- Routes Request (Data Bus) --> Ecosystem["Agents / Tools\n(Managed Ecosystem)"]
+    SB -- Manages (System Bus) --> Ecosystem
 
-The `SystemAgent` acts as the central nervous system and primary entry point. It's a `ReActAgent` equipped with specialized tools to manage the entire ecosystem. It receives high-level goals and autonomously plans and executes the necessary steps.
+    %% Agent/Tool Creation/Management
+    Providers -- Creates/Manages --> Ecosystem
 
-**Example: Prompting the `SystemAgent` with a high-level goal**
-```python
-# Define the high-level task for the System Agent
-invoice_content = "..." # Load or define the invoice text here
+    %% Optional Design Interaction (Often Internal to SystemAgent)
+    SA -.->|Optional: Requests Design (via Bus)| ArchZ
 
-high_level_prompt = f"""
-**Goal:** Accurately process the provided invoice document and return structured, verified data.
+    %% Final Result Flow
+    SA -- Final Result --> User
 
-**Functional Requirements:**
-- Extract key fields: Invoice #, Date, Vendor, Bill To, Line Items (Description, Quantity, Unit Price, Item Total), Subtotal, Tax Amount, Shipping (if present), Total Due, Payment Terms, Due Date.
-- Verify calculations: The sum of line item totals should match the Subtotal. The sum of Subtotal, Tax Amount, and Shipping (if present) must match the Total Due. Report any discrepancies.
+    %% Define styles for clarity
+    classDef agent fill:#9cf,stroke:#333,stroke-width:2px;
+    classDef service fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef tool fill:#ccf,stroke:#333,stroke-width:2px;
+    classDef infra fill:#eee,stroke:#666,stroke-width:1px,color:#333;
 
-**Non-Functional Requirements:**
-- High accuracy is critical.
-- Output must be a single, valid JSON object containing the extracted data and a 'verification' section (status: 'ok'/'failed', discrepancies: list).
-
-**Input Data:**
-
-{invoice_content}
-
-
-**Action:** Achieve this goal using the best approach available. Create, evolve, or reuse components as needed. Return ONLY the final JSON result.
-"""
-
-# Execute the task via the SystemAgent
-# Assume system_agent is initialized and available
-# final_result_obj = await system_agent.run(high_level_prompt)
-
-# Process the final result (assuming extract_json_from_response is defined elsewhere)
-# final_json_result = extract_json_from_response(final_result_obj.result.text)
-# print(final_json_result)
+    %% Highlight SystemAgent
+    style SA fill:#69c,stroke:#000,stroke-width:3px,color:#fff;
 ```
 
-***SystemAgent Internal Process (Conceptual):***
+---
 
-When the `SystemAgent` receives the `high_level_prompt`, its internal ReAct loop orchestrates the following:
+## Why Evolving Agents Toolkit?
 
-1.  **Receives** the high-level goal and input data.
-2.  **Analyzes** the goal using its reasoning capabilities.
-3.  **Uses Tools** (`SearchComponentTool`, `DiscoverAgentTool`) to find existing capabilities suitable for the task in the `SmartLibrary` or on the `SmartAgentBus`.
-4.  **Decides If Workflow Needed:** If the task is complex or no single component suffices, it determines a multi-step plan is necessary.
-    *   *(Optional)* It might internally request a detailed *solution design* blueprint from `ArchitectZero` using `RequestAgentTool` via the **Data Bus**.
-    *   It uses `GenerateWorkflowTool` internally to create an executable YAML workflow string based on the design or its analysis.
-    *   It uses `ProcessWorkflowTool` internally to parse the YAML into a structured, step-by-step *execution plan*.
-5.  **Executes the Plan:** It iterates through the plan, using appropriate tools for each step:
-    *   `CreateComponentTool` or `EvolveComponentTool` for `DEFINE` steps (interacting with `SmartLibrary`).
-    *   Internal `AgentFactory` calls during component creation.
-    *   `RequestAgentTool` for `EXECUTE` steps, invoking other agents/tools via the **Data Bus**.
-6.  **Returns Result:** It returns the final result specified by the plan's `RETURN` step (or the result of a direct action if no complex workflow was needed).
+Many frameworks help build individual agents. EAT focuses on the **ecosystem**:
 
-*(This internal complexity is hidden from the user interacting with the `SystemAgent`)*.
+*   **🎯 Goal-Oriented Orchestration:** Interact via high-level goals given to a central `SystemAgent`. It handles the complex "how" – planning, finding/creating components, executing tasks, and managing internal workflows. You don't micromanage; you state the objective.
+*   **🧠 Intelligent Component Management & Discovery:** A `SmartLibrary` stores agents and tools, enabling semantic search (find tools based on *what they do*) and versioning. The `SmartAgentBus` (with its distinct System and Data buses) allows agents to discover and use capabilities across the system dynamically.
+*   **🌱 Adaptive Evolution:** Agents and tools aren't static. EAT provides mechanisms for the `SystemAgent` to evolve components based on new requirements, feedback, or performance analysis using defined strategies.
+*   **🧩 Modular & Extensible:** Seamlessly integrate agents built with different frameworks (e.g., BeeAI, OpenAI Agents SDK) via a flexible provider system. Define clear operational rules and safety guardrails using `Firmware`.
+*   **🤖 Self-Management Potential:** The core architecture allows the system agents themselves (like `SystemAgent` and `ArchitectZero`) to collaboratively design, implement, manage, and potentially improve the ecosystem, including the toolkit's own components (see `examples/self_improvement/evolve_smart_library.py`).
 
-### 2. Solution Design (`ArchitectZero`)
+**In short: If you need to build agent systems that are more than the sum of their parts – systems that can coordinate, adapt, and manage complexity autonomously – EAT provides the structure and capabilities.**
 
-`ArchitectZero` is a specialized agent, typically invoked *internally by the SystemAgent via the Agent Bus* when a complex task requires a detailed plan before execution.
+## Key Features
 
-```python
-# Conceptual: SystemAgent requesting design from ArchitectZero via AgentBus
-# This happens INTERNALLY within the SystemAgent's ReAct loop if needed.
-# The SystemAgent uses RequestAgentTool to make this request.
-design_request_prompt_for_sys_agent = f"""
-Use RequestAgentTool to ask ArchitectZero to design an automated customer support system.
-Requirements: Handle FAQs, escalate complex issues, use sentiment analysis.
-Input for ArchitectZero: {{ "requirements": "Design customer support system..." }}
-"""
-# system_agent_internal_response = await system_agent.run(design_request_prompt_for_sys_agent)
-# solution_design_json = extract_json_from_response(...)
-# >> SystemAgent now has the design blueprint (JSON) to proceed internally.
-```
-*Note: End users typically interact with the `SystemAgent` directly with their goal, not `ArchitectZero`.*
-
-### 3. Smart Library (Component Management & Discovery)
-
-Stores agents, tools, and firmware definitions. Enables semantic search (using ChromaDB by default) and lifecycle management.
-
-```python
-# Semantic component discovery (often used internally by SystemAgent)
-# Assume smart_library instance is available
-similar_tools = await smart_library.semantic_search(
-    query="Tool that can validate financial calculations in documents",
-    record_type="TOOL",
-    domain="finance",
-    threshold=0.6
-)
-
-# Evolve an existing component (often invoked by SystemAgent's EvolveComponentTool)
-evolved_record = await smart_library.evolve_record(
-    parent_id="tool_id_abc",
-    new_code_snippet="# New improved Python code...",
-    description="Enhanced version with better error handling"
-)
-```
-
-### 4. Smart Agent Bus (Dual Bus: System & Data)
-
-Manages inter-agent communication and capability discovery/execution via a logical **Dual Bus** architecture.
-
-*   **System Bus:** Handles management operations like registration (`register_agent`), discovery (`discover_agents`), health monitoring, and status checks. Focuses on managing the agent ecosystem.
-*   **Data Bus:** Handles agent-to-agent communication and task execution via capability requests (`request_capability`). This is the primary channel for agents to interact based on function.
-
-```python
-# Assume agent_bus instance is available
-
-# Register a component (System Bus operation, often via SystemAgent's RegisterAgentTool)
-await agent_bus.register_agent(
-    name="SentimentAnalyzerTool_v2",
-    agent_type="TOOL",
-    description="Analyzes text sentiment with high accuracy",
-    capabilities=[{ "id": "sentiment_analysis", "name": "Sentiment Analysis", "description": "...", "confidence": 0.95 }],
-    agent_instance=sentiment_tool_instance # Pass the actual tool instance if available
-)
-
-# Request a service based on capability (Data Bus operation, often via SystemAgent's RequestAgentTool)
-result_payload = await agent_bus.request_capability(
-    capability="sentiment_analysis",
-    content={"text": "This service is amazing!"},
-    min_confidence=0.8
-)
-# >> result_payload might contain: {'status': 'success', 'agent_id': '...', 'agent_name': 'SentimentAnalyzerTool_v2', 'content': {'sentiment': 'positive', 'score': 0.95}, ...}
-```
-
-### 5. Workflow Lifecycle (Managed Internally by `SystemAgent`)
-
-Complex tasks are handled via a structured workflow lifecycle orchestrated *internally* by the `SystemAgent`.
-
-1.  **Goal Intake:** `SystemAgent` receives a high-level goal from the user/caller.
-2.  **Analysis & Planning (Internal):** `SystemAgent` analyzes the goal and checks if existing components suffice using `SearchComponentTool` or `DiscoverAgentTool`.
-3.  **Design Query (Optional/Internal):** If needed, `SystemAgent` uses `RequestAgentTool` to ask `ArchitectZero` (via the Agent Bus) for a *solution design* (JSON).
-4.  **Workflow Generation (Internal):** If a multi-step plan is required, `SystemAgent` uses its `GenerateWorkflowTool` to translate the design (or its internal analysis) into an executable YAML workflow string.
-5.  **Plan Processing (Internal):** `SystemAgent` uses its `ProcessWorkflowTool` to parse the YAML, validate, substitute parameters, and produce a structured *execution plan*.
-6.  **Plan Execution (Internal):** `SystemAgent`'s ReAct loop iterates through the plan, using its *other* tools (`CreateComponentTool`, `EvolveComponentTool`, `RequestAgentTool`, etc.) to perform the action defined in each step (`DEFINE`, `CREATE`, `EXECUTE`).
-7.  **Result Return:** `SystemAgent` returns the final result to the caller.
-
-*The external caller interacts only at Step 1 and receives the result at Step 7, unaware of the internal workflow mechanics.*
-
-### 6. Component Evolution
-
-Existing components can be adapted or improved using the `EvolveComponentTool` (typically invoked internally by `SystemAgent`).
-
-```python
-# Conceptual Example (within the SystemAgent's internal operation)
-# The SystemAgent formulates this prompt to use its EvolveComponentTool
-evolve_prompt = f"""
-Use EvolveComponentTool to enhance agent 'id_123'.
-Changes needed: Add support for processing PDF files directly.
-Strategy: standard
-"""
-# evolve_result = await system_agent.run(evolve_prompt)
-# >> evolve_result indicates success and provides ID of the new evolved agent version.
-```
-
-### 7. Multi-Framework Support
-
-Integrate agents/tools from different SDKs via `Providers` managed by the `AgentFactory` (used internally by tools like `CreateComponentTool`).
-
-```python
-# Example: Creating agents from different frameworks via AgentFactory
-# (AgentFactory is usually used internally by tools like CreateComponentTool)
-# Assume agent_factory instance is available
-# Assume library records bee_record and openai_record are retrieved
-
-# if bee_record:
-#     bee_agent_instance = await agent_factory.create_agent(bee_record)
-#     # >> Uses BeeAIProvider internally
-
-# if openai_record:
-#     openai_agent_instance = await agent_factory.create_agent(openai_record)
-#     # >> Uses OpenAIAgentsProvider internally
-```
-
-### 8. Governance & Firmware
-
-Safety and operational rules are embedded via `Firmware`.
-
-*   `Firmware` provides base rules + domain-specific constraints.
-*   Prompts used by `CreateComponentTool` / `EvolveComponentTool` include firmware content.
-*   `OpenAIGuardrailsAdapter` converts firmware rules into runtime checks for OpenAI agents.
+*   **`SystemAgent` Orchestrator:** A central ReAct agent (using BeeAI) that acts as the primary entry point, using specialized tools to manage the entire lifecycle based on high-level goals.
+*   **`SmartLibrary`:** Persistent storage with semantic search (vector embeddings via ChromaDB), versioning, and evolution capabilities for agents & tools.
+*   **`SmartAgentBus` (Dual Bus):** Manages agent registration, discovery, health (System Bus), and capability-based requests/communication (Data Bus).
+*   **Internal Workflow Engine:** The `SystemAgent` can generate and execute multi-step YAML workflows internally for complex goals, abstracting this complexity.
+*   **Component Evolution:** Adapt agents/tools using different strategies (standard, conservative, aggressive, domain adaptation) orchestrated by the `SystemAgent`.
+*   **Multi-Framework Support:** Pluggable provider architecture (`BeeAIProvider`, `OpenAIAgentsProvider`) managed by `AgentFactory` and `ToolFactory`.
+*   **Governance:** Define operational rules and safety guardrails via `Firmware` and adapters (`OpenAIGuardrailsAdapter`).
+*   **(Optional) `ArchitectZero`:** A specialized agent (typically called *internally* by `SystemAgent`) to design complex multi-component solutions from requirements.
 
 ## Installation
 
@@ -232,62 +107,79 @@ cd evolving-agents
 # Install dependencies
 pip install -r requirements.txt
 
-# Install the package in editable mode
+# Install the package in editable mode (allows easy development)
 pip install -e .
 ```
 
 ## Quick Start
 
-1.  **Set up Environment:**
-    *   Copy `.env.example` to `.env`.
-    *   Add your `OPENAI_API_KEY` to the `.env` file.
-    *   Configure other settings like `LLM_MODEL` if needed.
+**1. Setup Environment:**
 
-2.  **Run the Comprehensive Demo:**
-    This demo initializes the framework and gives the `SystemAgent` a high-level goal to process an invoice, requiring design, component creation/evolution, and execution orchestrated internally.
+```bash
+# Copy the example environment file
+cp .env.example .env
 
-    ```bash
-    python examples/invoice_processing/architect_zero_comprehensive_demo.py
-    ```
+# Edit the .env file and add your API keys (e.g., OPENAI_API_KEY)
+# nano .env  OR use your preferred editor
+```
+*Configure other settings like `LLM_MODEL` if needed.*
 
-3.  **Explore Output:** Check the generated files:
-    *   `final_processing_output.json`: Contains the final structured result from the SystemAgent executing the task, along with the agent's full output log for debugging.
-    *   `smart_library_demo.json`: The state of the component library after the run (shows created/evolved components).
-    *   `smart_agent_bus_demo.json`: The agent registry state.
-    *   `agent_bus_logs_demo.json`: Logs of agent interactions via the bus.
+**2. Run the Comprehensive Demo:**
 
-## Example Applications
+This is the best way to see the full orchestration in action. The `SystemAgent` is given a high-level goal to process an invoice. Internally, it orchestrates component discovery, potential creation/evolution (using its tools), and execution.
 
-Explore the `examples/` directory:
+```bash
+python examples/invoice_processing/architect_zero_comprehensive_demo.py
+```
 
-*   **`invoice_processing/architect_zero_comprehensive_demo.py`**: The flagship demo showing the `SystemAgent` handling a complex invoice processing task based on a high-level goal, orchestrating design, generation, and execution internally.
-*   **`agent_evolution/`**: Demonstrates creating and evolving agents/tools using both BeeAI and OpenAI frameworks (`beeai_agent_evolution_demo.py`, `openai_agent_evolution_demo.py`).
-*   **`forms/run_conversational_form.py`**: Shows how the system can design and process conversational forms.
-*   **`autocomplete/run_autocomplete_system.py`**: Illustrates designing a context-aware autocomplete system.
-*   **`smart_agent_bus/dual_bus_demo.py`**: Clearly demonstrates the separation of **System Bus** (registration, discovery) and **Data Bus** (capability requests) operations.
-*   **`self_improvement/evolve_smart_library.py`**: Showcases the toolkit's ability to analyze and **evolve its own core components**, specifically enhancing the `SmartLibrary`'s semantic search.
+**3. Explore Output:**
 
-## Architecture Overview
+After the demo runs, check the generated files in the main directory:
 
-The toolkit employs an **agent-centric architecture**. The `SystemAgent` (a ReAct agent) is the main orchestrator, taking high-level goals. It leverages specialized tools to interact with core components like the `SmartLibrary` (for component persistence and semantic search via ChromaDB) and the `SmartAgentBus` (for capability-based routing and system management using a dual-bus model). For complex tasks, it internally manages the full workflow lifecycle, potentially requesting designs from agents like `ArchitectZero` and using internal tools to generate, process, and execute plans. Multi-framework support is achieved through `Providers` and `Adapters`. Dependencies are managed via a `DependencyContainer`.
+*   `final_processing_output.json`: Contains the final structured JSON result from the `SystemAgent`, along with its detailed thought process log.
+*   `smart_library_demo.json`: The state of the component library after the run (shows created/evolved components).
+*   `smart_agent_bus_demo.json`: The state of the agent registry on the bus.
+*   `agent_bus_logs_demo.json`: Logs of agent interactions via the System and Data buses.
 
-For a detailed breakdown, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+*(**Note:** The comprehensive demo is currently the primary quick start. Simpler, focused examples may be added in the future.)*
 
-## Development Features
+## Dive Deeper
 
-*   **LLM Caching:** Reduces API costs during development by caching completions and embeddings (`.llm_cache_demo/`).
-*   **Vector Search:** Integrated ChromaDB for powerful semantic discovery of components.
-*   **Modular Design:** Core components are decoupled, facilitating extension and testing.
-*   **Dependency Injection:** Simplifies component wiring and initialization via `DependencyContainer`.
-*   **Clear Logging:** Provides insights into agent thinking and component interactions via bus logs and standard logging.
+*   **Architecture Overview:** Understand the core components and how they interact in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+*   **Key Concepts:** Learn about the `SystemAgent`, `SmartLibrary`, `SmartAgentBus`, `Evolution`, and `Workflows` in detail. *(Action Required: Create `docs/CONCEPTS.md` or link to individual `TECH-REF` files)*
+*   **Technical Reference:** Explore detailed descriptions of core components:
+    *   [SmartLibrary](./docs/TECH-REF_SMARTLIBRARY.md) *(Action Required: Create)*
+    *   [SmartAgentBus](./docs/TECH-REF_SMARTAGENTBUS.md) *(Action Required: Create)*
+    *   [SystemAgent & Orchestration](./docs/TECH-REF_SYSTEMAGENT.md) *(Action Required: Create)*
+    *   [Component Evolution](./docs/TECH-REF_EVOLUTION.md) *(Action Required: Create)*
+    *   [Providers & Multi-Framework](./docs/TECH-REF_PROVIDERS.md) *(Action Required: Create)*
+    *   [Governance & Firmware](./docs/TECH-REF_GOVERNANCE.md) *(Action Required: Create)*
+*   **Examples:** Explore the `examples/` directory for various use cases:
+    *   `invoice_processing/`: The flagship demo.
+    *   `agent_evolution/`: Creating and evolving agents/tools with BeeAI & OpenAI.
+    *   `smart_agent_bus/`: Demonstrating the Dual Bus operations.
+    *   `self_improvement/`: Evolving the `SmartLibrary` itself.
+    *   *And more...*
+*   **Contributing:** We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) *(Action Required: Create)*.
+
+## Roadmap / Future Work
+
+*   **Smart Context & Memory:** Implement a `SmartContext` providing intelligent key-value storage and message history, managed by a `SmartMemory` component.
+*   **Smart Cache:** Introduce `SmartCache` that selectively caches successful LLM calls (e.g., temp=1) for agent/tool improvement.
+*   **Enhanced Evolution:** Leverage `SmartContext`, `SmartMemory`, and `SmartCache` to further automate and improve agent/tool evolution, potentially including LLM fine-tuning feedback loops.
+*   **Observability:** Improve logging and tracing across components for better debugging and monitoring.
+*   **More Providers:** Add support for other agent frameworks (e.g., LangChain, AutoGen).
+*   **UI Integration:** Explore options for a basic UI for monitoring and managing the ecosystem.
+*   **Testing:** Expand unit and integration test coverage.
 
 ## License
 
-This project is licensed under the [Apache License Version 2.0](LICENSE).
+This project is licensed under the Apache License Version 2.0. See the [LICENSE](./LICENSE) file for details.
 
 ## Acknowledgements
 
-*   [BeeAI Framework](https://github.com/i-am-bee/beeai-framework): Used for the core `ReActAgent` implementation and tool structures.
-*   [OpenAI Agents SDK](https://platform.openai.com/docs/assistants/overview): Integrated via providers for multi-framework support.
-*   [ChromaDB](https://www.trychroma.com/): Powers semantic search capabilities in the `SmartLibrary` and `SmartAgentBus`.
-*   Original Concept Contributors: [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro)
+*   Relies on concepts and components from [BeeAI Framework](https://github.com/i-am-bee/beeai-framework).
+*   Integrates with [OpenAI Agents SDK](https://platform.openai.com/docs/assistants/overview) via providers.
+*   Uses [ChromaDB](https://www.trychroma.com/) for semantic search.
+*   Uses [LiteLLM](https://github.com/BerriAI/litellm) (via BeeAI) for broader LLM support.
+*   Original Concept Contributors: [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro).
