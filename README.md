@@ -198,7 +198,7 @@ This project is licensed under the Apache License Version 2.0. See the [LICENSE]
 ## Acknowledgements
 
 *   Leverages concepts and the core ReAct agent from the [BeeAI Framework](https://github.com/i-am-bee/beeai-framework).
-*   Integrates with the [OpenAI Assistants SDK (now `openai-agents`)](https://platform.openai.com/docs/assistants/overview) via providers and adapters.
+*   Integrates with the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) via providers and adapters.
 *   Uses [ChromaDB](https://www.trychroma.com/) for vector storage and semantic search within `SmartLibrary` and `SmartAgentBus`.
 *   Uses [LiteLLM](https://github.com/BerriAI/litellm) (via BeeAI) for broader LLM compatibility.
 *   Original Concept Contributors: [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro).
