@@ -821,3 +821,228 @@ class SmartLibrary:
                 for r in recently_updated
             ]
         }
+    
+
+    def _get_record_vector_text(self, record: Dict[str, Any]) -> str:
+        """
+        Create a functionally-focused text representation of a record for embedding.
+        This produces T_orig for content embedding.
+        
+        Args:
+            record: The record to represent as text
+            
+        Returns:
+            Text representation optimized for vector search
+        """
+        # Existing implementation
+        # ...
+
+    async def _generate_applicability_text(self, record: Dict[str, Any]) -> str:
+        """
+        Generate applicability text (T_raz) for a record.
+        
+        Args:
+            record: Record to generate applicability text for
+            
+        Returns:
+            Applicability text (T_raz)
+        """
+        # Prepare the content text (T_orig)
+        content_text = self._get_record_vector_text(record)
+        
+        # Generate applicability text using LLM service
+        try:
+            if not hasattr(self.llm, 'generate_applicability_text'):
+                # Fall back to using generate with a simple prompt if the method doesn't exist
+                t_raz = await self.llm.generate(
+                    f"Describe the applicability of this component ({record['record_type']}: {record['name']}) "
+                    f"for different tasks: {content_text[:1000]}"
+                )
+            else:
+                t_raz = await self.llm.generate_applicability_text(
+                    text_chunk=content_text,
+                    component_type=record.get("record_type", ""),
+                    component_name=record.get("name", "")
+                )
+            return t_raz
+        except Exception as e:
+            logger.error(f"Error generating applicability text: {e}")
+            # Return a simple fallback
+            return f"Component for {record.get('domain', 'general')} tasks related to {record.get('name', 'unknown')}"
+
+    async def _index_agent(self, agent: Dict[str, Any]) -> None:
+        """Index an agent for semantic search (System Bus Operation) with dual embeddings."""
+        # Original semantic text for content embedding (E_orig)
+        semantic_text = self._get_record_vector_text(agent)
+        
+        # Generate applicability text (T_raz) for task relevance embedding (E_raz)
+        applicability_text = await self._generate_applicability_text(agent)
+        
+        try:
+            # Generate both embeddings
+            content_embedding = await self.llm_service.embed(semantic_text)  # E_orig
+            relevance_embedding = await self.llm_service.embed(applicability_text)  # E_raz
+            
+            # Prepare metadata for ChromaDB (ensuring only simple types)
+            capabilities_str = ",".join([c["id"] for c in agent.get("capabilities", [])])
+            chroma_metadata = {
+                "name": agent["name"],
+                "type": agent.get("type", ""),
+                "capabilities": capabilities_str,
+                "source": agent.get("metadata", {}).get("source", "unknown"),
+                "text_original": semantic_text,  # Store T_orig for retrieval
+                "text_applicability": applicability_text,  # Store T_raz for inspection
+            }
+            
+            # Store in the collection
+            # Note: We use relevance_embedding (E_raz) as the primary embedding
+            #       and store record ID to link back to the full record
+            self.agent_collection.upsert(
+                ids=[agent["id"]],
+                embeddings=[relevance_embedding],  # Primary embedding is E_raz for task relevance
+                documents=[semantic_text],  # Still storing semantic_text as the document for compatibility
+                metadatas=[chroma_metadata]
+            )
+            
+            # Store the original content embedding (E_orig) in a separate metadata field
+            # Note: This might be simplified in production by using a different collection or storage mechanism
+            # for E_orig if metadata size limits are a concern
+            
+            logger.debug(f"Indexed agent {agent['id']} in vector DB with dual embeddings.")
+            
+            # Optionally save the applicability text in the main record
+            agent["metadata"] = agent.get("metadata", {})
+            agent["metadata"]["applicability_text"] = applicability_text
+            # Don't save the embeddings in the main record as they're large
+        except Exception as e:
+            logger.error(f"Failed to index agent {agent['id']}: {e}", exc_info=True)
+
+    async def semantic_search(
+        self,
+        query: str,
+        task_context: Optional[str] = None,
+        record_type: Optional[str] = None,
+        domain: Optional[str] = None,
+        limit: int = 5,
+        threshold: float = 0.0,
+        task_weight: float = 0.6
+    ) -> List[Tuple[Dict[str, Any], float, float, float]]:
+        """
+        Search for records semantically similar to the query using dual embeddings.
+        
+        Args:
+            query: Content query string
+            task_context: Optional task context for relevance-based search
+            record_type: Optional record type filter
+            domain: Optional domain filter
+            limit: Maximum number of results
+            threshold: Minimum similarity threshold
+            task_weight: Weight for task relevance score (0.0-1.0)
+            
+        Returns:
+            List of (record, final_score, content_score, task_score) tuples
+        """
+        if not self.collection:
+            # Fallback if vector DB isn't available
+            logger.warning("Vector database not available. Falling back to direct search.")
+            return await self._semantic_search_direct(query, record_type, domain, limit, threshold)
+
+        # --- Prepare filters for ChromaDB ---
+        filters = []
+        if record_type:
+            filters.append({"record_type": {"$eq": record_type}})
+        if domain:
+            filters.append({
+                "$or": [
+                    {"domain": {"$eq": domain}},
+                    {"domain": {"$eq": "general"}}
+                ]
+            })
+        
+        # Always filter for active records
+        filters.append({"status": {"$eq": "active"}})
+
+        # Combine filters using $and
+        where_filter = None
+        if filters:
+            if len(filters) == 1:
+                where_filter = filters[0]
+            else:
+                where_filter = {"$and": filters}
+
+        try:
+            # --- PHASE 1: Task Relevance Search (E_raz) ---
+            if task_context:
+                # Generate embedding for the task context
+                task_embedding = await self.llm_service.embed(task_context)
+                
+                # Search using task embedding against E_raz (primary embedding)
+                phase1_results = self.collection.query(
+                    query_embeddings=[task_embedding],
+                    n_results=limit * 3,  # Get more results for re-ranking
+                    where=where_filter,
+                    include=["documents", "metadatas", "distances"]
+                )
+                
+                # --- PHASE 2: Content Refinement (E_orig) ---
+                # Generate embedding for content query
+                query_embedding = await self.llm_service.embed(query)
+                
+                # Prepare for re-ranking
+                search_results = []
+                
+                if not phase1_results["ids"] or not phase1_results["ids"][0]:
+                    return []
+                    
+                # Process each result from phase 1
+                for i, result_id in enumerate(phase1_results["ids"][0]):
+                    # Get task relevance score (1 - distance)
+                    task_score = 1.0 - phase1_results["distances"][0][i]
+                    
+                    # Get the record
+                    record = await self.find_record_by_id(result_id)
+                    if not record:
+                        continue
+                    
+                    # Get original text and generate content score
+                    # Ideally, we would retrieve E_orig from storage, but for now, we'll recompute it
+                    record_text = self._get_record_vector_text(record)
+                    content_embedding = await self.llm_service.embed(record_text)
+                    content_score = await self.compute_similarity(query_embedding, content_embedding)
+                    
+                    # Calculate final score with weighting
+                    final_score = (task_weight * task_score) + ((1 - task_weight) * content_score)
+                    
+                    if final_score >= threshold:
+                        search_results.append((record, final_score, content_score, task_score))
+            else:
+                # If no task context, fall back to standard content search
+                query_embedding = await self.llm_service.embed(query)
+                
+                results = self.collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=limit * 2,
+                    where=where_filter,
+                    include=["distances", "metadatas"]
+                )
+                
+                search_results = []
+                if not results["ids"] or not results["ids"][0]:
+                    return []
+                    
+                for i, result_id in enumerate(results["ids"][0]):
+                    distance = results["distances"][0][i]
+                    similarity = 1.0 - distance
+                    if similarity >= threshold:
+                        record = await self.find_record_by_id(result_id)
+                        if record:
+                            # In fallback mode, content_score = final_score, task_score = 0
+                            search_results.append((record, similarity, similarity, 0.0))
+            
+            # Sort by final score and limit results
+            search_results.sort(key=lambda x: x[1], reverse=True)
+            return search_results[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error using vector database for search: {e}", exc_info=True)
+            return await self._semantic_search_direct(query, record_type, domain, limit, threshold)

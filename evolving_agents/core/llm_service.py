@@ -502,3 +502,32 @@ class LLMService:
             return 0
             
         return self.cache.clear_cache(older_than)
+    
+    async def generate_applicability_text(self, text_chunk: str, component_type: str = "", component_name: str = "") -> str:
+        """
+        Generate applicability text (T_raz) for a given content chunk.
+        
+        Args:
+            text_chunk: The original text chunk to analyze
+            component_type: Type of component (AGENT, TOOL, etc.)
+            component_name: Name of the component
+            
+        Returns:
+            Generated applicability description (T_raz)
+        """
+        prompt = f"""
+        Analyze the following text chunk from a component ({component_type or "unknown"}: {component_name or "unknown"}):
+        '''
+        {text_chunk}
+        '''
+        Generate a concise description (T_raz) focusing ONLY on its potential applicability and relevance for different tasks. Describe:
+        1. **Relevant Tasks:** What specific developer/agent tasks might this chunk be useful for (e.g., 'code generation', 'API documentation', 'testing', 'requirements analysis', 'debugging', 'cost estimation', 'security review')?
+        2. **Key Concepts/Implications:** What are the non-obvious technical or functional implications derived from this text? (e.g., 'dependency on X', 'requires async handling', 'critical for user authentication flow').
+        3. **Target Audience/Context:** Who would find this most useful or in what situation? (e.g., 'backend developer implementing feature Y', 'project manager estimating effort', 'security auditor reviewing access control').
+
+        Be concise and focus on applicability *beyond* just restating the content. Output ONLY the generated description (T_raz).
+        """
+        
+        # Use the generate method to get the applicability text
+        applicability_text = await self.generate(prompt)
+        return applicability_text

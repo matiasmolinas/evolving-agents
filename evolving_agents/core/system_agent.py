@@ -12,6 +12,8 @@ from beeai_framework.memory import TokenMemory, UnconstrainedMemory
 from evolving_agents.tools.smart_library.search_component_tool import SearchComponentTool
 from evolving_agents.tools.smart_library.create_component_tool import CreateComponentTool
 from evolving_agents.tools.smart_library.evolve_component_tool import EvolveComponentTool
+from evolving_agents.tools.smart_library.task_context_tool import TaskContextTool
+from evolving_agents.tools.smart_library.task_context_tool import ContextualSearchTool
 from evolving_agents.tools.agent_bus.register_agent_tool import RegisterAgentTool
 from evolving_agents.tools.agent_bus.request_agent_tool import RequestAgentTool
 from evolving_agents.tools.agent_bus.discover_agent_tool import DiscoverAgentTool
@@ -109,11 +111,17 @@ class SystemAgentFactory:
         discover_tool = DiscoverAgentTool(resolved_agent_bus)
         generate_workflow_tool = GenerateWorkflowTool(resolved_llm_service, resolved_smart_library)
         process_workflow_tool = ProcessWorkflowTool()
+        
+        # New task context tools
+        task_context_tool = TaskContextTool(resolved_llm_service)
+        contextual_search_tool = ContextualSearchTool(task_context_tool, search_tool)
+
 
         tools = [
             search_tool, create_tool, evolve_tool,
             register_tool, request_tool, discover_tool,
-            generate_workflow_tool, process_workflow_tool
+            generate_workflow_tool, process_workflow_tool,
+            task_context_tool, contextual_search_tool 
         ]
 
         # --- Agent Meta (using updated description) ---
@@ -122,12 +130,15 @@ class SystemAgentFactory:
             description=(
                 "I am the System Agent, the central orchestrator for the agent ecosystem. "
                 "I manage components (find, create, evolve), handle communication, and execute tasks. "
+                "I use task-specific context to find the most relevant components for each goal."
                 "Give me a goal, and I will figure out how to achieve it, potentially by designing and running a multi-step workflow using my available tools."
             ),
             extra_description=(
                 "When faced with a complex task, I might need to break it down. This could involve analyzing requirements, "
                 "identifying or creating necessary agents/tools via the SmartLibrary, coordinating their execution, "
-                "and potentially generating an internal plan if multiple steps are needed. My goal is to deliver the final result for your request."
+                "and potentially generating an internal plan if multiple steps are needed. "
+                "I can also use task context to find components specifically relevant to the current operation. "
+                "My goal is to deliver the final result for your request."
             ),
             tools=tools
         )
@@ -135,7 +146,7 @@ class SystemAgentFactory:
         # --- Memory and Agent Creation ---
         memory = UnconstrainedMemory() if memory_type == "unconstrained" else TokenMemory(chat_model)
         system_agent = ReActAgent(
-            llm=chat_model, # Use the verified chat_model
+            llm=chat_model,
             tools=tools,
             memory=memory,
             meta=meta
@@ -143,9 +154,16 @@ class SystemAgentFactory:
 
         # --- Tool Mapping (Optional) ---
         tools_dict = {
-            "search_component": search_tool, "create_component": create_tool, "evolve_component": evolve_tool,
-            "register_agent": register_tool, "request_agent": request_tool, "discover_agent": discover_tool,
-            "generate_workflow": generate_workflow_tool, "process_workflow": process_workflow_tool
+            "search_component": search_tool, 
+            "create_component": create_tool, 
+            "evolve_component": evolve_tool,
+            "register_agent": register_tool, 
+            "request_agent": request_tool, 
+            "discover_agent": discover_tool,
+            "generate_workflow": generate_workflow_tool, 
+            "process_workflow": process_workflow_tool,
+            "task_context": task_context_tool,  # Map the new tools
+            "contextual_search": contextual_search_tool
         }
         system_agent.tools_map = tools_dict
 
