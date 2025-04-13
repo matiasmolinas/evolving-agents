@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class SmartLibrary:
     """
     Unified library that stores all agents, tools, and firmware as simple dictionary records
-    with vector database-powered semantic search.
+    with vector database-powered semantic search using dual embeddings.
     """
     def __init__(
         self, 
@@ -147,6 +147,16 @@ class SmartLibrary:
             api_endpoints = re.findall(r'@\w+\.route\([\'"]([^\'"]+)[\'"]', code_snippet)
             if api_endpoints:
                 interface_info += " API endpoints: " + " ".join(api_endpoints)
+                
+            # Extract class definitions
+            class_defs = re.findall(r'class\s+(\w+)(?:\([^)]*\))?:', code_snippet)
+            if class_defs:
+                interface_info += " Classes: " + " ".join(class_defs)
+                
+            # Extract method names for more context
+            method_names = re.findall(r'def\s+(\w+)\(', code_snippet)
+            if method_names:
+                interface_info += " Methods: " + " ".join(method_names)
         
         # Create a weighted representation focusing on functional aspects
         return (
@@ -191,13 +201,24 @@ class SmartLibrary:
             try:
                 # Prepare data for batch addition
                 ids = [r["id"] for r in records_to_add]
-                texts = [self._get_record_vector_text(r) for r in records_to_add]
+                
+                # Generate text representation for each record
+                texts = []
+                for r in records_to_add:
+                    text = self._get_record_vector_text(r)
+                    if text is None:
+                        logger.warning(f"Record {r.get('id', 'unknown')} generated None text, using default")
+                        text = f"Name: {r.get('name', 'Unknown')}. Type: {r.get('record_type', 'Unknown')}."
+                    texts.append(text)
+                
                 metadatas = [{
                     "name": r.get("name", ""),
                     "record_type": r.get("record_type", ""),
                     "domain": r.get("domain", ""),
                     "status": r.get("status", "active"),
-                    "version": r.get("version", "")
+                    "version": r.get("version", ""),
+                    # Include applicability text if available for task-aware search
+                    "applicability_text": r.get("metadata", {}).get("applicability_text", "")
                 } for r in records_to_add]
                 
                 # Generate embeddings for the texts
@@ -324,39 +345,200 @@ class SmartLibrary:
             
         return float(np.dot(vec1, vec2) / (norm1 * norm2))
     
+    async def generate_applicability_text(self, record: Dict[str, Any]) -> str:
+        """
+        Generate rich applicability text for a component to enhance task relevance matching.
+        
+        Args:
+            record: The component record
+        
+        Returns:
+            Rich applicability text describing when and how to use the component
+        """
+        # Prepare component information
+        name = record.get("name", "")
+        description = record.get("description", "")
+        record_type = record.get("record_type", "")
+        domain = record.get("domain", "")
+        code_snippet = record.get("code_snippet", "")
+        
+        # Extract code summary if code snippet is too long
+        code_summary = code_snippet[:500] + "..." if len(code_snippet) > 500 else code_snippet
+        
+        # Use specialized prompts based on the component type and domain
+        if record_type == "TOOL" and ("doc" in name.lower() or domain.lower() == "documentation"):
+            # Specialized prompt for documentation tools
+            prompt = f"""
+            Based on this documentation tool:
+            
+            Name: {name}
+            Type: {record_type}
+            Domain: {domain}
+            Description: {description}
+            Code Summary: 
+            ```
+            {code_summary}
+            ```
+            
+            Generate a comprehensive applicability text focused specifically on 
+            documentation generation scenarios, such as API docs, reference manuals,
+            and developer guides. Include detailed information about:
+            
+            1. DOCUMENTATION TASKS: Types of documentation this tool excels at generating
+            2. INPUT FORMATS: What inputs the tool can process (annotations, spec files, etc.)
+            3. OUTPUT FORMATS: What documentation formats can be produced
+            4. INTEGRATION: How the tool integrates with development workflows
+            5. AUDIENCE: Which types of documentation users (developers, tech writers) benefit most
+            
+            Format as a cohesive paragraph focusing specifically on documentation generation use cases.
+            """
+        elif record_type == "TOOL" and ("test" in name.lower() or domain.lower() == "testing"):
+            # Specialized prompt for testing tools
+            prompt = f"""
+            Based on this testing tool:
+            
+            Name: {name}
+            Type: {record_type}
+            Domain: {domain}
+            Description: {description}
+            Code Summary: 
+            ```
+            {code_summary}
+            ```
+            
+            Generate a comprehensive applicability text focused specifically on 
+            testing scenarios and quality assurance. Include detailed information about:
+            
+            1. TESTING SCENARIOS: What types of tests this tool is best suited for
+            2. TEST APPROACHES: What testing methodologies it supports
+            3. COVERAGE: What aspects of the system can be validated
+            4. INTEGRATION: How it fits into CI/CD pipelines
+            5. EDGE CASES: Special conditions it can test for
+            
+            Format as a cohesive paragraph focusing specifically on testing and validation use cases.
+            """
+        elif record_type == "TOOL" and ("auth" in name.lower() or domain.lower() == "authentication"):
+            # Specialized prompt for authentication tools
+            prompt = f"""
+            Based on this authentication tool:
+            
+            Name: {name}
+            Type: {record_type}
+            Domain: {domain}
+            Description: {description}
+            Code Summary: 
+            ```
+            {code_summary}
+            ```
+            
+            Generate a comprehensive applicability text focused specifically on 
+            authentication implementation scenarios. Include detailed information about:
+            
+            1. AUTH MECHANISMS: What authentication protocols it supports
+            2. SECURITY ASPECTS: How it addresses security concerns
+            3. IMPLEMENTATION: How developers would use it in their applications
+            4. INTEGRATION: How it connects with identity providers or services
+            5. USE CASES: Specific authentication scenarios it excels at
+            
+            Format as a cohesive paragraph focusing specifically on authentication implementation use cases.
+            """
+        else:
+            # Default prompt for all other components
+            prompt = f"""
+            Based on this component information:
+            
+            Name: {name}
+            Type: {record_type}
+            Domain: {domain}
+            Description: {description}
+            Code Summary: 
+            ```
+            {code_summary}
+            ```
+            
+            Generate a comprehensive applicability text that describes:
+            
+            1. RELEVANT TASKS: Specific tasks and use cases where this component is most applicable
+            2. USER PERSONAS: Who would benefit most from using this component (developers, testers, etc.)
+            3. IDEAL SCENARIOS: Scenarios where this component shines compared to alternatives
+            4. INTEGRATION PATTERNS: How this component typically integrates with other systems
+            5. TECHNICAL REQUIREMENTS: Prerequisites or dependencies needed to use this component
+            6. LIMITATIONS: Any notable limitations or cases when NOT to use this component
+            
+            Format as a cohesive paragraph focusing on when and how this component should be used.
+            """
+        
+        # Generate the applicability text
+        applicability_text = await self.llm_service.generate(prompt)
+        logger.info(f"Generated applicability text for {name}")
+        return applicability_text.strip()
+    
     async def semantic_search(
         self,
         query: str,
+        task_context: Optional[str] = None,
         record_type: Optional[str] = None,
         domain: Optional[str] = None,
         limit: int = 5,
-        threshold: float = 0.0
-    ) -> List[Tuple[Dict[str, Any], float]]:
+        threshold: float = 0.0,
+        task_weight: Optional[float] = None
+    ) -> List[Tuple[Dict[str, Any], float, float, float]]:
         """
-        Search for records semantically similar to the query using the vector database.
+        Search for records semantically similar to the query using dual embeddings.
+        
+        Args:
+            query: Content query string
+            task_context: Optional task context for relevance-based search
+            record_type: Optional record type filter
+            domain: Optional domain filter
+            limit: Maximum number of results
+            threshold: Minimum similarity threshold
+            task_weight: Weight for task relevance score (0.0-1.0), or None to auto-determine
+            
+        Returns:
+            List of (record, final_score, content_score, task_score) tuples
         """
         if not self.collection:
-            # Fallback if vector DB isn't available
-            logger.warning("Vector database not available. Falling back to direct search.")
-            return await self._semantic_search_direct(query, record_type, domain, limit, threshold)
+            logger.warning("Vector database not available for semantic search.")
+            raise ValueError("Vector database is not available for search.")
 
+        # Check for None input values
+        if query is None:
+            raise ValueError("Query string cannot be None")
+
+        # Dynamically adjust task_weight based on task context if not explicitly provided
+        if task_weight is None:
+            if task_context:
+                # Auto-determine weight based on task context content
+                task_context_lower = task_context.lower()
+                if "implement" in task_context_lower or "develop" in task_context_lower:
+                    # Implementation tasks - heavier weight on task context
+                    task_weight = 0.8
+                elif "test" in task_context_lower or "validate" in task_context_lower:
+                    # Testing tasks - significant weight on task context
+                    task_weight = 0.75
+                elif "document" in task_context_lower or "write" in task_context_lower:
+                    # Documentation tasks - balanced weight
+                    task_weight = 0.65
+                else:
+                    # Default for other task contexts
+                    task_weight = 0.7
+            else:
+                # No task context, rely only on content
+                task_weight = 0.0
+        
         # --- Prepare filters for ChromaDB ---
         filters = []
         if record_type:
             filters.append({"record_type": {"$eq": record_type}})
         if domain:
-            # Allow searching for domain 'general' or the specific domain
-            # filters.append({"domain": {"$eq": domain}})
-            # OR handle domain matching more flexibly if needed
-             filters.append({ # Use $or if you want to match EITHER the specific domain OR general
-                 "$or": [
-                     {"domain": {"$eq": domain}},
-                     {"domain": {"$eq": "general"}} # Optional: include general components too
-                 ]
-             })
-            # If you only want the specific domain:
-            # filters.append({"domain": {"$eq": domain}})
-
+            filters.append({
+                "$or": [
+                    {"domain": {"$eq": domain}},
+                    {"domain": {"$eq": "general"}}
+                ]
+            })
+        
         # Always filter for active records
         filters.append({"status": {"$eq": "active"}})
 
@@ -364,45 +546,187 @@ class SmartLibrary:
         where_filter = None
         if filters:
             if len(filters) == 1:
-                 # If only one filter (e.g., just status=active), no need for $and
-                 where_filter = filters[0]
+                where_filter = filters[0]
             else:
-                 where_filter = {"$and": filters}
-
-        # --------------------------------------
+                where_filter = {"$and": filters}
 
         try:
-            # Generate embedding for the query
+            # --- Generate embedding for the query (always needed) ---
             query_embedding = await self.llm_service.embed(query)
-
-            # Search the vector database using the corrected where_filter
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=limit * 2,
-                where=where_filter, # Use the constructed filter
-                include=["documents", "metadatas", "distances"]
-            )
-
-            # Transform results (same as before)
-            search_results = []
-            if not results["ids"] or not results["ids"][0]:
-                return []
-
-            for i, result_id in enumerate(results["ids"][0]):
-                distance = results["distances"][0][i]
-                similarity = 1.0 - distance
-                if similarity >= threshold:
+            
+            # Specifically for dual embedding search, we need two different embeddings
+            
+            # --- PHASE 1: Get candidates based on task relevance (if available) ---
+            if task_context:
+                # Check for None task_context
+                if task_context is None:
+                    raise ValueError("Task context cannot be None when task-aware search is requested")
+                    
+                # Generate embedding for the task context
+                task_embedding = await self.llm_service.embed(task_context)
+                
+                # First search phase: Get potential candidates based on task context
+                # Use the applicability_text field for matching against task context
+                phase1_results = self.collection.query(
+                    query_embeddings=[task_embedding],
+                    n_results=limit * 3,  # Get more candidates for re-ranking
+                    where=where_filter,
+                    include=["documents", "metadatas", "distances"]
+                )
+                
+                if not phase1_results["ids"] or not phase1_results["ids"][0]:
+                    return []
+                    
+                # Prepare task scores for candidates
+                candidates = []
+                for i, result_id in enumerate(phase1_results["ids"][0]):
+                    # Convert distance to similarity (1.0 - distance), handle edge cases
+                    distance = phase1_results["distances"][0][i]
+                    # Normalize the distance to ensure it's at most 1.0
+                    normalized_distance = min(distance, 1.0)
+                    task_score = 1.0 - normalized_distance
+                    
+                    # Boost scores that are very close - help with low similarity issue
+                    if task_score > 0.8:
+                        task_score = min(1.0, task_score * 1.15)  # 15% boost for high matches
+                    elif task_score > 0.6:
+                        task_score = min(1.0, task_score * 1.1)   # 10% boost for good matches
+                    
                     record = await self.find_record_by_id(result_id)
                     if record:
-                        search_results.append((record, similarity))
-
-            # Sort by similarity (ChromaDB usually does this, but good to be sure)
+                        candidates.append((record, task_score))
+                
+                # --- PHASE 2: Content relevance scoring ---
+                
+                # Re-rank candidates based on content relevance
+                search_results = []
+                
+                for record, task_score in candidates:
+                    # Get functional text representation focused on content
+                    record_text = self._get_record_vector_text(record)
+                    
+                    if record_text is None:
+                        logger.warning(f"Record {record.get('id', 'unknown')} generated None text, skipping")
+                        continue
+                        
+                    # Create content embedding for this specific record
+                    content_embedding = await self.llm_service.embed(record_text)
+                    
+                    # Calculate content similarity
+                    content_score = await self.compute_similarity(query_embedding, content_embedding)
+                    
+                    # Boost scores that are very close - help with low similarity issue
+                    if content_score > 0.8:
+                        content_score = min(1.0, content_score * 1.15)  # 15% boost for high matches
+                    elif content_score > 0.6:
+                        content_score = min(1.0, content_score * 1.1)   # 10% boost for good matches
+                    
+                    # Apply both signals with specified weighting
+                    final_score = (task_weight * task_score) + ((1.0 - task_weight) * content_score)
+                    
+                    # Apply usage-based boosting for frequently used and successful components
+                    usage_count = record.get("usage_count", 0)
+                    success_rate = record.get("success_count", 0) / max(usage_count, 1)
+                    
+                    # Small boost of max 5% for frequently used successful components
+                    boost = min(0.05, (usage_count / 200) * success_rate)
+                    adjusted_score = min(1.0, final_score + boost)
+                    
+                    if adjusted_score >= threshold:
+                        search_results.append((record, adjusted_score, content_score, task_score))
+            else:
+                # Standard content-only search when no task context provided
+                
+                # First try direct search in the vector database
+                results = self.collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=limit * 2,
+                    where=where_filter,
+                    include=["documents", "metadatas", "distances", "embeddings"]
+                )
+                
+                search_results = []
+                if results["ids"] and results["ids"][0]:
+                    # Process each result
+                    for i, result_id in enumerate(results["ids"][0]):
+                        # Get the record
+                        record = await self.find_record_by_id(result_id)
+                        if not record:
+                            continue
+                            
+                        # Get the distance from the query
+                        distance = results["distances"][0][i]
+                        
+                        # FIX: For standard search, make sure we get meaningful similarity scores
+                        # The issue was that Chroma distance wasn't being properly converted to a similarity score
+                        
+                        # Convert distance to similarity (ensure a reasonable value)
+                        # Chroma uses cosine distance, which ranges from 0 (identical) to 2 (completely opposite)
+                        # We need to convert this to a similarity score from 0 to 1
+                        
+                        # Proper calculation for cosine similarity from distance
+                        content_score = max(0.0, 1.0 - (distance / 2.0))
+                        
+                        # Apply score boosting
+                        if content_score > 0.8:
+                            content_score = min(1.0, content_score * 1.15)  # 15% boost for high matches
+                        elif content_score > 0.6:
+                            content_score = min(1.0, content_score * 1.1)   # 10% boost for good matches
+                            
+                        # Add usage-based boosting
+                        usage_count = record.get("usage_count", 0)
+                        success_rate = record.get("success_count", 0) / max(usage_count, 1)
+                        boost = min(0.05, (usage_count / 200) * success_rate)
+                        
+                        final_score = min(1.0, content_score + boost)
+                        
+                        if final_score >= threshold:
+                            # For standard search, use a neutral task score of 0.5
+                            search_results.append((record, final_score, content_score, 0.5))
+                
+                # If we didn't get any good results, try a secondary approach
+                if not search_results:
+                    logger.debug("No results from primary search, trying secondary approach")
+                    
+                    # Get all records
+                    active_records = [r for r in self.records if r.get("status", "active") == "active"]
+                    
+                    if record_type:
+                        active_records = [r for r in active_records if r["record_type"] == record_type]
+                        
+                    if domain:
+                        active_records = [r for r in active_records if r.get("domain") in [domain, "general"]]
+                    
+                    # Directly compute similarity for each record
+                    for record in active_records:
+                        record_text = self._get_record_vector_text(record)
+                        if record_text is None:
+                            continue
+                            
+                        record_embedding = await self.llm_service.embed(record_text)
+                        content_score = await self.compute_similarity(query_embedding, record_embedding)
+                        
+                        # Apply score boosting
+                        if content_score > 0.8:
+                            content_score = min(1.0, content_score * 1.15)
+                        elif content_score > 0.6:
+                            content_score = min(1.0, content_score * 1.1)
+                        
+                        final_score = content_score  # No task weighting for standard search
+                        
+                        if final_score >= threshold:
+                            search_results.append((record, final_score, content_score, 0.5))
+            
+            # Log the number of results before sorting/limiting
+            logger.debug(f"Found {len(search_results)} search results before sorting and limiting")
+            
+            # Sort by final score and return top results
             search_results.sort(key=lambda x: x[1], reverse=True)
             return search_results[:limit]
-
+            
         except Exception as e:
-            logger.error(f"Error using vector database for search: {e}. Falling back to direct search.", exc_info=True) # Add exc_info
-            return await self._semantic_search_direct(query, record_type, domain, limit, threshold)
+            logger.error(f"Error in semantic search: {str(e)}", exc_info=True)
+            raise
     
     async def _semantic_search_direct(
         self, 
@@ -439,27 +763,49 @@ class SmartLibrary:
             logger.info(f"No active records found for search: {query}")
             return []
         
+        # Check if query is None
+        if query is None:
+            raise ValueError("Query string cannot be None")
+            
         # Get embedding for the query
         query_embedding = await self.llm_service.embed(query)
         
         # Create functional texts for batch embedding
-        record_texts = [self._get_record_vector_text(record) for record in active_records]
+        record_texts = []
+        valid_records = []
+        for record in active_records:
+            record_text = self._get_record_vector_text(record)
+            # Check for None before adding
+            if record_text is None:
+                logger.warning(f"Record {record.get('id', 'unknown')} generated None text, skipping")
+                continue
+            record_texts.append(record_text)
+            valid_records.append(record)
         
+        # Ensure we have records to process
+        if not record_texts:
+            logger.warning("No valid record texts found for embedding")
+            return []
+            
         # Generate embeddings for all records in one batch
         record_embeddings = await self.llm_service.embed_batch(record_texts)
         
         # Compute similarities
         results = []
-        for i, record in enumerate(active_records):
+        for i, record in enumerate(valid_records):
+            # Skip records that might have been filtered out due to None text
+            if i >= len(record_embeddings):
+                continue
+                
             # Compute similarity
             similarity = await self.compute_similarity(query_embedding, record_embeddings[i])
             
             # Apply additional weighting based on usage metrics if available
             usage_count = record.get("usage_count", 0)
-            success_rate = record.get("success_count", 0) / usage_count if usage_count > 0 else 0
+            success_rate = record.get("success_count", 0) / max(usage_count, 1)
             
-            # Boost score for frequently used and successful records (small boost of max 10%)
-            boost = min(0.1, (usage_count / 100) * success_rate)
+            # Boost score for frequently used and successful records (small boost of max 5%)
+            boost = min(0.05, (usage_count / 200) * success_rate)
             adjusted_similarity = min(1.0, similarity + boost)
             
             if adjusted_similarity >= threshold:
@@ -517,6 +863,14 @@ class SmartLibrary:
             "tags": tags or [],
             "metadata": metadata or {}
         }
+        
+        # Generate applicability text for task-aware search
+        try:
+            applicability_text = await self.generate_applicability_text(record)
+            record["metadata"]["applicability_text"] = applicability_text
+            logger.info(f"Generated applicability text for {name}")
+        except Exception as e:
+            logger.warning(f"Failed to generate applicability text for {name}: {e}")
         
         await self.save_record(record)
         logger.info(f"Created new {record_type} record: {name}")
@@ -629,6 +983,17 @@ class SmartLibrary:
             }
         }
         
+        # Generate updated applicability text for the evolved record
+        try:
+            applicability_text = await self.generate_applicability_text(new_record)
+            new_record["metadata"]["applicability_text"] = applicability_text
+            logger.info(f"Generated updated applicability text for evolved {new_record['name']}")
+        except Exception as e:
+            logger.warning(f"Failed to generate applicability text for evolved {new_record['name']}: {e}")
+            # Inherit parent's applicability text if available
+            if "applicability_text" in parent.get("metadata", {}):
+                new_record["metadata"]["applicability_text"] = parent["metadata"]["applicability_text"]
+        
         # Save and return
         await self.save_record(new_record)
         logger.info(f"Evolved record {parent['name']} from {parent['version']} to {new_version}")
@@ -711,6 +1076,14 @@ class SmartLibrary:
             if "last_updated" not in record:
                 record["last_updated"] = datetime.utcnow().isoformat()
                 
+            # Generate applicability text for task-aware search if not present
+            if "applicability_text" not in record.get("metadata", {}):
+                try:
+                    record["metadata"] = record.get("metadata", {})
+                    record["metadata"]["applicability_text"] = await self.generate_applicability_text(record)
+                except Exception as e:
+                    logger.warning(f"Failed to generate applicability text for {record.get('name', 'unknown')}: {e}")
+                
             # Save the record
             await self.save_record(record)
             count += 1
@@ -779,7 +1152,7 @@ class SmartLibrary:
             if r.get("usage_count", 0) >= 5
         ]
         success_rated.sort(
-            key=lambda r: r.get("success_count", 0) / r.get("usage_count", 1), 
+            key=lambda r: r.get("success_count", 0) / max(r.get("usage_count", 1), 1), 
             reverse=True
         )
         most_successful = success_rated[:5] if success_rated else []
@@ -812,7 +1185,7 @@ class SmartLibrary:
                 {
                     "id": r["id"], 
                     "name": r["name"], 
-                    "success_rate": r.get("success_count", 0) / r.get("usage_count", 1)
+                    "success_rate": r.get("success_count", 0) / max(r.get("usage_count", 1), 1)
                 }
                 for r in most_successful
             ],

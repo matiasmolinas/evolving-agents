@@ -1,5 +1,3 @@
-# evolving_agents/tools/smart_library/search_component_tool.py
-
 from typing import Dict, Any, List, Optional, Tuple
 from pydantic import BaseModel, Field
 import json
@@ -13,6 +11,10 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 class SearchInput(BaseModel):
     """Input schema for the SearchComponentTool."""
     query: str = Field(description="Query string to search for")
+    task_context: Optional[str] = Field(
+        None, 
+        description="Task context describing how the results will be used"
+    )
     record_type: Optional[str] = Field(
         None, 
         description="Type of record to search for (AGENT or TOOL)"
@@ -38,10 +40,10 @@ class SearchComponentTool(Tool[SearchInput, None, StringToolOutput]):
     """
     Tool for searching components in the Smart Library by query, similarity, or name.
     Uses semantic search to find the most relevant components and provides recommendations
-    based on similarity scores.
+    based on similarity scores. Now supports task-specific context for more relevant results.
     """
     name = "SearchComponentTool"
-    description = "Search for agents and tools in the library using natural language queries and get recommendations based on similarity"
+    description = "Search for agents and tools in the library using natural language queries, task context, and get recommendations based on similarity"
     input_schema = SearchInput
     
     def __init__(self, smart_library: SmartLibrary, options: Optional[Dict[str, Any]] = None):
@@ -56,18 +58,19 @@ class SearchComponentTool(Tool[SearchInput, None, StringToolOutput]):
     
     async def _run(self, input: SearchInput, options: Optional[Dict[str, Any]] = None, context: Optional[RunContext] = None) -> StringToolOutput:
         """
-        Search the Smart Library for components matching the query.
+        Search the Smart Library for components matching the query and task context.
         
         Args:
-            input: The search input parameters
+            input: The search input parameters with query and optional task context
         
         Returns:
             StringToolOutput containing the search results in JSON format with recommendations
         """
         try:
-            # Perform semantic search
+            # Perform semantic search with task context if provided
             search_results = await self.library.semantic_search(
                 query=input.query,
+                task_context=input.task_context,  # Pass task context to the semantic search
                 record_type=input.record_type,
                 domain=input.domain,
                 limit=input.limit,
@@ -76,7 +79,10 @@ class SearchComponentTool(Tool[SearchInput, None, StringToolOutput]):
             
             # Format results with recommendations
             formatted_results = []
-            for i, (record, similarity) in enumerate(search_results):
+            for i, result_tuple in enumerate(search_results):
+                # Unpack the tuple - now includes final_score, content_score, and task_score
+                record, final_score, content_score, task_score = result_tuple
+                
                 result = {
                     "rank": i + 1,
                     "id": record["id"],
@@ -84,14 +90,16 @@ class SearchComponentTool(Tool[SearchInput, None, StringToolOutput]):
                     "type": record["record_type"],
                     "domain": record.get("domain", "general"),
                     "description": record["description"],
-                    "similarity_score": similarity,
+                    "similarity_score": final_score,  # Overall similarity score
+                    "content_score": content_score,   # Content relevance
+                    "task_score": task_score,         # Task relevance
                     "version": record.get("version", "1.0.0")
                 }
                 
                 # Add recommendation based on similarity score
                 if input.with_recommendation:
-                    result["recommendation"] = self._get_recommendation(similarity)
-                    result["recommendation_reason"] = self._get_recommendation_reason(similarity)
+                    result["recommendation"] = self._get_recommendation(final_score)
+                    result["recommendation_reason"] = self._get_recommendation_reason(final_score)
                 
                 formatted_results.append(result)
             
@@ -111,8 +119,10 @@ class SearchComponentTool(Tool[SearchInput, None, StringToolOutput]):
                     "based_on": f"{top_result['name']} (similarity: {top_result['similarity_score']:.2f})"
                 }
             
+            # If task context was provided, include it in the response
             response = {
                 "query": input.query,
+                "task_context": input.task_context if input.task_context else "None provided",
                 "result_count": len(formatted_results),
                 "results": formatted_results,
             }
@@ -140,9 +150,10 @@ class SearchComponentTool(Tool[SearchInput, None, StringToolOutput]):
         Returns:
             Recommendation ("reuse", "evolve", or "create")
         """
-        if similarity >= 0.8:
+        # Use more nuanced thresholds
+        if similarity >= 0.7:  # Lowered from 0.8
             return "reuse"
-        elif similarity >= 0.4:
+        elif similarity >= 0.3:  # Lowered from 0.4
             return "evolve"
         else:
             return "create"
