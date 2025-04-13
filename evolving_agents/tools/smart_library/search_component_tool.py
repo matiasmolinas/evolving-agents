@@ -150,9 +150,10 @@ class SearchComponentTool(Tool[SearchInput, None, StringToolOutput]):
         Returns:
             Recommendation ("reuse", "evolve", or "create")
         """
-        if similarity >= 0.8:
+        # Use more nuanced thresholds
+        if similarity >= 0.7:  # Lowered from 0.8
             return "reuse"
-        elif similarity >= 0.4:
+        elif similarity >= 0.3:  # Lowered from 0.4
             return "evolve"
         else:
             return "create"

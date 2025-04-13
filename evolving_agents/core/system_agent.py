@@ -117,11 +117,18 @@ class SystemAgentFactory:
         contextual_search_tool = ContextualSearchTool(task_context_tool, search_tool)
 
 
+        # Prioritize the contextual search tool
         tools = [
-            search_tool, create_tool, evolve_tool,
-            register_tool, request_tool, discover_tool,
-            generate_workflow_tool, process_workflow_tool,
-            task_context_tool, contextual_search_tool 
+            contextual_search_tool,  # This should come first for visibility
+            task_context_tool,
+            search_tool, 
+            create_tool, 
+            evolve_tool,
+            register_tool, 
+            request_tool, 
+            discover_tool,
+            generate_workflow_tool, 
+            process_workflow_tool
         ]
 
         # --- Agent Meta (using updated description) ---
@@ -129,9 +136,13 @@ class SystemAgentFactory:
             name="SystemAgent",
             description=(
                 "I am the System Agent, the central orchestrator for the agent ecosystem. "
-                "I manage components (find, create, evolve), handle communication, and execute tasks. "
-                "I use task-specific context to find the most relevant components for each goal."
-                "Give me a goal, and I will figure out how to achieve it, potentially by designing and running a multi-step workflow using my available tools."
+                "My primary purpose is to help you reuse, evolve, and create agents and tools "
+                "to solve your problems efficiently. I find the most relevant components by "
+                "deeply understanding the specific task context you're working in. "
+                "Whether implementing, testing, or documenting, I'll recommend the most appropriate "
+                "existing components to reuse or evolve, or help create new ones when needed. "
+                "Give me a goal, and I will design and run multi-step workflows using my available tools "
+                "to achieve it, always prioritizing effective component reuse and evolution."
             ),
             extra_description=(
                 "When faced with a complex task, I might need to break it down. This could involve analyzing requirements, "

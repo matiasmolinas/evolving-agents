@@ -52,19 +52,22 @@ class TaskContextTool(Tool[TaskContextInput, None, StringToolOutput]):
             task_context = input.task_description
             
             # Enhance the task context if requested
-            if input.enhance_context and len(task_context) < 50:  # If task context is too brief
+            if input.enhance_context:
                 task_prompt = f"""
-                Based on this brief task description: "{task_context}"
+                Based on this task description: "{task_context}"
                 And this content query: "{input.content_query}"
                 
-                Generate a more detailed task context that describes:
-                1. What specific action/task needs to be performed with the search results
-                2. What properties or characteristics are most important for this task
-                3. How the results will be used
+                Generate a detailed task context that describes:
+                1. The specific use case and implementation scenario
+                2. Technical requirements and constraints relevant to the task
+                3. Integration points with other systems or components
+                4. Expected behavior or functionality needed
+                5. Specific domain knowledge that might be relevant
                 
-                Make the context specifically useful for retrieving relevant content from a component library.
+                Focus on aspects that would help distinguish between similar components based on their suitability for this specific task.
+                Make your description substantive (100-200 words) and technically precise.
                 
-                Return ONLY the task context description, no explanations.
+                Task context:
                 """
                 
                 enhanced_task_context = await self.llm.generate(task_prompt)
