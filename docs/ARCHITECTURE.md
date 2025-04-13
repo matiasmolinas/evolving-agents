@@ -13,6 +13,7 @@ Key goals of the architecture include:
 *   **Interoperability:** Support agents and tools built with different underlying frameworks (e.g., BeeAI, OpenAI Agents SDK) through a provider pattern.
 *   **Decoupled Communication:** Facilitate communication based on *capabilities* rather than direct references using the `SmartAgentBus`.
 *   **Governance & Safety:** Embed safety and ethical considerations through `Firmware` and guardrails.
+*   **Task-Relevant Context:** Provide agents with context that is not just topically similar but specifically relevant to the task they are performing (leveraging the implemented Dual Embedding Strategy in `SmartLibrary` and `SmartContext`).
 *   **Orchestration:** Provide mechanisms for achieving complex goals. The `SystemAgent` handles complex, multi-step tasks by potentially designing (via `ArchitectZero`), generating, processing, and executing workflows *internally*. External callers interact via high-level goals.
 
 ## 2. Core Components
@@ -24,9 +25,9 @@ The toolkit is composed of several key interacting components:
 The central orchestrator and primary entry point of the ecosystem.
 
 *   **Implementation:** A `beeai_framework.agents.react.ReActAgent`.
-*   **Role:** Receives high-level goals or tasks and determines the best execution strategy. It manages component lifecycles (search, create, evolve via tools), facilitates communication (via Agent Bus tools), and handles complex task execution. For multi-step tasks or those requiring new components based on a design, it *internally* orchestrates the use of its specialized workflow tools (`GenerateWorkflowTool`, `ProcessWorkflowTool`) to create and execute a plan.
+*   **Role:** Receives high-level goals or tasks and determines the best execution strategy. It manages component lifecycles (search, create, evolve via tools), facilitates communication (via Agent Bus tools), and handles complex task execution. It uses `SmartContext` to understand the task at hand and leverages the `SmartLibrary`'s task-aware search to find relevant components. For multi-step tasks, it *internally* orchestrates the use of its specialized workflow tools (`GenerateWorkflowTool`, `ProcessWorkflowTool`) to create and execute a plan.
 *   **Key Tools:**
-    *   **SmartLibrary Tools:** `SearchComponentTool`, `CreateComponentTool`, `EvolveComponentTool` for managing components.
+    *   **SmartLibrary Tools:** `SearchComponentTool`, `CreateComponentTool`, `EvolveComponentTool`, `TaskContextTool`, `ContextualSearchTool` for managing components and task-aware context.
     *   **AgentBus Tools:** `RegisterAgentTool`, `RequestAgentTool`, `DiscoverAgentTool` for managing agent registration and communication/execution.
     *   **Workflow Tools (Internal Use):**
         *   `GenerateWorkflowTool`: Translates solution designs (often obtained internally, e.g., from ArchitectZero via the AgentBus) into executable YAML workflow strings. *Not typically called directly by external users.*
@@ -79,26 +80,34 @@ A specialized agent responsible for *designing* solutions, typically invoked by 
 
 The persistent storage and discovery mechanism for all reusable components.
 
-*   **Stores:** Agents, Tools, Firmware definitions as structured records (typically JSON).
-*   **Discovery:** Supports keyword and **semantic search** (via vector embeddings, using ChromaDB by default) to find components based on natural language descriptions of required capabilities.
+*   **Stores:** Agents, Tools, Firmware definitions as structured records (typically JSON). Each record includes original content/code (`T_orig`) and potentially LLM-generated applicability text (`T_raz`).
+*   **Discovery (Dual Embedding Implemented):**
+    *   Stores two embeddings per record: `E_orig` (for `T_orig` content) and `E_raz` (for `T_raz` applicability text).
+    *   Supports **Task-Aware Semantic Search**: Finds components based on a **Task-Context Query** by primarily searching against `E_raz` (applicability) and optionally refining results using `E_orig` (content) similarity. This provides context relevant to the *specific task* being performed. (See `tools.smart_library.search_component_tool.py` and `smart_library.py`).
+    *   Also supports standard semantic search (primarily using `E_orig`).
 *   **Versioning & Evolution:** Tracks component versions and parentage, facilitating evolution (`evolve_record`).
-*   **Interface:** Provides methods like `create_record`, `find_record_by_id`, `semantic_search`, `evolve_record`.
+*   **Interface:** Provides methods like `create_record`, `find_record_by_id`, `semantic_search` (standard), `task_aware_search` (dual embedding implemented via semantic_search with task_context parameter), `evolve_record`.
 *   **Backends:** Pluggable storage (JSON file default) and vector database (ChromaDB default).
+*   **Indexing Pipeline:** Includes a step to generate `T_raz` using an LLM (`generate_applicability_text` in `LLMService`) and compute/store both `E_orig` and `E_raz` (`_sync_vector_db`).
 
 ```mermaid
 graph TD
-    SLI["SmartLibrary Interface"] -->|Manages| Records["Component Records (JSON)"]
-    SLI -->|Uses| VDB["Vector Database (ChromaDB)"]
-    VDB -->|Stores| Embeddings["Vector Embeddings"]
+    SLI["SmartLibrary Interface"] -->|Manages| Records["Component Records (JSON)\n(T_orig, T_raz)"]
+    SLI -->|Uses| VDB["Vector Database (ChromaDB)"]:::infra
+    VDB -->|Stores| DualEmbeddings["Dual Embeddings (E_orig, E_raz)"]
     SLI -->|Uses| LLMEmb["LLM Embedding Service"]
+    SLI -->|Uses| LLMReason["LLM Reasoning Service (for T_raz)"]
 
     subgraph Storage & Search
         direction LR
         Records -- Stored in --> StorageBackend["JSON File / Database"]
-        Embeddings -- Stored in --> VectorDBBackend["ChromaDB / Other Vector Store"]
+        DualEmbeddings -- Stored in --> VectorDBBackend["ChromaDB / Other Vector Store"]
     end
 
-    LLMEmb -- Generates --> Embeddings
+    LLMEmb -- Generates --> DualEmbeddings
+    LLMReason -- Generates --> Records[T_raz]
+
+    classDef infra fill:#eee,stroke:#666,stroke-width:1px,color:#333;
 ```
 
 ### 2.4. Smart Agent Bus (Service Bus)
@@ -134,7 +143,15 @@ graph TD
     end
 ```
 
-### 2.5. Providers & Agent Factory
+### 2.5. Smart Context
+
+A data structure used to pass relevant information between agents and tools within a workflow or task execution.
+
+*   **Role:** Carries task-specific data, user input, intermediate results, and importantly, the **current task context description**.
+*   **Task Relevance:** The current task context stored within `SmartContext` is used by components like `SystemAgent` and `SearchComponentTool` to perform task-aware retrieval from the `SmartLibrary`.
+*   **Dual Embedding Interaction:** While `SmartContext` holds the task description, the dual embeddings themselves reside within the `SmartLibrary`. The context enables the *querying* mechanism to leverage those embeddings effectively.
+
+### 2.6. Providers & Agent Factory
 
 Abstract interaction with different underlying agent frameworks.
 
@@ -156,20 +173,24 @@ graph TD
     style OP fill:#ccf,stroke:#333,stroke-width:2px
 ```
 
-### 2.6. Dependency Container
+### 2.7. Dependency Container
 
 Manages the instantiation and wiring of core components.
 
 *   **Role:** Handles dependency injection to avoid circular imports and manage the initialization lifecycle. Ensures components like `SmartLibrary`, `AgentBus`, `LLMService`, `SystemAgent` receive their required dependencies during setup.
 
-### 2.7. Firmware
+### 2.8. LLM Service
+
+*   **Role:** Provides interface to underlying LLM models for text generation, standard embeddings (`E_orig`), applicability embeddings (`E_raz`), and reasoning capabilities needed for generating applicability text (`T_raz`). Includes caching capabilities. See `core/llm_service.py`.
+
+### 2.9. Firmware
 
 Provides governance rules and operational constraints.
 
 *   **Role:** Injects safety guidelines, ethical constraints, and domain-specific rules into agents and tools during creation or evolution.
 *   **Mechanism:** Typically provides prompts or configuration data used by `CreateComponentTool`, `EvolveComponentTool`, and framework providers (e.g., via `OpenAIGuardrailsAdapter`).
 
-### 2.8. Adapters
+### 2.10. Adapters
 
 Bridge different interfaces or formats.
 
@@ -179,7 +200,7 @@ Bridge different interfaces or formats.
 
 ## 3. Key Architectural Patterns & Flows
 
-### 3.1. Agent-Centric Communication (via Agent Bus)
+### 3.1. Agent Communication (via Agent Bus)
 
 Agents interact based on *what* needs to be done (capability), not *who* does it, primarily using the Data Bus (`request_capability`).
 
@@ -200,12 +221,49 @@ sequenceDiagram
     SB->>AA: Return Result(sentiment_score)
 ```
 
-### 3.2. Workflow Generation & Execution (Orchestrated by SystemAgent)
+### 3.2. Task-Aware Context Retrieval (Dual Embedding Strategy - Implemented)
+
+When an agent (e.g., `SystemAgent`) needs context for a specific task, it leverages the dual embedding capability of the `SmartLibrary` via tools like `ContextualSearchTool` or by passing `task_context` to `SearchComponentTool`.
+
+1.  **Query Formulation:** The agent formulates a query (`query`) and provides a description of its current task (`task_context`).
+2.  **Query Embedding:** The `SmartLibrary` (or `LLMService`) embeds the `query` (for content relevance) and the `task_context` (for applicability relevance).
+3.  **Applicability Search:** The `SmartLibrary` searches its vector index using the `task_context` embedding against the stored Applicability Embeddings (`E_raz`). This retrieves chunks whose *inferred applicability* matches the task.
+4.  **Refinement & Scoring:** The library combines the task relevance score (from `E_raz` match) and the content relevance score (similarity between `query` embedding and `E_orig`) using a weighting mechanism (e.g., `task_weight`). This produces a `final_score`. Usage metrics may also boost the score.
+5.  **Content Retrieval:** The `SmartLibrary` fetches the original text content (`T_orig`) for the final ranked list of chunk identifiers based on `final_score`.
+6.  **Context Provision:** The agent receives the highly relevant `T_orig` chunks tailored to its specific task.
+
+```mermaid
+sequenceDiagram
+    participant Agent as Requesting Agent (e.g., SystemAgent)
+    participant SL as Smart Library
+    participant VDB as Vector DB (Dual Embeddings)
+    participant LLM_Emb as Embedding Service
+
+    Agent->>Agent: Formulate Query & Task Context
+    Agent->>LLM_Emb: Embed Query (E_orig Model) & Task Context (E_raz Model)
+    LLM_Emb-->>Agent: Query Embeddings (E_orig, E_raz)
+
+    Agent->>SL: search(Query, Task Context, ...)
+
+    SL->>VDB: Search E_raz Index with Task Context Embedding
+    VDB-->>SL: Top-K Candidate Chunk IDs (Task Relevant)
+
+    SL->>VDB: Retrieve E_orig for Candidates
+    SL->>SL: Calculate Content Similarity (Query E_orig vs Candidate E_orig)
+    SL->>SL: Combine Task Score & Content Score (Weighted) -> Final Score
+    SL->>SL: Apply Usage Boost
+    SL->>SL: Sort/Filter by Final Score
+
+    SL->>SL: Fetch T_orig for Final Candidates
+    SL-->>Agent: Return Relevant T_orig Chunks & Scores
+```
+
+### 3.3. Workflow Generation & Execution (Orchestrated by SystemAgent)
 
 Complex tasks requiring multiple steps or new components are handled internally by the `SystemAgent`. The external caller simply provides the high-level goal.
 
 1.  **Goal Intake:** An external caller (User or another Agent) provides a high-level goal and necessary input data to the `SystemAgent`.
-2.  **Analysis & Planning (Internal):** The `SystemAgent`'s ReAct loop analyzes the goal. It uses its tools (`SearchComponentTool`, `DiscoverAgentTool`) to check if existing, suitable components can achieve the goal directly.
+2.  **Analysis & Planning (Internal):** The `SystemAgent`'s ReAct loop analyzes the goal. It uses its tools (`SearchComponentTool`, `DiscoverAgentTool`) potentially with task context to check if existing, suitable components can achieve the goal directly.
 3.  **Design & Workflow Decision (Internal):**
     *   *If* the task is complex, requires multiple steps, or necessitates new/evolved components:
         *   The `SystemAgent` *may* internally request a *solution design* from `ArchitectZero` (using `RequestAgentTool` on the Agent Bus).
@@ -230,7 +288,7 @@ sequenceDiagram
     Caller->>SysA: Run(High-Level Goal, Input Data)
 
     SysA->>SysA: Analyze Goal (ReAct Loop)
-    SysA->>InternalTools: Use Search/Discover Tools (Check Library/Bus)
+    SysA->>InternalTools: Use Search/Discover Tools (Check Library/Bus, potentially with Task Context)
     InternalTools-->>Library: Query
     InternalTools-->>AgentBus: Query
     Library-->>InternalTools: Component Info
@@ -269,14 +327,14 @@ sequenceDiagram
     SysA->>Caller: Return Final Workflow/Task Result
 ```
 
-### 3.3. Component Evolution
+### 3.4. Component Evolution
 
 Components can be improved or adapted, typically orchestrated by the `SystemAgent` using the `EvolveComponentTool`.
 
 1.  User or an agent (like `SystemAgent`) identifies a need to evolve a component (e.g., `ComponentA_v1`).
 2.  The `EvolveComponentTool` is invoked (usually by `SystemAgent`) with the `parent_id`, description of `changes`, and potentially `new_requirements` and an `evolution_strategy`.
 3.  The tool uses the `LLMService` to generate a new `code_snippet` based on the original code, changes, strategy, and firmware.
-4.  The tool calls `SmartLibrary.evolve_record` to create a new record (`ComponentA_v2`) linked to the parent, saving the new code and incrementing the version.
+4.  The tool calls `SmartLibrary.evolve_record` to create a new record (`ComponentA_v2`) linked to the parent, saving the new code and incrementing the version. This also triggers indexing of the new version, including T_raz generation and dual embedding.
 
 ```mermaid
 graph TD
@@ -298,7 +356,7 @@ graph TD
     ECT -->|Selects| strategy
 ```
 
-### 3.4. Dependency Injection & Initialization
+### 3.5. Dependency Injection & Initialization
 
 Managed by the `DependencyContainer`.
 
@@ -308,7 +366,7 @@ Managed by the `DependencyContainer`.
 
 ## 4. Multi-Framework Integration
 
-The Provider pattern is key to supporting different agent frameworks.
+The Provider pattern (`providers/`, `AgentFactory`) is key to supporting different agent frameworks.
 
 *   `AgentFactory` uses `ProviderRegistry` to select the correct `FrameworkProvider`.
 *   The `FrameworkProvider` handles framework-specific details of agent creation (e.g., initializing `beeai_framework.ReActAgent` vs. `agents.Agent`) and execution.
@@ -324,4 +382,4 @@ Integrated via the `Firmware` component and `SmartAgentBus` health checks.
 *   Guardrails (especially for OpenAI Agents via the adapter) can enforce rules at runtime.
 *   `AgentBus` circuit breakers prevent cascading failures by temporarily disabling unhealthy agents.
 
-This architecture promotes a flexible, extensible, and governable system for building complex AI agent solutions capable of adaptation and self-improvement, orchestrated primarily through the `SystemAgent` interacting with high-level goals.
+This architecture promotes a flexible, extensible, and governable system for building complex AI agent solutions capable of adaptation, task-aware context retrieval, and self-improvement, orchestrated primarily through the `SystemAgent` interacting with high-level goals.
