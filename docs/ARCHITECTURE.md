@@ -35,52 +35,6 @@ The central orchestrator and primary entry point of the ecosystem.
     *   **Intent Review Tools (Optional, used during review):** `WorkflowDesignReviewTool`, `ComponentSelectionReviewTool`, `ApprovePlanTool`. While available to the `SystemAgent`, these are primarily invoked during the human-in-the-loop review process.
     *   **(Optional) Framework-Specific Tools:** Tools for interacting directly with specific frameworks (e.g., `CreateOpenAIAgentTool`, `EvolveOpenAIAgentTool`).
 
-```mermaid
-graph TD
-    UserGoal["High-Level Goal / Task"] --> SA["SystemAgent (ReActAgent)"]
-
-    subgraph System Agent Internal Orchestration
-        direction LR
-        SA --> |Uses| SLT["SmartLibrary Tools"]
-        SA --> |Uses| SBT["AgentBus Tools"]
-        SA --> |Uses Internally| WT["Workflow Tools"]
-        SA --> |Uses Optional| FST["Framework-Specific Tools"]
-        SA --> |May Use| IRT["Intent Review Tools"]
-
-        SLT -->|Interacts| SL["Smart Library"]
-        SBT -->|Interacts| SB["Smart Agent Bus"]
-        WT ---|Generates/Parses| YAML/Plan["YAML / Internal Plan"]
-        FST -->|Interacts| ExternalSDKs["External Agent SDKs"]
-        IRT -->|Interacts with User/AI| ReviewProcess["Review Process"]
-
-        SA --> |Executes Steps Maybe After Review| SLT  %% Removed parentheses
-        SA --> |Executes Steps Maybe After Review| SBT  %% Removed parentheses
-        SA --> |Executes Steps Maybe After Review| FST  %% Removed parentheses
-    end
-
-     subgraph "External Interaction (Optional/Internal)"
-         direction LR
-         SA --> |Requests via Bus| ArchZ["ArchitectZero (Optional Design)"]
-         SB --> ArchZ
-         ArchZ --> SB
-         SB --> SA
-     end
-
-     subgraph "Intent Review Process (Optional)"
-        direction LR
-        WT -- Generates --> PlanForReview["Intent Plan"]
-        PlanForReview --> ReviewAgent["IntentReviewAgent / Human"]
-        ReviewAgent -- Uses --> IRT
-        ReviewAgent --> Approval["Approval / Rejection"]
-        Approval --> SA
-     end
-
-
-    SA --> FinalResult["Final Task Result"]
-
-    style SA fill:#ccf,stroke:#333,stroke-width:2px
-```
-
 ### 2.2. ArchitectZero Agent
 
 A specialized agent responsible for *designing* solutions, typically invoked by the `SystemAgent` via the `SmartAgentBus` when needed.
