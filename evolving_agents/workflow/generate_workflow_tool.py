@@ -17,6 +17,9 @@ from beeai_framework.emitter.emitter import Emitter
 # Project-specific imports
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.smart_library.smart_library import SmartLibrary
+# Import the specific Input model and the config module
+from evolving_agents.tools.intent_review.workflow_design_review_tool import WorkflowDesignReviewTool, WorkflowDesignInput
+from evolving_agents import config # Import the config module
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,60 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         """
         logger.info(f"Received request to generate workflow '{input.workflow_name}' in domain '{input.domain}'")
         try:
+            # If workflow_design is provided, review it before generating YAML
+            if input.workflow_design:
+                # First check if review is enabled globally
+                intent_review_enabled = getattr(config, "INTENT_REVIEW_ENABLED", False)
+                review_levels = getattr(config, "INTENT_REVIEW_LEVELS", [])
+
+                # Check if 'design' review level is enabled
+                design_review_active = intent_review_enabled and ("design" in review_levels)
+
+                if design_review_active and context and hasattr(context, "get_value"):
+                    # Allow override from context, defaulting to True if design review is active
+                    human_review_workflow = context.get_value("human_review_workflow", True)
+
+                    if human_review_workflow:
+                        # Create a temporary WorkflowDesignReviewTool
+                        design_review_tool = WorkflowDesignReviewTool()
+
+                        logger.info("Workflow design intercepted for human review")
+
+                        # Submit the design for human review using the correct input model
+                        review_input = WorkflowDesignInput(
+                            design=input.workflow_design,
+                            interactive=True # Or determine from context/config
+                        )
+
+                        try:
+                            review_result = await design_review_tool._run(review_input, options, context)
+                            review_data = json.loads(review_result.get_text_content())
+
+                            # Check if the design was approved
+                            if review_data.get("status") != "approved":
+                                # Design was rejected
+                                return StringToolOutput(json.dumps({
+                                    "status": "design_rejected",
+                                    "message": "The workflow design was rejected and YAML generation was aborted.",
+                                    "reason": review_data.get("reason", "No reason provided"),
+                                    "original_design": input.workflow_design
+                                }, indent=2)) # Added indent for readability
+
+                            # If we get here, the design was approved
+                            logger.info("Workflow design approved by human reviewer, proceeding to YAML generation")
+
+                            # Continue with any design modifications from review
+                            if "modified_design" in review_data:
+                                input.workflow_design = review_data["modified_design"]
+
+                        except Exception as e:
+                            logger.error(f"Error during workflow design review: {str(e)}")
+                            # Continue with generation despite review error? Decide policy here.
+                            # For now, let's continue.
+                            logger.warning("Continuing YAML generation despite review error.")
+
+            # Proceed with the existing workflow generation logic
+
             # Prioritize structured input if available
             if input.workflow_design and input.library_entries:
                 logger.info("Generating workflow from structured design and library entries.")
@@ -242,15 +299,23 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         """Generate YAML directly from natural language requirements using LLM."""
         # Search logic
         logger.debug(f"Searching library for components related to requirements: {requirements[:100]}...")
-        search_results = await self.library.semantic_search(
-            query=requirements,
-            domain=domain,
-            limit=10
-        )
-        potential_components = [{
-            "name": r["name"], "type": r["record_type"],
-            "description": r["description"], "similarity": round(sim, 3)
-        } for r, sim in search_results]
+        try:
+            search_results = await self.library.semantic_search(
+                query=requirements,
+                domain=domain,
+                limit=10
+            )
+            # --- FIX IS HERE ---
+            # Correctly unpack the 4-element tuple from semantic_search
+            potential_components = [{
+                "name": r["name"], "type": r["record_type"],
+                "description": r["description"], "similarity": round(final_score, 3)
+            } for r, final_score, content_score, task_score in search_results] # Unpack all 4 values
+            # --------------------
+            logger.debug(f"Found {len(potential_components)} potential components for prompt context.")
+        except Exception as search_error:
+            logger.error(f"Error during semantic search within GenerateWorkflowTool: {search_error}", exc_info=True)
+            potential_components = [] # Proceed without potential components if search fails
 
         # Construct the prompt with EVEN MORE detailed instructions, especially for RETURN
         workflow_prompt = f"""
