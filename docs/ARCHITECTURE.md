@@ -53,12 +53,13 @@ graph TD
         FST -->|Interacts| ExternalSDKs["External Agent SDKs"]
         IRT -->|Interacts with User/AI| ReviewProcess["Review Process"]
 
-        SA --> |Executes Steps (Maybe After Review)| SLT
-        SA --> |Executes Steps (Maybe After Review)| SBT
-        SA --> |Executes Steps (Maybe After Review)| FST
+        SA --> |Executes Steps Maybe After Review| SLT  %% Removed parentheses
+        SA --> |Executes Steps Maybe After Review| SBT  %% Removed parentheses
+        SA --> |Executes Steps Maybe After Review| FST  %% Removed parentheses
     end
 
      subgraph "External Interaction (Optional/Internal)"
+         direction LR
          SA --> |Requests via Bus| ArchZ["ArchitectZero (Optional Design)"]
          SB --> ArchZ
          ArchZ --> SB
@@ -74,9 +75,10 @@ graph TD
         Approval --> SA
      end
 
+
     SA --> FinalResult["Final Task Result"]
 
-    style SA fill:#ccf,stroke:#333,stroke-width:2px  %% Moved style definition here
+    style SA fill:#ccf,stroke:#333,stroke-width:2px
 ```
 
 ### 2.2. ArchitectZero Agent
