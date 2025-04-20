@@ -37,7 +37,7 @@ graph TD
     end
 
     %% Main Control Flow & Dependencies
-    SA -- Uses --> Tools["SystemAgent Tools\n(Search, Create, Evolve, Request, Workflow...)"];;;tool
+    SA -- Uses --> Tools["SystemAgent Tools\n(Search, Create, Evolve, Request, Workflow, IntentReview...)"];;;tool %% Added IntentReview
     SA -- Uses --> LLMS
     SA -- Utilizes --> SCtx
     SA -- Relies on --> AgentF
@@ -99,15 +99,16 @@ Building true **AI-First systems**—where agent workflows are capable of handli
 *   **🧠 Intelligent Component Management & Discovery:** A `SmartLibrary` acts as a central repository for reusable agents and tools, enabling semantic search (find tools based on *what they do*, not just names) and versioning. Crucially, it supports **task-aware retrieval** using a dual embedding strategy, ensuring discovered components are relevant to the specific task at hand.
 *   **🚌 Dynamic Communication & Service Bus:** The `SmartAgentBus` (with distinct System and Data buses) allows agents to discover and request capabilities across the system dynamically, decoupling components and enabling flexible interactions similar to microservices.
 *   **🌱 Adaptive Evolution:** Components aren't static. EAT provides mechanisms (`EvolveComponentTool`) for the `SystemAgent` to evolve agents and tools based on new requirements, performance feedback, or changing contexts, enabling the system to adapt and improve over time.
+*   **🛡️ Governed Execution & Human-in-the-Loop:** Implement optional, multi-level review checkpoints (design, component selection, execution plan) using the `IntentReviewAgent` and specialized tools. This allows for human oversight or AI-driven safety checks before critical steps are executed, ensuring alignment and safety within defined boundaries (`Firmware`).
 *   **🧩 Modular & Interoperable:** Seamlessly integrate agents and tools built with different frameworks (e.g., BeeAI, OpenAI Assistants SDK) via a flexible provider system (`AgentFactory`, `ToolFactory`, `providers/`). Define clear operational rules and safety guardrails using `Firmware`.
 *   **💡 Task-Specific Context:** The architecture incorporates a `SmartContext` and a **Dual Embedding Strategy** within the `SmartLibrary` to provide agents with context specifically relevant to their current task, reducing noise and improving performance compared to standard semantic retrieval.
 *   **🤖 Self-Management & Improvement:** The architecture allows system agents like `SystemAgent` and (optionally) `ArchitectZero` to collaboratively design, implement, manage, and even improve the ecosystem, including the toolkit's own components (see `examples/self_improvement/evolve_smart_library.py`).
 
-**In short: If you aim to build AI-First systems that are more than the sum of their parts—systems that can coordinate diverse capabilities, adapt to new challenges, provide highly relevant context, and manage complexity autonomously—EAT provides the essential structure and tools.**
+**In short: If you aim to build AI-First systems that are more than the sum of their parts—systems that can coordinate diverse capabilities, adapt to new challenges, provide highly relevant context, manage complexity autonomously, and operate under governance with optional human oversight—EAT provides the essential structure and tools.**
 
 ## Key Features
 
-*   **`SystemAgent` Orchestrator:** A central ReAct agent (using BeeAI) acting as the primary entry point. It uses specialized tools to manage the entire component lifecycle (search, create, evolve) and task execution based on high-level goals. It leverages `SmartContext` for task-aware operations.
+*   **`SystemAgent` Orchestrator:** A central ReAct agent (using BeeAI) acting as the primary entry point. It uses specialized tools to manage the entire component lifecycle (search, create, evolve) and task execution based on high-level goals. It leverages `SmartContext` for task-aware operations and can operate within an optional human-in-the-loop review process.
 *   **`SmartLibrary` with Dual Embedding:** Persistent storage (`smart_library.json`) with versioning and evolution capabilities. Features advanced semantic search using a **Dual Embedding Strategy**:
     *   **Content Embedding (`E_orig`):** Represents the component's raw content/code (`T_orig`).
     *   **Applicability Embedding (`E_raz`):** Represents an LLM-generated text (`T_raz`) describing the component's potential tasks, context, and implications.
@@ -115,9 +116,13 @@ Building true **AI-First systems**—where agent workflows are capable of handli
 *   **`SmartAgentBus` (Dual Bus):** Manages agent registration, discovery, health monitoring (System Bus), and capability-based requests/communication (Data Bus), logging interactions (`agent_bus_logs_demo.json`).
 *   **`SmartContext`:** Facilitates passing relevant data and task context between agents and tools, enabling the task-aware retrieval mechanism.
 *   **Internal Workflow Engine:** For complex goals, the `SystemAgent` can *internally* generate and execute multi-step YAML workflows (`GenerateWorkflowTool`, `ProcessWorkflowTool`), abstracting this complexity from the user.
+*   **Intent Review System (Human-in-the-Loop):** (Optional, configurable via `.env`) Enables multi-level review and approval of system actions:
+    *   **`IntentReviewAgent`:** An AI agent specialized in reviewing plans and designs.
+    *   **Review Tools:** `WorkflowDesignReviewTool`, `ComponentSelectionReviewTool`, `ApprovePlanTool` facilitate human or AI review at different stages.
+    *   **`IntentPlan`:** A structured representation of the steps the `SystemAgent` intends to execute, generated by `ProcessWorkflowTool` when review is enabled. Ensures safety and alignment before execution.
 *   **Component Evolution:** Adapt agents/tools using different strategies (e.g., standard, conservative, aggressive, domain adaptation) orchestrated by the `SystemAgent` via `EvolveComponentTool`.
 *   **Multi-Framework Support:** Pluggable provider architecture (`providers/`, `AgentFactory`, `ToolFactory`) allows integrating components built with different SDKs (e.g., `BeeAIProvider`, `OpenAIAgentsProvider`). Adapters (`adapters/`) bridge interfaces (e.g., `OpenAIToolAdapter`).
-*   **Governance & Safety:** Define operational rules and safety constraints via `Firmware` and apply them during component creation/evolution or runtime (e.g., `OpenAIGuardrailsAdapter`).
+*   **Governance & Safety:** Define operational rules and safety constraints via `Firmware` and apply them during component creation/evolution or runtime (e.g., `OpenAIGuardrailsAdapter`). Enhanced by the optional Intent Review system.
 *   **(Optional) `ArchitectZero`:** A specialized agent (see `agents/architect_zero.py`) that can be called *internally* by the `SystemAgent` (via the Agent Bus) to design complex multi-component solutions based on requirements.
 
 ## Installation
@@ -147,13 +152,16 @@ pip install -e .
 cp .env.example .env
 
 # Edit the .env file and add your API keys (e.g., OPENAI_API_KEY)
+# Optionally enable Intent Review:
+# INTENT_REVIEW_ENABLED=true
+# INTENT_REVIEW_LEVELS=design,components,intents # Choose which levels to review
 # nano .env  OR use your preferred editor
 ```
 *Configure other settings like `LLM_MODEL`, `LLM_EMBEDDING_MODEL` if needed (defaults are provided in `.env.example` and `config.py`).*
 
 **2. Run the Comprehensive Demo:**
 
-This demo showcases the `SystemAgent` orchestrating a complex task (invoice processing) based on a high-level goal. It demonstrates component discovery (potentially leveraging task-aware search), potential creation/evolution (using its internal tools), and execution.
+This demo showcases the `SystemAgent` orchestrating a complex task (invoice processing) based on a high-level goal. It demonstrates component discovery (potentially leveraging task-aware search), potential creation/evolution (using its internal tools), and execution. If `INTENT_REVIEW_ENABLED=true` is set in `.env`, it will pause for human review at configured stages.
 
 ```bash
 python examples/invoice_processing/architect_zero_comprehensive_demo.py
@@ -167,18 +175,20 @@ After the demo runs, check the generated files in the main directory (or as spec
 *   `smart_library_demo.json`: The state of the component library (`SmartLibrary`) after the run, showing created/evolved components.
 *   `smart_agent_bus_demo.json`: The state of the agent registry on the `SmartAgentBus`.
 *   `agent_bus_logs_demo.json`: Logs of agent interactions via the System and Data buses.
+*   `intent_plan_demo.json` (If review enabled): The generated intent plan that was reviewed.
 
-*(**Note:** This comprehensive demo is currently the primary quick start. Explore the `examples/` directory for more focused use cases like `examples/smart_context/dual_embedding_demo.py`.)*
+*(**Note:** This comprehensive demo is currently the primary quick start. Explore the `examples/` directory for more focused use cases like `examples/smart_context/dual_embedding_demo.py` or `examples/intent_review/integrated_review_demo.py`.)*
 
 ## Dive Deeper
 
-*   **Architecture Overview:** Understand the core components and their interactions in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Includes details on the Dual Embedding strategy.
-*   **Key Concepts:** Learn about the `SystemAgent`, `SmartLibrary`, `SmartAgentBus`, `SmartContext`, `Evolution`, and `Workflows` in detail. *(See ARCHITECTURE.md and specific component documentation)*
+*   **Architecture Overview:** Understand the core components and their interactions in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Includes details on the Dual Embedding strategy and Intent Review flow (update needed).
+*   **Key Concepts:** Learn about the `SystemAgent`, `SmartLibrary`, `SmartAgentBus`, `SmartContext`, `Evolution`, `Workflows`, and `Intent Review / Human-in-the-Loop` in detail. *(See ARCHITECTURE.md and specific component documentation)*
 *   **Technical Reference:** Explore detailed descriptions of core components:
     *   [SmartLibrary & Dual Embedding](./docs/TECH-REF_SMARTLIBRARY.md) *(Action Required: Create/Update)*
     *   [SmartContext & Task Relevance](./docs/TECH-REF_SMARTCONTEXT.md) *(Action Required: Create)*
     *   [SmartAgentBus](./docs/TECH-REF_SMARTAGENTBUS.md) *(Action Required: Create)*
     *   [SystemAgent & Orchestration](./docs/TECH-REF_SYSTEMAGENT.md) *(Action Required: Create)*
+    *   [Intent Review & Governance](./docs/TECH-REF_INTENTREVIEW.md) *(Action Required: Create)*
     *   [Component Evolution](./docs/TECH-REF_EVOLUTION.md) *(Action Required: Create)*
     *   [Providers & Multi-Framework](./docs/TECH-REF_PROVIDERS.md) *(Action Required: Create)*
     *   [Governance & Firmware](./docs/TECH-REF_GOVERNANCE.md) *(Action Required: Create)*
@@ -188,6 +198,7 @@ After the demo runs, check the generated files in the main directory (or as spec
     *   `smart_agent_bus/`: Showcases the Dual Bus (System/Data) operations.
     *   `smart_context/`: Demonstrates the Dual Embedding search strategy.
     *   `self_improvement/`: Example of evolving the `SmartLibrary` component itself.
+    *   `intent_review/`: Demonstrates the multi-level Intent Review / Human-in-the-Loop process.
     *   `autocomplete/`: Building a context-aware autocomplete system.
     *   `forms/`: Creating and running conversational forms.
 *   **Contributing:** We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) *(Action Required: Create)*.
@@ -197,11 +208,12 @@ After the demo runs, check the generated files in the main directory (or as spec
 *   **Enhanced Smart Context & Memory:** Further refine the `SmartContext` implementation. Explore more sophisticated `SmartMemory` components for managing long-term agent memory and learning, potentially leveraging the dual embedding insights.
 *   **Smart Cache:** Introduce `SmartCache` that selectively caches successful LLM calls (e.g., high-quality generations, successful T_raz generation) for agent/tool improvement feedback loops.
 *   **Enhanced Evolution:** Leverage `SmartContext`, `SmartMemory`, and `SmartCache` to further automate and refine agent/tool evolution, potentially including LLM fine-tuning based on performance and task relevance feedback.
+*   **Enhanced Intent Review:** Improve the `IntentReviewAgent`'s capabilities, provide richer context for human reviewers, refine the review levels, and potentially add visualisations for plans.
 *   **Refined Dual Embedding Strategy:** Optimize the T_raz generation prompt, evaluate different embedding models for E_orig vs E_raz, and fine-tune the retrieval/re-ranking algorithms.
-*   **Enhanced Observability:** Improve logging and distributed tracing across components for better debugging, monitoring, and performance analysis of agent workflows, including context retrieval steps.
+*   **Enhanced Observability:** Improve logging and distributed tracing across components for better debugging, monitoring, and performance analysis of agent workflows, including context retrieval and intent review steps.
 *   **More Providers:** Add support for other agent frameworks (e.g., LangChain, AutoGen).
-*   **UI Integration:** Explore options for a basic UI for monitoring the agent bus, library, task execution, and potentially visualizing context retrieval.
-*   **Testing:** Expand unit and integration test coverage significantly (`tests/`), including tests specifically for the dual embedding retrieval logic.
+*   **UI Integration:** Explore options for a basic UI for monitoring the agent bus, library, task execution, and managing the Intent Review process.
+*   **Testing:** Expand unit and integration test coverage significantly (`tests/`), including tests specifically for the dual embedding retrieval logic and the intent review workflow.
 
 ## License
 

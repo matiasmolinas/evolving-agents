@@ -12,7 +12,7 @@ Key goals of the architecture include:
 *   **Modularity & Reusability:** Promote the reuse of components (agents, tools) through discovery and adaptation via the `SmartLibrary`.
 *   **Interoperability:** Support agents and tools built with different underlying frameworks (e.g., BeeAI, OpenAI Agents SDK) through a provider pattern.
 *   **Decoupled Communication:** Facilitate communication based on *capabilities* rather than direct references using the `SmartAgentBus`.
-*   **Governance & Safety:** Embed safety and ethical considerations through `Firmware` and guardrails.
+*   **Governance & Safety:** Embed safety and ethical considerations through `Firmware` and guardrails, enhanced by an optional, configurable human-in-the-loop review process.
 *   **Task-Relevant Context:** Provide agents with context that is not just topically similar but specifically relevant to the task they are performing (leveraging the implemented Dual Embedding Strategy in `SmartLibrary` and `SmartContext`).
 *   **Orchestration:** Provide mechanisms for achieving complex goals. The `SystemAgent` handles complex, multi-step tasks by potentially designing (via `ArchitectZero`), generating, processing, and executing workflows *internally*. External callers interact via high-level goals.
 
@@ -25,13 +25,14 @@ The toolkit is composed of several key interacting components:
 The central orchestrator and primary entry point of the ecosystem.
 
 *   **Implementation:** A `beeai_framework.agents.react.ReActAgent`.
-*   **Role:** Receives high-level goals or tasks and determines the best execution strategy. It manages component lifecycles (search, create, evolve via tools), facilitates communication (via Agent Bus tools), and handles complex task execution. It uses `SmartContext` to understand the task at hand and leverages the `SmartLibrary`'s task-aware search to find relevant components. For multi-step tasks, it *internally* orchestrates the use of its specialized workflow tools (`GenerateWorkflowTool`, `ProcessWorkflowTool`) to create and execute a plan.
+*   **Role:** Receives high-level goals or tasks and determines the best execution strategy. It manages component lifecycles (search, create, evolve via tools), facilitates communication (via Agent Bus tools), and handles complex task execution. It uses `SmartContext` to understand the task at hand and leverages the `SmartLibrary`'s task-aware search to find relevant components. For multi-step tasks, it *internally* orchestrates the use of its specialized workflow tools (`GenerateWorkflowTool`, `ProcessWorkflowTool`). When **Intent Review** is enabled, the `ProcessWorkflowTool` generates an `IntentPlan` which is then reviewed before the `SystemAgent` executes the approved steps.
 *   **Key Tools:**
     *   **SmartLibrary Tools:** `SearchComponentTool`, `CreateComponentTool`, `EvolveComponentTool`, `TaskContextTool`, `ContextualSearchTool` for managing components and task-aware context.
     *   **AgentBus Tools:** `RegisterAgentTool`, `RequestAgentTool`, `DiscoverAgentTool` for managing agent registration and communication/execution.
     *   **Workflow Tools (Internal Use):**
         *   `GenerateWorkflowTool`: Translates solution designs (often obtained internally, e.g., from ArchitectZero via the AgentBus) into executable YAML workflow strings. *Not typically called directly by external users.*
-        *   `ProcessWorkflowTool`: Parses workflow YAML, substitutes parameters, validates structure, and produces a step-by-step execution plan for the SystemAgent's ReAct loop. *Not typically called directly by external users.*
+        *   `ProcessWorkflowTool`: Parses workflow YAML, substitutes parameters, validates structure. If Intent Review is *disabled*, produces a step-by-step execution plan for the SystemAgent's ReAct loop. If Intent Review is *enabled*, produces an `IntentPlan` object for review. *Not typically called directly by external users.*
+    *   **Intent Review Tools (Optional, used during review):** `WorkflowDesignReviewTool`, `ComponentSelectionReviewTool`, `ApprovePlanTool`. While available to the `SystemAgent`, these are primarily invoked during the human-in-the-loop review process.
     *   **(Optional) Framework-Specific Tools:** Tools for interacting directly with specific frameworks (e.g., `CreateOpenAIAgentTool`, `EvolveOpenAIAgentTool`).
 
 ```mermaid
@@ -44,15 +45,17 @@ graph TD
         SA --> |Uses| SBT["AgentBus Tools"]
         SA --> |Uses Internally| WT["Workflow Tools"]
         SA --> |Uses Optional| FST["Framework-Specific Tools"]
+        SA --> |May Use| IRT["Intent Review Tools"]
 
         SLT -->|Interacts| SL["Smart Library"]
         SBT -->|Interacts| SB["Smart Agent Bus"]
-        WT ---|Generates/Parses| WorkflowPlan["Internal Workflow Plan"]
+        WT ---|Generates/Parses| YAML/Plan["YAML / Internal Plan"]
         FST -->|Interacts| ExternalSDKs["External Agent SDKs"]
+        IRT -->|Interacts with User/AI| ReviewProcess["Review Process"]
 
-        SA --> |Executes Steps| SLT
-        SA --> |Executes Steps| SBT
-        SA --> |Executes Steps| FST
+        SA --> |Executes Steps (Maybe After Review)| SLT
+        SA --> |Executes Steps (Maybe After Review)| SBT
+        SA --> |Executes Steps (Maybe After Review)| FST
     end
 
      subgraph "External Interaction (Optional/Internal)"
@@ -61,6 +64,16 @@ graph TD
          ArchZ --> SB
          SB --> SA
      end
+
+     subgraph "Intent Review Process (Optional)"
+        direction LR
+        WT -- Generates --> PlanForReview["Intent Plan"]
+        PlanForReview --> ReviewAgent["IntentReviewAgent / Human"]
+        ReviewAgent -- Uses --> IRT
+        ReviewAgent --> Approval["Approval / Rejection"]
+        Approval --> SA
+     end
+
 
     SA --> FinalResult["Final Task Result"]
 
@@ -73,7 +86,7 @@ A specialized agent responsible for *designing* solutions, typically invoked by 
 
 *   **Implementation:** Typically a `ReActAgent` (as shown in `agents/architect_zero.py`).
 *   **Role:** Analyzes high-level requirements, queries the `SmartLibrary`, designs multi-component solutions, and specifies components.
-*   **Output:** Produces a structured *solution design* (e.g., JSON). This design serves as a blueprint *for the SystemAgent* to understand how to orchestrate component creation and execution, potentially involving internal workflow generation.
+*   **Output:** Produces a structured *solution design* (e.g., JSON). This design serves as a blueprint *for the SystemAgent* to understand how to orchestrate component creation and execution, potentially involving internal workflow generation and design review.
 *   **Key Tools (Internal):** `AnalyzeRequirementsTool`, `DesignSolutionTool`, `ComponentSpecificationTool`.
 
 ### 2.3. Smart Library
@@ -150,6 +163,7 @@ A data structure used to pass relevant information between agents and tools with
 *   **Role:** Carries task-specific data, user input, intermediate results, and importantly, the **current task context description**.
 *   **Task Relevance:** The current task context stored within `SmartContext` is used by components like `SystemAgent` and `SearchComponentTool` to perform task-aware retrieval from the `SmartLibrary`.
 *   **Dual Embedding Interaction:** While `SmartContext` holds the task description, the dual embeddings themselves reside within the `SmartLibrary`. The context enables the *querying* mechanism to leverage those embeddings effectively.
+*   **Intent Plan Handling:** Can carry the `IntentPlan` object during the review process.
 
 ### 2.6. Providers & Agent Factory
 
@@ -197,6 +211,17 @@ Bridge different interfaces or formats.
 *   **`OpenAIGuardrailsAdapter`:** Converts `Firmware` rules into OpenAI Agents SDK guardrail functions.
 *   **`OpenAIToolAdapter`:** Converts Evolving Agents/BeeAI tools into a format compatible with the OpenAI Agents SDK `function_tool`.
 *   **`OpenAITracingAdapter`:** (Optional) Integrates OpenAI Agents SDK tracing with the toolkit's monitoring.
+
+### 2.11. Intent Review System (Optional)
+
+Provides multi-level human-in-the-loop review and approval capabilities.
+
+*   **`IntentReviewAgent`:** A specialized agent (e.g., `ReActAgent`) designed to analyze and review plans, component selections, or designs based on safety, relevance, and effectiveness criteria. Can be used for AI-driven review or to facilitate human review.
+*   **Intent Review Tools:**
+    *   `WorkflowDesignReviewTool`: Facilitates review of high-level workflow designs generated by `ArchitectZero` or `SystemAgent`.
+    *   `ComponentSelectionReviewTool`: Presents candidate components (found via search) to a reviewer for selection or approval before use.
+    *   `ApprovePlanTool`: Facilitates review and approval/rejection of a detailed `IntentPlan` before execution.
+*   **`IntentPlan`:** A structured representation (see `core/intent_review.py`) of the sequence of actions (`Intents`) the `SystemAgent` plans to execute. Generated by `ProcessWorkflowTool` when review is enabled. Each `Intent` details the component, action, parameters, justification, and dependencies.
 
 ## 3. Key Architectural Patterns & Flows
 
@@ -260,20 +285,21 @@ sequenceDiagram
 
 ### 3.3. Workflow Generation & Execution (Orchestrated by SystemAgent)
 
-Complex tasks requiring multiple steps or new components are handled internally by the `SystemAgent`. The external caller simply provides the high-level goal.
+Complex tasks requiring multiple steps or new components are handled internally by the `SystemAgent`. The external caller simply provides the high-level goal. **Note:** Steps involving review are detailed in section 3.6.
 
 1.  **Goal Intake:** An external caller (User or another Agent) provides a high-level goal and necessary input data to the `SystemAgent`.
 2.  **Analysis & Planning (Internal):** The `SystemAgent`'s ReAct loop analyzes the goal. It uses its tools (`SearchComponentTool`, `DiscoverAgentTool`) potentially with task context to check if existing, suitable components can achieve the goal directly.
 3.  **Design & Workflow Decision (Internal):**
     *   *If* the task is complex, requires multiple steps, or necessitates new/evolved components:
-        *   The `SystemAgent` *may* internally request a *solution design* from `ArchitectZero` (using `RequestAgentTool` on the Agent Bus).
+        *   The `SystemAgent` *may* internally request a *solution design* from `ArchitectZero` (using `RequestAgentTool` on the Agent Bus). **(Optional Design Review Point)**
         *   Based on the design (or internal analysis), it uses its `GenerateWorkflowTool` to create an executable YAML workflow string.
-        *   It then uses its `ProcessWorkflowTool` to parse the YAML and create a structured *execution plan* (list of steps).
-    *   *Else* (if a direct execution path exists): The `SystemAgent` proceeds to Step 4 using a simple plan (e.g., one `EXECUTE` step).
-4.  **Plan Execution (Internal):** The `SystemAgent`'s ReAct loop iterates through the execution plan (if generated). For each step, it uses the appropriate tool (`CreateComponentTool` for `DEFINE`, `AgentFactory` via tool for `CREATE`, `RequestAgentTool` for `EXECUTE`, etc.) to perform the action. Data is passed between steps using context variables managed by the agent.
-5.  **Result Return:** The `SystemAgent` returns the final result (as specified by the plan's `RETURN` step or the direct execution) to the original caller.
+        *   It then uses its `ProcessWorkflowTool` to parse the YAML. If Intent Review is *disabled*, this produces a structured *execution plan*. If Intent Review is *enabled*, this produces an `IntentPlan` for review.
+    *   *Else* (if a direct execution path exists): The `SystemAgent` proceeds to Step 4 using a simple plan.
+4.  **Optional Review (See 3.6):** If an `IntentPlan` was generated, it is reviewed. Execution proceeds only upon approval.
+5.  **Plan Execution (Internal):** The `SystemAgent`'s ReAct loop iterates through the approved execution plan or `IntentPlan`. For each step, it uses the appropriate tool (`CreateComponentTool` for `DEFINE`, `AgentFactory` via tool for `CREATE`, `RequestAgentTool` for `EXECUTE`, etc.) to perform the action. Data is passed between steps using context variables managed by the agent.
+6.  **Result Return:** The `SystemAgent` returns the final result (as specified by the plan's `RETURN` step or the direct execution) to the original caller.
 
-**Key Point:** Steps 3 and 4 (Design, Generate, Process, Execute Plan) are internal mechanisms of the `SystemAgent` and are abstracted away from the external caller.
+**Key Point:** Steps 3, 4, and 5 (Design, Generate, Process, Review, Execute Plan) are internal mechanisms of the `SystemAgent` and related tools/agents, abstracted away from the external caller.
 
 ```mermaid
 sequenceDiagram
@@ -283,12 +309,13 @@ sequenceDiagram
     participant AgentBus as Smart Agent Bus
     participant ArchZ as ArchitectZero (Via Bus)
     participant Library as Smart Library
+    participant Reviewer as IntentReviewAgent / Human
     participant TargetComp as Target Component (Via Bus)
 
     Caller->>SysA: Run(High-Level Goal, Input Data)
 
     SysA->>SysA: Analyze Goal (ReAct Loop)
-    SysA->>InternalTools: Use Search/Discover Tools (Check Library/Bus, potentially with Task Context)
+    SysA->>InternalTools: Use Search/Discover Tools
     InternalTools-->>Library: Query
     InternalTools-->>AgentBus: Query
     Library-->>InternalTools: Component Info
@@ -305,15 +332,41 @@ sequenceDiagram
         AgentBus->>InternalTools: Design Result
         InternalTools-->>SysA: Solution Design Received
 
-        SysA->>SysA: Use GenerateWorkflowTool (Internal)
-        SysA->>SysA: Use ProcessWorkflowTool (Internal)
-        SysA->>SysA: Obtain Execution Plan (List of Steps)
+        opt Design Review Enabled
+             SysA->>Reviewer: Request Design Review (using WorkflowDesignReviewTool)
+             Reviewer-->>SysA: Approval / Rejection
+             Note over SysA: Halt if rejected
+        end
+
+        SysA->>InternalTools: Use GenerateWorkflowTool (Internal)
+        InternalTools-->>SysA: Workflow YAML
+
+        SysA->>InternalTools: Use ProcessWorkflowTool (Internal)
+        alt Intent Review Enabled
+             InternalTools-->>SysA: IntentPlan Object
+             SysA->>Reviewer: Request Intent Plan Review (using ApprovePlanTool)
+             Reviewer-->>SysA: Approval / Rejection
+             Note over SysA: Halt if rejected
+             SysA->>SysA: Use Approved IntentPlan for Execution
+        else Direct Execution
+             InternalTools-->>SysA: Execution Plan (List of Steps)
+             SysA->>SysA: Use Execution Plan
+        end
+
     else Task is Simple / Direct Execution
         SysA->>SysA: Create Simple Plan (e.g., one EXECUTE step)
     end
 
-    loop For Each Step in Plan
-        SysA->>SysA: Analyze Step (e.g., type=CREATE, name=CompX)
+    loop For Each Step in Plan/IntentPlan
+        SysA->>SysA: Analyze Step
+        opt Component Selection Review Enabled and Step needs Search
+             SysA->>InternalTools: Use Search Tool
+             InternalTools-->>Library: Query
+             Library-->>InternalTools: Candidate Components
+             SysA->>Reviewer: Request Component Selection (using ComponentSelectionReviewTool)
+             Reviewer-->>SysA: Selected Component(s)
+        end
+
         SysA->>InternalTools: Use Appropriate Tool (CreateTool, RequestTool, etc.)
         InternalTools-->>Library: (Create/Evolve Record)
         InternalTools-->>AgentBus: (Execute Capability on TargetComp)
@@ -360,9 +413,48 @@ graph TD
 
 Managed by the `DependencyContainer`.
 
-1.  **Registration Phase:** Core components (`LLMService`, `SmartLibrary`, `AgentBus`, `SystemAgent`, `ArchitectZero`, etc.) are instantiated (often by factories using the container for *their* dependencies) and registered with the container.
+1.  **Registration Phase:** Core components (`LLMService`, `SmartLibrary`, `AgentBus`, `SystemAgent`, `ArchitectZero`, `IntentReviewAgent`, etc.) are instantiated (often by factories using the container for *their* dependencies) and registered with the container.
 2.  **Wiring Phase:** Dependencies are resolved. For example, when `SystemAgent` is created, its factory gets `LLMService`, `SmartLibrary`, `AgentBus`, etc. from the container. Circular dependencies are handled (e.g., `AgentBus` might get the `SystemAgent` instance after it's created).
 3.  **Initialization Phase:** Components perform setup that requires their dependencies to be present (e.g., `AgentBus.initialize_from_library` is called after the `SmartLibrary` and `SystemAgent` are available).
+
+### 3.6. Intent Review / Human-in-the-Loop Flow (Optional)
+
+This flow adds checkpoints for review before critical actions are taken. It's enabled via configuration (e.g., `.env` settings).
+
+1.  **Design Review (Optional):** After `ArchitectZero` (or `SystemAgent`) generates a solution design, `WorkflowDesignReviewTool` can present it for review. If rejected, the process may halt or request redesign.
+2.  **Component Selection Review (Optional):** When `SystemAgent` uses `SearchComponentTool`, the results can be intercepted by `ComponentSelectionReviewTool` for review before a component is chosen for reuse/evolution/creation.
+3.  **Intent Plan Generation:** When `ProcessWorkflowTool` runs with review enabled, it outputs an `IntentPlan` object instead of a direct execution plan.
+4.  **Intent Plan Review (Core):** The `IntentPlan` is presented for review using `ApprovePlanTool`. This allows scrutiny of each planned step (component, action, parameters, dependencies).
+5.  **Execution:** If the `IntentPlan` is approved, the `SystemAgent` proceeds to execute the approved `Intents`. If rejected, execution halts.
+
+```mermaid
+sequenceDiagram
+    participant SysA as SystemAgent
+    participant PWT as ProcessWorkflowTool
+    participant Reviewer as IntentReviewAgent / Human
+    participant APT as ApprovePlanTool
+
+    Note over SysA: Task requires workflow
+    SysA->>PWT: ProcessWorkflow(workflowYAML)
+    Note over PWT: Intent Review Enabled
+    PWT->>PWT: Parse YAML, Substitute Params
+    PWT->>PWT: Validate Steps & Generate IntentPlan Object
+    PWT-->>SysA: Return IntentPlan Object
+
+    Note over SysA: Review Required
+    SysA->>Reviewer: Request Intent Plan Review (Pass IntentPlan)
+    Reviewer->>APT: Use ApprovePlanTool (Presents Plan)
+    APT->>Reviewer: Get Approval/Rejection Decision
+    Reviewer-->>SysA: Return Decision (Approved/Rejected)
+
+    alt Plan Approved
+        SysA->>SysA: Execute Approved Intents from Plan
+        SysA-->>Caller: Final Result
+    else Plan Rejected
+        SysA->>SysA: Halt Execution / Report Rejection
+        SysA-->>Caller: Report Rejection / Failure
+    end
+```
 
 ## 4. Multi-Framework Integration
 
@@ -374,12 +466,11 @@ The Provider pattern (`providers/`, `AgentFactory`) is key to supporting differe
 
 ## 5. Governance and Safety
 
-Integrated via the `Firmware` component and `SmartAgentBus` health checks.
+Integrated via the `Firmware` component, `SmartAgentBus` health checks, and the optional **Intent Review System**.
 
-*   `Firmware` provides baseline ethical and safety rules.
-*   Allows defining domain-specific constraints (medical, finance).
-*   Rules are injected into prompts during component creation/evolution.
-*   Guardrails (especially for OpenAI Agents via the adapter) can enforce rules at runtime.
-*   `AgentBus` circuit breakers prevent cascading failures by temporarily disabling unhealthy agents.
+*   `Firmware` provides baseline ethical and safety rules injected during component creation/evolution.
+*   `AgentBus` circuit breakers prevent cascading failures.
+*   Runtime guardrails (e.g., `OpenAIGuardrailsAdapter`) can enforce rules during execution.
+*   The **Intent Review System** adds configurable checkpoints for human or AI oversight, verifying designs, component choices, and detailed execution plans (`IntentPlan`) before they are acted upon, ensuring alignment with goals and safety policies.
 
-This architecture promotes a flexible, extensible, and governable system for building complex AI agent solutions capable of adaptation, task-aware context retrieval, and self-improvement, orchestrated primarily through the `SystemAgent` interacting with high-level goals.
+This architecture promotes a flexible, extensible, and governable system for building complex AI agent solutions capable of adaptation, task-aware context retrieval, self-improvement, and optional human-in-the-loop oversight, orchestrated primarily through the `SystemAgent` interacting with high-level goals.

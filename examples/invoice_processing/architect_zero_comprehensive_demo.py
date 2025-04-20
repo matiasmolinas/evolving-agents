@@ -95,43 +95,43 @@ async def setup_framework_environment(container: DependencyContainer):
     console.print("  → Initializing LLM Service...")
     llm_service = LLMService(provider="openai", model="gpt-4o-mini", cache_dir=CACHE_DIR)
     container.register('llm_service', llm_service)
-    
+
     # 2. Smart Library (with initial seeding)
     console.print("  → Initializing Smart Library...")
-    smart_library = SmartLibrary(SMART_LIBRARY_PATH, llm_service=llm_service, 
+    smart_library = SmartLibrary(SMART_LIBRARY_PATH, llm_service=llm_service,
                                 vector_db_path=VECTOR_DB_PATH, container=container)
     container.register('smart_library', smart_library)
-    
+
     # 3. Firmware
     console.print("  → Initializing Firmware...")
     firmware = Firmware()
     container.register('firmware', firmware)
-    
+
     # 4. Agent Bus
     console.print("  → Initializing Agent Bus...")
-    agent_bus = SmartAgentBus(container=container, storage_path=AGENT_BUS_PATH, 
+    agent_bus = SmartAgentBus(container=container, storage_path=AGENT_BUS_PATH,
                              log_path=AGENT_BUS_LOG_PATH, chroma_path=VECTOR_DB_PATH)
     container.register('agent_bus', agent_bus)
-    
+
     # 5. System Agent
     console.print("  → Initializing System Agent...")
     system_agent = await SystemAgentFactory.create_agent(container=container)
     container.register('system_agent', system_agent)
-    
+
     # 6. Architect Agent
     console.print("  → Initializing Architect Zero Agent...")
     architect_agent = await ArchitectZeroAgentInitializer.create_agent(container=container)
     container.register('architect_agent', architect_agent)
-    
+
     # 7. Seed Library and Initialize Components
     console.print("  → Seeding initial library components...")
     await seed_initial_library(smart_library)
     await smart_library.initialize()
-    
+
     # 8. Register components with Agent Bus
     console.print("  → Registering components with Agent Bus...")
     await agent_bus.initialize_from_library()
-    
+
     console.print("[green]✓[/] Framework environment fully initialized")
     return container
 
@@ -161,7 +161,7 @@ class BasicDocumentAnalyzer(Tool[Input, None, StringToolOutput]):
         code_snippet=basic_doc_analyzer_code, version="1.0", tags=["document", "analysis", "basic", "beeai"],
         metadata={"framework": "beeai"}
     )
-    
+
     console.print("    - Adding BasicInvoiceProcessor Agent...")
     # 2. Basic Invoice Processor Agent
     basic_invoice_processor_code = """
@@ -188,7 +188,7 @@ class BasicInvoiceProcessorInitializer:
         code_snippet=basic_invoice_processor_code, version="1.0", tags=["invoice", "processing", "basic", "beeai", "finance"],
         metadata={"framework": "beeai"}
     )
-    
+
     console.print("    - Adding WeatherForecaster Tool (unrelated distraction)...")
     # 3. Weather Tool (unrelated, for distraction)
     weather_tool_code = """
@@ -206,36 +206,41 @@ class WeatherForecaster(Tool[Input, None, StringToolOutput]):
         description="Provides mock weather forecasts.", code_snippet=weather_tool_code,
         version="1.0", tags=["weather", "mock", "beeai"], metadata={"framework": "beeai"}
     )
-    
+
     console.print("    - Allowing time for vector database indexing...")
-    await asyncio.sleep(3) # Reduced wait time a bit
+    await asyncio.sleep(3) # Allow some time for indexing
 
 async def extract_json_with_llm(llm_service: LLMService, response_text: str) -> Optional[Dict[str, Any]]:
     """Use the LLM to extract JSON from agent response when pattern matching fails."""
     extraction_prompt = f"""
     Extract ONLY the JSON object from the following text.
     Return JUST the JSON object, with no additional explanation or text.
-    If there's no valid JSON in the text, return a JSON object with 
+    If there's no valid JSON in the text, return a JSON object with
     a single "error" field explaining that no JSON was found.
-    
+
     TEXT TO EXTRACT FROM:
     ```
     {response_text}
     ```
     """
-    
+
     try:
         extracted_text = await llm_service.generate(extraction_prompt)
         # Try to parse the result
         try:
-            if extracted_text.startswith("{") and "}" in extracted_text:
-                # Try to clean up if there's text after the JSON
-                possible_end = extracted_text.rfind("}")
-                cleaned = extracted_text[:possible_end+1]
-                return json.loads(cleaned)
-            return json.loads(extracted_text)
+            # Basic cleaning for common LLM formatting issues
+            cleaned_extracted_text = extracted_text.strip().strip('`').strip()
+            if cleaned_extracted_text.startswith("json"):
+                 cleaned_extracted_text = cleaned_extracted_text[len("json"):].strip()
+
+            if cleaned_extracted_text.startswith("{") and cleaned_extracted_text.endswith("}"):
+                return json.loads(cleaned_extracted_text)
+            else:
+                # If it doesn't look like JSON, log warning and return None
+                logger.warning("LLM extraction did not produce a valid JSON object structure.")
+                return None
         except json.JSONDecodeError:
-            logger.warning("LLM extraction produced invalid JSON")
+            logger.warning(f"LLM extraction produced invalid JSON: {extracted_text}")
             return None
     except Exception as e:
         logger.error(f"Error using LLM to extract JSON: {e}")
@@ -243,37 +248,53 @@ async def extract_json_with_llm(llm_service: LLMService, response_text: str) -> 
 
 def extract_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
     """Pattern matching to extract JSON from response text."""
-    # 1. Try direct parsing of the whole text
+    if not response_text: return None
+
+    # 1. Try direct parsing of the whole text (cleaned)
     try:
         cleaned_text = response_text.strip()
         if cleaned_text.startswith("```json"): cleaned_text = cleaned_text[len("```json"):].strip()
         if cleaned_text.startswith("```"): cleaned_text = cleaned_text[len("```"):].strip()
         if cleaned_text.endswith("```"): cleaned_text = cleaned_text[:-len("```")].strip()
-        if cleaned_text.startswith('{') and cleaned_text.endswith('}'): return json.loads(cleaned_text)
+        if cleaned_text.startswith('{') and cleaned_text.endswith('}'):
+            # Check balance of braces to increase confidence
+            if cleaned_text.count('{') == cleaned_text.count('}'):
+                return json.loads(cleaned_text)
     except json.JSONDecodeError: pass
-    
+
     # 2. Look for ```json ... ``` blocks
     json_match = re.search(r"```json\s*([\s\S]*?)\s*```", response_text, re.MULTILINE)
     if json_match:
-        try: return json.loads(json_match.group(1))
+        try:
+            potential_json = json_match.group(1).strip()
+            if potential_json.startswith('{') and potential_json.endswith('}'):
+                 if potential_json.count('{') == potential_json.count('}'):
+                     return json.loads(potential_json)
         except json.JSONDecodeError: pass
-    
-    # 3. Look for ``` ... ``` blocks
+
+    # 3. Look for ``` ... ``` blocks (might contain JSON)
     code_match = re.search(r"```\s*([\s\S]*?)\s*```", response_text, re.MULTILINE)
     if code_match:
         try:
             potential_json = code_match.group(1).strip()
-            if potential_json.startswith('{') and potential_json.endswith('}'): return json.loads(potential_json)
+            if potential_json.startswith('{') and potential_json.endswith('}'):
+                 if potential_json.count('{') == potential_json.count('}'):
+                     return json.loads(potential_json)
         except json.JSONDecodeError: pass
-    
-    # 4. Look for first '{' and last '}'
+
+    # 4. Look for first '{' and last '}' (least reliable)
     start_index = response_text.find('{'); end_index = response_text.rfind('}')
     if start_index != -1 and end_index != -1 and end_index > start_index:
         potential_json = response_text[start_index : end_index + 1]
         try:
-            if potential_json.count('{') == potential_json.count('}'): return json.loads(potential_json)
+            # Check balance again
+            if potential_json.count('{') == potential_json.count('}'):
+                 # Basic check for common JSON structure elements
+                 if ':' in potential_json and ('"' in potential_json or "'" in potential_json):
+                     return json.loads(potential_json)
         except json.JSONDecodeError: pass
-    
+
+    logger.warning("Could not extract JSON using pattern matching.")
     return None
 
 # --- Main Demo Function ---
@@ -284,7 +305,7 @@ async def run_demo():
         border_style="yellow",
         padding=(1, 2)
     ))
-    
+
     console.print("\n[bold]This demonstration shows how the SystemAgent can:[/]")
     console.print("  1. Accept a high-level business goal (invoice processing)")
     console.print("  2. Handle component search, creation, and orchestration internally")
@@ -308,7 +329,7 @@ async def run_demo():
     console.print("  • Extract key fields (Invoice #, Date, Vendor, Bill To, Line Items, etc.)")
     console.print("  • Verify calculations (line items sum to subtotal, etc.)")
     console.print("  • Return structured JSON with verification results")
-    
+
     high_level_task_prompt = f"""
     **Goal:** Accurately process the provided invoice document and return structured, verified data.
 
@@ -330,76 +351,103 @@ async def run_demo():
     """
 
     console.print("\n[bold]Executing the task via SystemAgent...[/]")
+    execution_result = {} # Initialize execution_result
     with console.status("[bold green]SystemAgent is working...", spinner="dots"):
         try:
             # Execute the SystemAgent to process the invoice
             sys_agent_response = await system_agent.run(high_level_task_prompt)
             final_output_text = sys_agent_response.result.text if hasattr(sys_agent_response.result, 'text') else str(sys_agent_response)
-            
+
             # Try to extract JSON using pattern matching
             final_result_json = extract_json_from_response(final_output_text)
-            
+
             # If pattern matching failed, try LLM extraction as a backup
             if not final_result_json:
                 console.print("[yellow]⚠ Standard JSON extraction failed, trying LLM extraction...[/]")
                 final_result_json = await extract_json_with_llm(llm_service, final_output_text)
-            
+
             if final_result_json:
                 final_result_data = final_result_json
-                console.print("[green]✓[/] Successfully extracted JSON result from SystemAgent output")
+                console.print("\r[green]✓[/] Successfully extracted JSON result from SystemAgent output") # Clear spinner line
             else:
-                console.print("[red]✗[/] Could not extract JSON result, using raw text")
+                console.print("\r[red]✗[/] Could not extract JSON result, using raw text") # Clear spinner line
                 final_result_data = final_output_text
 
             # Save the structured result
             execution_result = {
-                "status": "completed" if final_result_json else "completed_with_warnings",
+                "status": "completed" if isinstance(final_result_data, dict) else "completed_with_warnings",
                 "final_result": final_result_data,
-                "agent_full_output": final_output_text
+                "agent_full_output": final_output_text # Always store the raw text output
             }
             with open(WORKFLOW_OUTPUT_PATH, "w") as f:
                 json.dump(execution_result, f, indent=2)
-            
+
             console.print(f"[dim]Full output saved to {WORKFLOW_OUTPUT_PATH}[/]")
-            
-            # Display the final result
-            console.print("\n[bold green]OPERATION COMPLETE: Invoice Processing Result[/]")
-            if isinstance(final_result_data, dict):
-                # Format as syntax-highlighted JSON
-                json_str = json.dumps(final_result_data, indent=2)
-                syntax = Syntax(json_str, "json", theme="monokai", line_numbers=True)
-                console.print(Panel(syntax, title="Extracted Invoice Data", border_style="green"))
-                
-                # Print a summary of key fields - FIXED: Now uses correct field names
-                console.print("\n[bold]Key Extracted Fields:[/]")
-                console.print(f"  • Invoice #: [bold]{final_result_data.get('invoice_number', 'N/A')}[/]")
-                console.print(f"  • Vendor: [bold]{final_result_data.get('vendor', 'N/A')}[/]")
-                console.print(f"  • Date: {final_result_data.get('date', 'N/A')}")
-                console.print(f"  • Total: ${final_result_data.get('total_due', 'N/A')}")
-                
-                # Print verification results - FIXED: Now uses correct field names
-                verification = final_result_data.get('verification', {})
-                status = verification.get('status', 'unknown')
-                if status == 'ok':
-                    console.print(f"  • Verification: [bold green]PASSED[/]")
-                else:
-                    console.print(f"  • Verification: [bold red]FAILED[/]")
-                    discrepancies = verification.get('discrepancies', [])
-                    for discrepancy in discrepancies:
-                        console.print(f"    - {discrepancy}")
-            else:
-                # Just print the text if it's not JSON
-                console.print(final_result_data)
-            
+
         except Exception as e:
-            console.print(f"[bold red]Error executing task: {str(e)}[/]")
-    
+            console.print(f"\r[bold red]Error executing task: {str(e)}[/]") # Clear spinner line
+            execution_result = { "status": "error", "error_message": str(e), "agent_full_output": "" } # Ensure result is defined
+
+    # --- Display the final result (Modified section) ---
+    console.print("\n[bold green]OPERATION COMPLETE: Invoice Processing Result[/]")
+    final_data_to_display = None
+    if isinstance(execution_result.get("final_result"), dict):
+        final_data_to_display = execution_result["final_result"]
+        json_str = json.dumps(final_data_to_display, indent=2)
+        syntax = Syntax(json_str, "json", theme="monokai", line_numbers=True)
+        console.print(Panel(syntax, title="Extracted Invoice Data", border_style="green"))
+    elif isinstance(execution_result.get("final_result"), str):
+         # Attempt to parse if it's a string that might contain JSON
+         try:
+             parsed_json = extract_json_from_response(execution_result["final_result"])
+             if parsed_json:
+                 final_data_to_display = parsed_json
+                 json_str = json.dumps(final_data_to_display, indent=2)
+                 syntax = Syntax(json_str, "json", theme="monokai", line_numbers=True)
+                 console.print(Panel(syntax, title="Extracted Invoice Data (Parsed from String)", border_style="yellow"))
+             else:
+                 # If it's just text, print it directly
+                 console.print(execution_result["final_result"])
+         except Exception:
+             console.print(execution_result["final_result"]) # Print raw text on error
+    else:
+         # Print raw if not dict or string
+         console.print(str(execution_result.get("final_result", "No result found.")))
+
+
+    # Print a summary of key fields ONLY if we have a dictionary
+    if final_data_to_display and isinstance(final_data_to_display, dict):
+        console.print("\n[bold]Key Extracted Fields:[/]")
+        # Use .get() with default 'N/A' for safety
+        console.print(f"  • Invoice #: [bold]{final_data_to_display.get('invoice_number', final_data_to_display.get('InvoiceNumber', 'N/A'))}[/]") # Check common variations
+        console.print(f"  • Vendor: [bold]{final_data_to_display.get('vendor', final_data_to_display.get('Vendor', 'N/A'))}[/]")
+        console.print(f"  • Date: {final_data_to_display.get('date', final_data_to_display.get('Date', 'N/A'))}")
+        console.print(f"  • Total: ${final_data_to_display.get('total_due', final_data_to_display.get('TotalDue', 'N/A'))}")
+
+        # Print verification results
+        verification = final_data_to_display.get('verification', {})
+        status = verification.get('status', 'unknown')
+        if status == 'ok':
+            console.print(f"  • Verification: [bold green]PASSED[/]")
+        else:
+            console.print(f"  • Verification: [bold red]FAILED[/]") # Assume failed if not 'ok'
+            discrepancies = verification.get('discrepancies', [])
+            if discrepancies:
+                for discrepancy in discrepancies:
+                    console.print(f"    - {discrepancy}")
+            elif status != 'unknown':
+                 console.print(f"    - Reason: {verification.get('message', 'Details not provided')}") # Show message if status is known but not 'ok'
+    else:
+         console.print("\n[yellow]Could not extract structured data for key fields summary.[/]")
+
+    # --- End of Modified Section ---
+
     console.print("\n[bold blue]DEMONSTRATION SUMMARY[/]")
     console.print("This demo showed the Evolving Agents Toolkit's ability to:")
     console.print("  1. [green]✓[/] Process a high-level business goal")
     console.print("  2. [green]✓[/] Dynamically manage components for the task")
     console.print("  3. [green]✓[/] Verify calculations in the extracted data")
-    console.print("  4. [green]✓[/] Return structured JSON results") 
+    console.print("  4. [green]✓[/] Return structured JSON results")
     console.print("\nExternal files created:")
     console.print(f"  • [bold]{WORKFLOW_OUTPUT_PATH}[/]: Final structured results")
     console.print(f"  • [bold]{SMART_LIBRARY_PATH}[/]: Smart Library state")
@@ -413,3 +461,5 @@ if __name__ == "__main__":
     except Exception as main_error:
         console.print(f"[bold red]ERROR: Unhandled exception in main demo loop[/]")
         console.print(f"[red]{str(main_error)}[/]")
+        import traceback
+        traceback.print_exc() # Print full traceback for debugging
