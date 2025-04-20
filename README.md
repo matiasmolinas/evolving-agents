@@ -37,7 +37,8 @@ graph TD
     end
 
     %% Main Control Flow & Dependencies
-    SA -- Uses --> Tools["SystemAgent Tools\n(Search, Create, Evolve, Request, Workflow, IntentReview...)"];;;tool %% Added IntentReview
+    SA -- Uses --> Tools["SystemAgent Tools\n(Search, Create, Evolve, Request, Workflow, IntentReview...)"];;;tool
+    %% Added IntentReview to Tools description
     SA -- Uses --> LLMS
     SA -- Utilizes --> SCtx
     SA -- Relies on --> AgentF
