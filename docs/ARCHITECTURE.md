@@ -74,10 +74,9 @@ graph TD
         Approval --> SA
      end
 
-
     SA --> FinalResult["Final Task Result"]
 
-    style SA fill:#ccf,stroke:#333,stroke-width:2px
+    style SA fill:#ccf,stroke:#333,stroke-width:2px  %% Moved style definition here
 ```
 
 ### 2.2. ArchitectZero Agent
