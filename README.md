@@ -7,10 +7,10 @@
 **Build complex, adaptive AI agent systems designed for AI-First strategies. Define high-level goals, and let the toolkit orchestrate the discovery, creation, execution, and evolution of the agents and tools needed to achieve outcomes similar to sophisticated human workflows.**
 
 <p align="center">
-  <img height="400" src="./eat.png">
+  <img height="400" src="./docs/eat_mongo.png"> <!-- ACTION: Update image path if you create a new one -->
 </p>
 
-EAT is a Python toolkit for constructing advanced, multi-agent applications where autonomy, adaptability, and robust orchestration are crucial. It enables the implementation of **AI-First strategies**, where agent-driven workflows are designed to handle tasks that complex human workflows are currently capable of doing. Move beyond simple agent chains to create ecosystems that can dynamically respond to requirements, learn from interactions, and improve over time—all within defined governance boundaries.
+EAT is a Python toolkit for constructing advanced, multi-agent applications where autonomy, adaptability, and robust orchestration are crucial. It enables the implementation of **AI-First strategies**, where agent-driven workflows are designed to handle tasks that complex human workflows are currently capable of doing. Move beyond simple agent chains to create ecosystems that can dynamically respond to requirements, learn from interactions, and improve over time—all within defined governance boundaries and now powered by a unified **MongoDB backend**.
 
 ---
 
@@ -18,14 +18,14 @@ EAT is a Python toolkit for constructing advanced, multi-agent applications wher
 graph TD
     User["User / External System"] -- High-Level Goal --> SA[("SystemAgent\n(Central Orchestrator)")];;;agent
 
-    subgraph "Core Infrastructure & Services"
+    subgraph "Core Infrastructure & Services (MongoDB Backend)"
         direction LR
         SL["Smart Library\n(Component Storage, Search, Versioning)"];;;service
         SB["Smart Agent Bus\n(Discovery, Routing, Communication - System/Data Bus)"];;;service
         LLMS["LLM Service\n(Reasoning, Embeddings, Generation)"];;;service
         FW["Firmware\n(Governance Rules)"];;;service
         Providers["Providers\n(Agent/Tool Factories - BeeAI, OpenAI, etc)"];;;infra
-        VDB[("Vector DB\n(Semantic Search - ChromaDB)")]:::infra
+        MongoDB[("MongoDB Atlas / Server\n(Primary Data Store, Vector Search)")]:::infra
         SCtx[("SmartContext\n(Task-Specific Context)")]:::service
     end
 
@@ -38,7 +38,6 @@ graph TD
 
     %% Main Control Flow & Dependencies
     SA -- Uses --> Tools["SystemAgent Tools\n(Search, Create, Evolve, Request, Workflow, IntentReview...)"];;;tool
-    %% Added IntentReview to Tools description
     SA -- Uses --> LLMS
     SA -- Utilizes --> SCtx
     SA -- Relies on --> AgentF
@@ -58,8 +57,9 @@ graph TD
     ToolF -- Uses --> LLMS
 
     %% Internal Service Dependencies
-    SL -- Uses --> VDB
-    SB -- Uses --> VDB
+    SL -- Uses --> MongoDB
+    SB -- Uses --> MongoDB
+    LLMS -- Uses Cache In --> MongoDB
     SL -- Uses --> LLMS
     SB -- Uses --> LLMS
     SCtx -- Relies on --> SL
@@ -89,6 +89,7 @@ graph TD
     style SA fill:#69c,stroke:#000,stroke-width:3px,color:#fff;
 ```
 *Diagram Key: `agent` = Core EAT Agent, `service` = Core EAT Service, `tool` = SystemAgent's Internal Tools, `infra` = Supporting Infrastructure.*
+*(Note: `VDB (ChromaDB)` has been replaced with `MongoDB Atlas / Server`)*
 
 ---
 
@@ -96,35 +97,31 @@ graph TD
 
 Building true **AI-First systems**—where agent workflows are capable of handling tasks currently performed in complex human processes—requires more than just individual agents. EAT focuses on orchestrating the entire **agent ecosystem**:
 
-*   **🎯 Goal-Oriented Orchestration:** Interact via high-level goals given to a central `SystemAgent` (e.g., "Process this invoice," "Generate a project backlog from this meeting transcript"). The `SystemAgent` handles the complex "how," mimicking a project manager coordinating resources. It plans, finds or creates components, executes tasks, and manages internal workflows derived from the goal. You state the objective; the system orchestrates the execution.
-*   **🧠 Intelligent Component Management & Discovery:** A `SmartLibrary` acts as a central repository for reusable agents and tools, enabling semantic search (find tools based on *what they do*, not just names) and versioning. Crucially, it supports **task-aware retrieval** using a dual embedding strategy, ensuring discovered components are relevant to the specific task at hand.
-*   **🚌 Dynamic Communication & Service Bus:** The `SmartAgentBus` (with distinct System and Data buses) allows agents to discover and request capabilities across the system dynamically, decoupling components and enabling flexible interactions similar to microservices.
-*   **🌱 Adaptive Evolution:** Components aren't static. EAT provides mechanisms (`EvolveComponentTool`) for the `SystemAgent` to evolve agents and tools based on new requirements, performance feedback, or changing contexts, enabling the system to adapt and improve over time.
-*   **🛡️ Governed Execution & Human-in-the-Loop:** Implement optional, multi-level review checkpoints (design, component selection, execution plan) using the `IntentReviewAgent` and specialized tools. This allows for human oversight or AI-driven safety checks before critical steps are executed, ensuring alignment and safety within defined boundaries (`Firmware`).
-*   **🧩 Modular & Interoperable:** Seamlessly integrate agents and tools built with different frameworks (e.g., BeeAI, OpenAI Assistants SDK) via a flexible provider system (`AgentFactory`, `ToolFactory`, `providers/`). Define clear operational rules and safety guardrails using `Firmware`.
-*   **💡 Task-Specific Context:** The architecture incorporates a `SmartContext` and a **Dual Embedding Strategy** within the `SmartLibrary` to provide agents with context specifically relevant to their current task, reducing noise and improving performance compared to standard semantic retrieval.
-*   **🤖 Self-Management & Improvement:** The architecture allows system agents like `SystemAgent` and (optionally) `ArchitectZero` to collaboratively design, implement, manage, and even improve the ecosystem, including the toolkit's own components (see `examples/self_improvement/evolve_smart_library.py`).
+*   **🎯 Goal-Oriented Orchestration:** Interact via high-level goals given to a central `SystemAgent`. The `SystemAgent` handles the complex "how," mimicking a project manager. It plans, finds or creates components, executes tasks, and manages internal workflows.
+*   **🧠 Intelligent Component Management & Discovery:** A `SmartLibrary` (now backed by **MongoDB**) acts as a central repository for reusable agents and tools, enabling semantic search (using MongoDB Atlas Vector Search or equivalent) and versioning. It supports **task-aware retrieval** using a dual embedding strategy.
+*   **🚌 Dynamic Communication & Service Bus:** The `SmartAgentBus` (registry and logs now in **MongoDB**) allows agents to discover and request capabilities dynamically, decoupling components.
+*   **🌱 Adaptive Evolution:** Components aren't static. EAT provides mechanisms (`EvolveComponentTool`) for the `SystemAgent` to adapt agents and tools.
+*   **🛡️ Governed Execution & Human-in-the-Loop:** Implement optional, multi-level review checkpoints using the `IntentReviewAgent`. `IntentPlan`s are now persisted in **MongoDB**.
+*   **🧩 Modular & Interoperable:** Seamlessly integrate agents and tools built with different frameworks (e.g., BeeAI, OpenAI Assistants SDK).
+*   **💡 Task-Specific Context & Unified Backend:** The architecture incorporates `SmartContext` and a **Dual Embedding Strategy** within the `SmartLibrary`. All core data persistence, including component metadata, embeddings, agent registry, logs, and LLM cache, is now unified in **MongoDB**, simplifying the stack and enhancing scalability.
+*   **🤖 Self-Management & Improvement:** System agents like `SystemAgent` and `ArchitectZero` can collaboratively design, implement, manage, and improve the ecosystem.
 
-**In short: If you aim to build AI-First systems that are more than the sum of their parts—systems that can coordinate diverse capabilities, adapt to new challenges, provide highly relevant context, manage complexity autonomously, and operate under governance with optional human oversight—EAT provides the essential structure and tools.**
+**In short: EAT provides the essential structure and tools to build AI-First systems that coordinate diverse capabilities, adapt to new challenges, provide relevant context, manage complexity autonomously, and operate under governance—all on a robust and scalable MongoDB backend.**
 
 ## Key Features
 
-*   **`SystemAgent` Orchestrator:** A central ReAct agent (using BeeAI) acting as the primary entry point. It uses specialized tools to manage the entire component lifecycle (search, create, evolve) and task execution based on high-level goals. It leverages `SmartContext` for task-aware operations and can operate within an optional human-in-the-loop review process.
-*   **`SmartLibrary` with Dual Embedding:** Persistent storage (`smart_library.json`) with versioning and evolution capabilities. Features advanced semantic search using a **Dual Embedding Strategy**:
-    *   **Content Embedding (`E_orig`):** Represents the component's raw content/code (`T_orig`).
-    *   **Applicability Embedding (`E_raz`):** Represents an LLM-generated text (`T_raz`) describing the component's potential tasks, context, and implications.
-    *   **Task-Aware Search:** Enables finding components based not just on what they *are* but *what they are relevant for* in a specific task context.
-*   **`SmartAgentBus` (Dual Bus):** Manages agent registration, discovery, health monitoring (System Bus), and capability-based requests/communication (Data Bus), logging interactions (`agent_bus_logs_demo.json`).
-*   **`SmartContext`:** Facilitates passing relevant data and task context between agents and tools, enabling the task-aware retrieval mechanism.
-*   **Internal Workflow Engine:** For complex goals, the `SystemAgent` can *internally* generate and execute multi-step YAML workflows (`GenerateWorkflowTool`, `ProcessWorkflowTool`), abstracting this complexity from the user.
-*   **Intent Review System (Human-in-the-Loop):** (Optional, configurable via `.env`) Enables multi-level review and approval of system actions:
-    *   **`IntentReviewAgent`:** An AI agent specialized in reviewing plans and designs.
-    *   **Review Tools:** `WorkflowDesignReviewTool`, `ComponentSelectionReviewTool`, `ApprovePlanTool` facilitate human or AI review at different stages.
-    *   **`IntentPlan`:** A structured representation of the steps the `SystemAgent` intends to execute, generated by `ProcessWorkflowTool` when review is enabled. Ensures safety and alignment before execution.
-*   **Component Evolution:** Adapt agents/tools using different strategies (e.g., standard, conservative, aggressive, domain adaptation) orchestrated by the `SystemAgent` via `EvolveComponentTool`.
-*   **Multi-Framework Support:** Pluggable provider architecture (`providers/`, `AgentFactory`, `ToolFactory`) allows integrating components built with different SDKs (e.g., `BeeAIProvider`, `OpenAIAgentsProvider`). Adapters (`adapters/`) bridge interfaces (e.g., `OpenAIToolAdapter`).
-*   **Governance & Safety:** Define operational rules and safety constraints via `Firmware` and apply them during component creation/evolution or runtime (e.g., `OpenAIGuardrailsAdapter`). Enhanced by the optional Intent Review system.
-*   **(Optional) `ArchitectZero`:** A specialized agent (see `agents/architect_zero.py`) that can be called *internally* by the `SystemAgent` (via the Agent Bus) to design complex multi-component solutions based on requirements.
+*   **`SystemAgent` Orchestrator:** Central ReAct agent managing component lifecycles and task execution.
+*   **`SmartLibrary` with Dual Embedding (MongoDB Backend):** Persistent storage for components in MongoDB. Features advanced semantic search using **MongoDB Atlas Vector Search** (or equivalent) for its Dual Embedding Strategy:
+    *   **Content Embedding (`content_embedding`):** Represents `T_orig` (component code/content).
+    *   **Applicability Embedding (`applicability_embedding`):** Represents `T_raz` (LLM-generated applicability description).
+    *   **Task-Aware Search:** Finds components based on what they *are* and *what they are relevant for*.
+*   **`SmartAgentBus` (Dual Bus, MongoDB Backend):** Manages agent registration, discovery, and communication. Registry and execution logs are stored in MongoDB.
+*   **`SmartContext`:** Facilitates passing task-relevant data.
+*   **Internal Workflow Engine:** `SystemAgent` internally uses `GenerateWorkflowTool` and `ProcessWorkflowTool` for complex tasks.
+*   **Intent Review System (MongoDB Backend):** Optional human-in-the-loop review. `IntentPlan` objects are generated by `ProcessWorkflowTool` and persisted in MongoDB for review via `ApprovePlanTool`.
+*   **`LLMCache` (MongoDB Backend):** LLM completions and embeddings are cached in MongoDB with TTL for efficiency.
+*   **Unified Data Persistence:** All primary data stores (SmartLibrary, AgentBus registry/logs, LLMCache, IntentPlans) now reside in MongoDB, eliminating JSON file stores and ChromaDB.
+*   ... (Component Evolution, Multi-Framework Support, Governance & Safety, ArchitectZero features remain conceptually similar but now operate on MongoDB data)
 
 ## Installation
 
@@ -137,32 +134,51 @@ source venv/bin/activate # On Windows use `venv\Scripts\activate`
 git clone https://github.com/matiasmolinas/evolving-agents.git
 cd evolving-agents
 
-# Install dependencies (includes beeai-framework, openai-agents, chromadb, etc.)
+# Install dependencies (includes pymongo, beeai-framework, etc. ChromaDB is removed)
 pip install -r requirements.txt
 
-# Install the package in editable mode (allows easy development)
+# Install the package in editable mode
 pip install -e .
 ```
 
+## MongoDB Setup
+
+**EAT now uses MongoDB as its unified backend.** Using MongoDB Atlas with Vector Search is highly recommended.
+
+1.  **Set up MongoDB:**
+    *   Follow the detailed instructions in [**docs/MONGO-SETUP.md**](./docs/MONGO-SETUP.md) to set up MongoDB Atlas (recommended) or a self-hosted instance.
+    *   This includes creating a database, user, and configuring network access.
+2.  **Configure Vector Search Indexes (CRITICAL for SmartLibrary):**
+    *   As described in `docs/MONGO-SETUP.md`, you **must** create two Vector Search Indexes in MongoDB Atlas on the `eat_components` collection:
+        *   One index on the `content_embedding` field.
+        *   One index on the `applicability_embedding` field.
+    *   Ensure the `numDimensions` in your index definitions match your embedding model's output (e.g., 1536 for `text-embedding-3-small`).
+3.  **Environment Variables:**
+    *   Copy `.env.example` to `.env`.
+    *   Edit `.env` and add your `MONGODB_URI` and `MONGODB_DATABASE_NAME`.
+        ```env
+        MONGODB_URI="your_mongodb_srv_connection_string"
+        MONGODB_DATABASE_NAME="evolving_agents_db"
+        ```
+
 ## Quick Start
 
-**1. Setup Environment:**
+**1. Setup Environment (after MongoDB setup):**
 
 ```bash
-# Copy the example environment file
-cp .env.example .env
+# Ensure .env is configured with your OpenAI API Key and MongoDB URI
+# nano .env OR use your preferred editor
 
-# Edit the .env file and add your API keys (e.g., OPENAI_API_KEY)
 # Optionally enable Intent Review:
 # INTENT_REVIEW_ENABLED=true
-# INTENT_REVIEW_LEVELS=design,components,intents # Choose which levels to review
-# nano .env  OR use your preferred editor
+# INTENT_REVIEW_LEVELS=design,components,intents
 ```
-*Configure other settings like `LLM_MODEL`, `LLM_EMBEDDING_MODEL` if needed (defaults are provided in `.env.example` and `config.py`).*
+*Configure other settings like `LLM_MODEL`, `LLM_EMBEDDING_MODEL` if needed.*
 
 **2. Run the Comprehensive Demo:**
+*(Note: This demo script will need to be updated to work with the MongoDB backend. The setup parts will change significantly.)*
 
-This demo showcases the `SystemAgent` orchestrating a complex task (invoice processing) based on a high-level goal. It demonstrates component discovery (potentially leveraging task-aware search), potential creation/evolution (using its internal tools), and execution. If `INTENT_REVIEW_ENABLED=true` is set in `.env`, it will pause for human review at configured stages.
+This demo showcases the `SystemAgent` orchestrating a complex task (invoice processing). It demonstrates component discovery (leveraging task-aware search via MongoDB), potential creation/evolution, and execution. If `INTENT_REVIEW_ENABLED=true`, it will pause for human review at configured stages, with intent plans stored in MongoDB.
 
 ```bash
 python examples/invoice_processing/architect_zero_comprehensive_demo.py
@@ -170,51 +186,36 @@ python examples/invoice_processing/architect_zero_comprehensive_demo.py
 
 **3. Explore Output:**
 
-After the demo runs, check the generated files in the main directory (or as specified in the demo script):
+After the demo runs (and example scripts are updated for MongoDB):
 
-*   `final_processing_output.json`: Contains the final structured JSON result from the `SystemAgent`, potentially including its detailed thought process log.
-*   `smart_library_demo.json`: The state of the component library (`SmartLibrary`) after the run, showing created/evolved components.
-*   `smart_agent_bus_demo.json`: The state of the agent registry on the `SmartAgentBus`.
-*   `agent_bus_logs_demo.json`: Logs of agent interactions via the System and Data buses.
-*   `intent_plan_demo.json` (If review enabled): The generated intent plan that was reviewed.
+*   `final_processing_output.json`: Contains the final structured JSON result from the `SystemAgent`. (This remains file-based as it's a direct output of the demo).
+*   **MongoDB Collections:**
+    *   `eat_components`: Stores `SmartLibrary` records (agents, tools, firmware) including their embeddings.
+    *   `eat_agent_registry`: Stores `SmartAgentBus` agent registrations.
+    *   `eat_agent_bus_logs`: Stores logs of agent interactions via the bus.
+    *   `eat_llm_cache`: Stores cached LLM responses and embeddings.
+    *   `eat_intent_plans` (if review enabled): Stores `IntentPlan` objects.
+    *   You can inspect these collections using MongoDB Compass, `mongosh`, or your MongoDB Atlas Data Explorer.
+*   `intent_plan_demo.json` (If review enabled and `output_path` in `ApprovePlanTool` is set): An optional file copy of the generated intent plan that was reviewed.
 
-*(**Note:** This comprehensive demo is currently the primary quick start. Explore the `examples/` directory for more focused use cases like `examples/smart_context/dual_embedding_demo.py` or `examples/intent_review/integrated_review_demo.py`.)*
+*(**Note:** Example scripts in `examples/` are currently being updated to reflect the MongoDB backend. The `architect_zero_comprehensive_demo.py` is the primary focus for updates.)*
 
 ## Dive Deeper
 
-*   **Architecture Overview:** Understand the core components and their interactions in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Includes details on the Dual Embedding strategy and Intent Review flow (update needed).
-*   **Key Concepts:** Learn about the `SystemAgent`, `SmartLibrary`, `SmartAgentBus`, `SmartContext`, `Evolution`, `Workflows`, and `Intent Review / Human-in-the-Loop` in detail. *(See ARCHITECTURE.md and specific component documentation)*
-*   **Technical Reference:** Explore detailed descriptions of core components:
-    *   [SmartLibrary & Dual Embedding](./docs/TECH-REF_SMARTLIBRARY.md) *(Action Required: Create/Update)*
-    *   [SmartContext & Task Relevance](./docs/TECH-REF_SMARTCONTEXT.md) *(Action Required: Create)*
-    *   [SmartAgentBus](./docs/TECH-REF_SMARTAGENTBUS.md) *(Action Required: Create)*
-    *   [SystemAgent & Orchestration](./docs/TECH-REF_SYSTEMAGENT.md) *(Action Required: Create)*
-    *   [Intent Review & Governance](./docs/TECH-REF_INTENTREVIEW.md) *(Action Required: Create)*
-    *   [Component Evolution](./docs/TECH-REF_EVOLUTION.md) *(Action Required: Create)*
-    *   [Providers & Multi-Framework](./docs/TECH-REF_PROVIDERS.md) *(Action Required: Create)*
-    *   [Governance & Firmware](./docs/TECH-REF_GOVERNANCE.md) *(Action Required: Create)*
-*   **Examples:** Explore the `examples/` directory for various use cases:
-    *   `invoice_processing/`: The flagship comprehensive demo.
-    *   `agent_evolution/`: Demonstrates creating and evolving agents/tools with BeeAI & OpenAI frameworks.
-    *   `smart_agent_bus/`: Showcases the Dual Bus (System/Data) operations.
-    *   `smart_context/`: Demonstrates the Dual Embedding search strategy.
-    *   `self_improvement/`: Example of evolving the `SmartLibrary` component itself.
-    *   `intent_review/`: Demonstrates the multi-level Intent Review / Human-in-the-Loop process.
-    *   `autocomplete/`: Building a context-aware autocomplete system.
-    *   `forms/`: Creating and running conversational forms.
+*   **Architecture Overview:** Understand the core components and their interactions in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) (updated for MongoDB).
+*   **MongoDB Setup:** Detailed guide for setting up MongoDB and Atlas Vector Search: [docs/MONGO-SETUP.md](./docs/MONGO-SETUP.md).
+*   **Key Concepts:** Learn about the `SystemAgent`, `SmartLibrary` (MongoDB), `SmartAgentBus` (MongoDB), `SmartContext`, `Evolution`, `Workflows`, and `Intent Review / Human-in-the-Loop` (IntentPlans in MongoDB).
+*   ... (Technical Reference links remain, but their content needs updating to reflect MongoDB) ...
+*   **Examples:** Explore the `examples/` directory (Note: these are pending updates for full MongoDB compatibility).
 *   **Contributing:** We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) *(Action Required: Create)*.
 
 ## Roadmap / Future Work
 
-*   **Enhanced Smart Context & Memory:** Further refine the `SmartContext` implementation. Explore more sophisticated `SmartMemory` components for managing long-term agent memory and learning, potentially leveraging the dual embedding insights.
-*   **Smart Cache:** Introduce `SmartCache` that selectively caches successful LLM calls (e.g., high-quality generations, successful T_raz generation) for agent/tool improvement feedback loops.
-*   **Enhanced Evolution:** Leverage `SmartContext`, `SmartMemory`, and `SmartCache` to further automate and refine agent/tool evolution, potentially including LLM fine-tuning based on performance and task relevance feedback.
-*   **Enhanced Intent Review:** Improve the `IntentReviewAgent`'s capabilities, provide richer context for human reviewers, refine the review levels, and potentially add visualisations for plans.
-*   **Refined Dual Embedding Strategy:** Optimize the T_raz generation prompt, evaluate different embedding models for E_orig vs E_raz, and fine-tune the retrieval/re-ranking algorithms.
-*   **Enhanced Observability:** Improve logging and distributed tracing across components for better debugging, monitoring, and performance analysis of agent workflows, including context retrieval and intent review steps.
-*   **More Providers:** Add support for other agent frameworks (e.g., LangChain, AutoGen).
-*   **UI Integration:** Explore options for a basic UI for monitoring the agent bus, library, task execution, and managing the Intent Review process.
-*   **Testing:** Expand unit and integration test coverage significantly (`tests/`), including tests specifically for the dual embedding retrieval logic and the intent review workflow.
+*   **Full Example Script Migration to MongoDB:** Ensure all examples in `examples/` are updated to correctly initialize and interact with the MongoDB-backed services.
+*   **Test Suite Migration:** Update all tests in `tests/` to work with MongoDB, potentially using `mongomock` for unit tests.
+*   **Circuit Breaker to MongoDB:** Migrate `SmartAgentBus` circuit breaker state from JSON file to MongoDB for unified persistence.
+*   **Enhanced Vector Search Strategies:** Explore more advanced MongoDB `$vectorSearch` options, such as hybrid search (combining vector and keyword search) within `SmartLibrary`.
+*   ... (Other roadmap items like Enhanced Smart Context, Smart Cache, Evolution, Intent Review, Observability, Providers, UI Integration remain relevant and will benefit from the MongoDB backend) ...
 
 ## License
 
@@ -224,6 +225,6 @@ This project is licensed under the Apache License Version 2.0. See the [LICENSE]
 
 *   Leverages concepts and the core ReAct agent from the [BeeAI Framework](https://github.com/i-am-bee/beeai-framework).
 *   Integrates with the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) via providers and adapters.
-*   Uses [ChromaDB](https://www.trychroma.com/) for vector storage and semantic search within `SmartLibrary` and `SmartAgentBus`.
+*   Now uses **MongoDB** and **MongoDB Atlas Vector Search** as the primary data store and for semantic search.
 *   Uses [LiteLLM](https://github.com/BerriAI/litellm) (via BeeAI) for broader LLM compatibility.
 *   Original Concept Contributors: [Matias Molinas](https://github.com/matiasmolinas) and [Ismael Faro](https://github.com/ismaelfaro).

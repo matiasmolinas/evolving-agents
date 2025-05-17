@@ -14,3 +14,6 @@ INTENT_REVIEW_DEFAULT_INTERACTIVE = os.environ.get("INTENT_REVIEW_INTERACTIVE", 
 INTENT_REVIEW_OUTPUT_PATH = os.environ.get("INTENT_REVIEW_OUTPUT_PATH", "intent_plans")
 INTENT_REVIEW_TIMEOUT = int(os.environ.get("INTENT_REVIEW_TIMEOUT", "600"))  # 10 minutes default
 INTENT_REVIEW_LEVELS = os.environ.get("INTENT_REVIEW_LEVELS", "design,components,intents").split(",")
+
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DATABASE_NAME = os.environ.get("MONGODB_DATABASE_NAME", "evolving_agents_db")

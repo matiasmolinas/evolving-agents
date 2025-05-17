@@ -21,18 +21,6 @@ This guide provides instructions for setting up MongoDB as the unified backend f
 
 ---
 
-## Prerequisites
-
-*   Python 3.11+
-*   `pip` and `venv` (recommended for virtual environments)
-*   The Evolving Agents Toolkit project cloned to your local machine.
-*   `pymongo` library: Install it in your project's virtual environment:
-    ```bash
-    pip install pymongo
-    ```
-
----
-
 ## Choosing Your MongoDB Option
 
 You have two main options for your MongoDB setup:

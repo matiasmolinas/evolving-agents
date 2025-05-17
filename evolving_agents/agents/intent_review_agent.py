@@ -19,7 +19,6 @@ from evolving_agents.tools.intent_review.approve_plan_tool import ApprovePlanToo
 # Import core components
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.core.dependency_container import DependencyContainer
-from evolving_agents.core.intent_review import IntentPlan, Intent, IntentStatus
 
 logger = logging.getLogger(__name__)
 
