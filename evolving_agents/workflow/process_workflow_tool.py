@@ -56,7 +56,7 @@ def safe_json_dumps(data: Any, indent: int = 2) -> str:
         return json.dumps(data, indent=indent, default=default_serializer)
     except TypeError as e:
         logger.error(f"JSON serialization error: {e}", exc_info=True)
-        return f'{{"error": "Data not fully serializable: {e}"}}'
+        return json.dumps({"error": f"Data not fully serializable: {str(e)}"})
 
 
 # --- Tool Implementation ---
@@ -109,9 +109,8 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
 
     async def _ensure_intent_plan_indexes(self):
         """Ensure MongoDB indexes for the intent_plans collection."""
-        if self.intent_plans_collection is not None: # <--- THIS IS THE CORRECTED LINE
+        if self.intent_plans_collection is not None: 
             try:
-                # Using motor syntax for async index creation
                 await self.intent_plans_collection.create_index(
                     [("plan_id", pymongo.ASCENDING)], unique=True, background=True
                 )
@@ -119,7 +118,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                     [("status", pymongo.ASCENDING)], background=True
                 )
                 await self.intent_plans_collection.create_index(
-                    [("created_at", pymongo.DESCENDING)], background=True # BSON Date
+                    [("created_at", pymongo.DESCENDING)], background=True 
                 )
                 logger.info(f"Ensured indexes on '{self.intent_plans_collection_name}' collection.")
             except Exception as e:
@@ -138,13 +137,21 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
         logger.info("Processing workflow YAML...")
         try:
             # 1. Clean and Load YAML
-            cleaned_yaml_string = html.unescape(tool_input.workflow_yaml) # Basic unescape
-            # Further cleaning for common LLM issues like ```yaml blocks
-            yaml_match = re.search(r"```yaml\s*([\s\S]*?)\s*```", cleaned_yaml_string, re.MULTILINE)
-            if yaml_match: cleaned_yaml_string = yaml_match.group(1).strip()
-            else: # Try generic code block
-                yaml_match = re.search(r"```\s*([\s\S]*?)\s*```", cleaned_yaml_string, re.MULTILINE)
-                if yaml_match: cleaned_yaml_string = yaml_match.group(1).strip()
+            cleaned_yaml_string = html.unescape(tool_input.workflow_yaml) 
+            
+            # More aggressive cleaning for common LLM issues
+            cleaned_yaml_string = re.sub(r"```yaml\s*", "", cleaned_yaml_string)
+            cleaned_yaml_string = re.sub(r"\s*```", "", cleaned_yaml_string)
+            
+            lines = cleaned_yaml_string.strip().split('\n')
+            start_idx = 0
+            for i, line in enumerate(lines):
+                stripped_line = line.strip()
+                if stripped_line and (stripped_line.split(':')[0] in ["scenario_name", "domain", "description", "steps"] or stripped_line.startswith("- type:")):
+                    start_idx = i
+                    break
+            cleaned_yaml_string = "\n".join(lines[start_idx:])
+
 
             logger.debug("Cleaned YAML string (first 500 chars):\n%s", cleaned_yaml_string[:500])
 
@@ -164,7 +171,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                 if "steps" not in workflow or not isinstance(workflow.get("steps"), list):
                     raise ValueError("Invalid workflow: Missing 'steps' list or 'steps' is not a list.")
             except yaml.YAMLError as e:
-                # ... (enhanced error reporting as before) ...
                 error_mark = getattr(e, 'problem_mark', None)
                 line_num_str = str(error_mark.line + 1) if error_mark else 'unknown'
                 problem = getattr(e, 'problem', str(e))
@@ -185,7 +191,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             # 3. Determine if Intent Mode is Active for 'intents' level
             intent_mode_active_for_intents = False
             if context and hasattr(context, "get_value") and context.get_value("intent_review_mode_override", False):
-                # Context can force intent mode for this specific ProcessWorkflowTool run
                 intent_mode_active_for_intents = True
                 logger.debug("Intent mode FORCED by context override for this ProcessWorkflowTool run.")
             elif config.INTENT_REVIEW_ENABLED:
@@ -194,7 +199,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
 
 
             # 4. Extract Objective
-            # Priority: tool_input.objective > params > workflow.description > default
             objective = tool_input.objective or \
                         params_dict.get("objective",
                             params_dict.get("user_request",
@@ -205,10 +209,10 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             # 5. Validate Steps / Convert to Intent Plan
             validated_output = self._validate_steps(
                 processed_workflow_steps,
-                intent_mode=intent_mode_active_for_intents, # Pass the determined mode
+                intent_mode=intent_mode_active_for_intents, 
                 objective=objective,
                 workflow_name=workflow.get("scenario_name", "Unnamed Workflow"),
-                plan_id_override=tool_input.plan_id_override # Pass along override
+                plan_id_override=tool_input.plan_id_override 
             )
             log_msg_suffix = ""
             if intent_mode_active_for_intents and isinstance(validated_output, IntentPlan):
@@ -217,14 +221,12 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
 
 
             # 6. Handle Output Based on Mode
-            if isinstance(validated_output, IntentPlan): # Always true if intent_mode_active_for_intents was true and conversion succeeded
+            if isinstance(validated_output, IntentPlan): 
                 intent_plan_obj = validated_output
                 intent_plan_dict = intent_plan_obj.to_dict()
 
-                if self.intent_plans_collection is not None: # Correct check
+                if self.intent_plans_collection is not None: 
                     try:
-                        # Use replace_one with upsert: if plan_id_override was used and plan exists, it's updated.
-                        # If it's a new UUID, it's inserted.
                         await self.intent_plans_collection.replace_one(
                             {"plan_id": intent_plan_obj.plan_id},
                             intent_plan_dict,
@@ -238,14 +240,13 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                         }
                     except Exception as db_err:
                         logger.error(f"Failed to save IntentPlan '{intent_plan_obj.plan_id}' to MongoDB: {db_err}", exc_info=True)
-                        # If DB save fails, return the full plan so ApprovePlanTool can get it from context
                         return_payload = {
                             "status": "intent_plan_created_db_error",
                             "message": f"Intent plan created but FAILED to save to MongoDB: {db_err}. Pass this full plan to review tool.",
                             "plan_id": intent_plan_obj.plan_id,
                             "intent_plan": intent_plan_dict
                         }
-                else: # MongoDB not available
+                else: 
                     logger.warning("MongoDB client/collection not available. IntentPlan was generated but not saved to database.")
                     return_payload = {
                         "status": "intent_plan_created_no_db",
@@ -254,9 +255,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                         "intent_plan": intent_plan_dict
                     }
                 
-                # Optionally, save the full intent_plan to context for immediate chaining if needed,
-                # even if saved to DB. This helps if ApprovePlanTool is called right after
-                # and might not have immediate DB consistency or if DB is temporarily down.
                 if context and hasattr(context, "set_value"):
                     try:
                         context.set_value("intent_plan_json_output", safe_json_dumps(intent_plan_dict))
@@ -266,18 +264,17 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
 
                 return StringToolOutput(safe_json_dumps(return_payload))
 
-            elif isinstance(validated_output, list): # Direct execution mode
+            elif isinstance(validated_output, list): 
                 plan_for_direct_execution = {
                     "status": "success",
                     "scenario_name": workflow.get("scenario_name", "Unnamed Workflow"),
                     "domain": workflow.get("domain", "general"),
                     "description": workflow.get("description", "Workflow for direct execution"),
-                    "steps": validated_output, # These are the processed and validated steps
+                    "steps": validated_output, 
                     "execution_guidance": "The SystemAgent should now execute these steps sequentially."
                 }
                 return StringToolOutput(safe_json_dumps(plan_for_direct_execution))
             else:
-                # This case should ideally not be reached if _validate_steps is correct
                 raise TypeError(f"Unexpected output type from _validate_steps: {type(validated_output)}. Expected list or IntentPlan.")
 
         except Exception as e:
@@ -290,12 +287,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             }))
 
     def _substitute_params_recursive(self, obj: Any, params: Dict[str, Any]) -> Any:
-        """
-        Recursively substitutes '{{params.key}}' placeholders in strings within a nested structure.
-        If a string is an exact match to a placeholder, it returns the parameter's original type.
-        """
-        # Regex to find {{ params.key }} or {{params.key}}
-        # Allows for optional spaces around 'params.' and the key itself.
         placeholder_pattern = r'{{\s*params\.([\w_]+)\s*}}'
 
         if isinstance(obj, dict):
@@ -307,7 +298,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
         elif isinstance(obj, list):
             return [self._substitute_params_recursive(item, params) for item in obj]
         elif isinstance(obj, str):
-            # Check for exact match first to preserve type
             exact_match = re.fullmatch(placeholder_pattern, obj.strip())
             if exact_match:
                 key = exact_match.group(1)
@@ -316,49 +306,42 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                     return params[key]
                 else:
                     logger.warning(f"Parameter '{key}' for exact match placeholder '{obj.strip()}' not found. Returning original placeholder string.")
-                    return obj # Return original placeholder string if key not found
+                    return obj 
 
-            # If not an exact match, substitute all occurrences within the string
             def replace_match_in_string(match_obj):
                 key = match_obj.group(1)
                 if key in params:
-                    # Convert param value to string for embedding in a larger string
                     return str(params[key])
                 else:
                     logger.warning(f"Parameter '{key}' for embedded placeholder '{match_obj.group(0)}' not found. Leaving placeholder.")
-                    return match_obj.group(0) # Keep the original placeholder if key not found
+                    return match_obj.group(0) 
 
             return re.sub(placeholder_pattern, replace_match_in_string, obj)
         else:
-            # Return non-dict/list/str types as is (e.g., numbers, booleans already substituted if they were exact matches)
             return obj
 
 
     def _convert_steps_to_intent_plan_obj(self, workflow_steps: List[Dict[str, Any]], objective: str, workflow_name: str, plan_id_override: Optional[str]) -> IntentPlan:
-        """Converts validated workflow steps to an IntentPlan object."""
-        plan_id = plan_id_override or f"plan_{uuid.uuid4().hex[:10]}" # Use override if provided
+        plan_id = plan_id_override or f"plan_{uuid.uuid4().hex[:10]}" 
         logger.info(f"Converting {len(workflow_steps)} steps to IntentPlan object '{plan_id}' for workflow '{workflow_name}'")
 
         intents_list: List[Intent] = []
-        step_index_to_intent_id: Dict[int, str] = {} # Maps original step index to its generated Intent ID
-        current_time = datetime.now(timezone.utc) # For created_at timestamp
+        step_index_to_intent_id: Dict[int, str] = {} 
+        current_time = datetime.now(timezone.utc) 
 
         for i, step_dict in enumerate(workflow_steps):
-            intent_id = f"intent_{plan_id}_{i+1}_{uuid.uuid4().hex[:6]}" # More traceable Intent ID
+            intent_id = f"intent_{plan_id}_{i+1}_{uuid.uuid4().hex[:6]}" 
             step_index_to_intent_id[i] = intent_id
 
             step_type_str = step_dict.get("type", "UNKNOWN_STEP_TYPE")
             params_or_input_dict: Dict[str, Any] = {}
             if step_type_str == "EXECUTE": params_or_input_dict = step_dict.get("input", {})
             elif step_type_str in ["DEFINE", "CREATE"]:
-                # Collect all keys not part of the core step definition as params
                 core_keys = {"type", "item_type", "name", "description", "code_snippet", "output_var", "from_existing_snippet", "config"}
                 params_or_input_dict = {k: v for k, v in step_dict.items() if k not in core_keys}
-                # Also explicitly include 'config' if present, as it's often parameter-like
                 if "config" in step_dict: params_or_input_dict["config"] = step_dict["config"]
             elif step_type_str == "RETURN": params_or_input_dict = {"value": step_dict.get("value")}
 
-            # Resolve dependencies based on `output_var` usage
             depends_on_ids: List[str] = []
             params_str_for_scan = safe_json_dumps(params_or_input_dict)
             step_var_pattern = r'{{\s*([\w_]+)\s*}}' 
@@ -395,9 +378,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             objective=objective,
             intents=intents_list,
             status=PlanStatus.PENDING_REVIEW,
-            # Add created_at here for indexing
-            created_at=current_time # type: ignore # Pydantic might complain if not in model, add if needed
-            # review_timestamp, reviewer_comments, rejection_reason will be set by ApprovePlanTool
+            created_at=current_time # type: ignore 
         )
 
     def _validate_steps(self, steps: List[Dict[str, Any]], intent_mode: bool = False,
@@ -405,9 +386,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                         workflow_name: Optional[str] = "Unnamed Workflow",
                         plan_id_override: Optional[str] = None
                         ) -> Union[List[Dict[str, Any]], IntentPlan]:
-        """
-        Validates workflow steps. If intent_mode, converts to IntentPlan object.
-        """
         if not isinstance(steps, list):
              raise ValueError("Workflow 'steps' must be a list.")
 

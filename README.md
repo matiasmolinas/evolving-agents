@@ -14,6 +14,18 @@ EAT is a Python toolkit for constructing advanced, multi-agent applications wher
 
 ---
 
+**🎉 MongoDB Migration Update! 🎉**
+
+The Evolving Agents Toolkit has successfully completed its initial migration to **MongoDB** as its unified backend! This replaces previous file-based storage and ChromaDB, bringing enhanced scalability and robustness.
+
+*   The core framework (`SmartLibrary`, `SmartAgentBus`, `LLMCache`, `IntentPlan` persistence) now fully utilizes MongoDB.
+*   The primary comprehensive demo, **`examples/invoice_processing/architect_zero_comprehensive_demo.py`**, has been updated and is working with the new MongoDB backend.
+*   Other examples in the `examples/` directory are currently being updated to reflect these changes and will be available soon. Please refer to `architect_zero_comprehensive_demo.py` as the most up-to-date example of usage.
+
+We appreciate your patience as we finalize the migration across all examples and tests!
+
+---
+
 ```mermaid
 graph TD
     User["User / External System"] -- High-Level Goal --> SA[("SystemAgent\n(Central Orchestrator)")];;;agent
@@ -148,10 +160,10 @@ pip install -e .
 1.  **Set up MongoDB:**
     *   Follow the detailed instructions in [**docs/MONGO-SETUP.md**](./docs/MONGO-SETUP.md) to set up MongoDB Atlas (recommended) or a self-hosted instance.
     *   This includes creating a database, user, and configuring network access.
-2.  **Configure Vector Search Indexes (CRITICAL for SmartLibrary):**
-    *   As described in `docs/MONGO-SETUP.md`, you **must** create two Vector Search Indexes in MongoDB Atlas on the `eat_components` collection:
-        *   One index on the `content_embedding` field.
-        *   One index on the `applicability_embedding` field.
+2.  **Configure Vector Search Indexes (CRITICAL for SmartLibrary & SmartAgentBus):**
+    *   As described in `docs/MONGO-SETUP.md`, you **must** create Vector Search Indexes in MongoDB Atlas for:
+        *   `eat_components` collection: Two indexes, one on `content_embedding` and one on `applicability_embedding`. (Names in Atlas: `idx_components_content_embedding` and `applicability_embedding` respectively, or as defined in `SmartLibrary.py`).
+        *   `eat_agent_registry` collection: One index on `description_embedding`. (Name in Atlas: `vector_index_agent_description`, or as defined in `SmartAgentBus.py`).
     *   Ensure the `numDimensions` in your index definitions match your embedding model's output (e.g., 1536 for `text-embedding-3-small`).
 3.  **Environment Variables:**
     *   Copy `.env.example` to `.env`.
@@ -176,9 +188,8 @@ pip install -e .
 *Configure other settings like `LLM_MODEL`, `LLM_EMBEDDING_MODEL` if needed.*
 
 **2. Run the Comprehensive Demo:**
-*(Note: This demo script will need to be updated to work with the MongoDB backend. The setup parts will change significantly.)*
 
-This demo showcases the `SystemAgent` orchestrating a complex task (invoice processing). It demonstrates component discovery (leveraging task-aware search via MongoDB), potential creation/evolution, and execution. If `INTENT_REVIEW_ENABLED=true`, it will pause for human review at configured stages, with intent plans stored in MongoDB.
+The `architect_zero_comprehensive_demo.py` script showcases the `SystemAgent` orchestrating a complex task (invoice processing) using the MongoDB backend. It demonstrates component discovery, potential creation/evolution, and execution. If `INTENT_REVIEW_ENABLED=true` and the `intents` level is active, it will pause for human review with intent plans stored in MongoDB.
 
 ```bash
 python examples/invoice_processing/architect_zero_comprehensive_demo.py
@@ -186,28 +197,27 @@ python examples/invoice_processing/architect_zero_comprehensive_demo.py
 
 **3. Explore Output:**
 
-After the demo runs (and example scripts are updated for MongoDB):
+After the demo runs:
 
 *   `final_processing_output.json`: Contains the final structured JSON result from the `SystemAgent`. (This remains file-based as it's a direct output of the demo).
 *   **MongoDB Collections:**
     *   `eat_components`: Stores `SmartLibrary` records (agents, tools, firmware) including their embeddings.
     *   `eat_agent_registry`: Stores `SmartAgentBus` agent registrations.
     *   `eat_agent_bus_logs`: Stores logs of agent interactions via the bus.
-    *   `eat_llm_cache`: Stores cached LLM responses and embeddings.
-    *   `eat_intent_plans` (if review enabled): Stores `IntentPlan` objects.
+    *   `eat_llm_cache`: Stores cached LLM responses and embeddings (if cache enabled).
+    *   `eat_intent_plans` (if review enabled for 'intents' level): Stores `IntentPlan` objects.
     *   You can inspect these collections using MongoDB Compass, `mongosh`, or your MongoDB Atlas Data Explorer.
-*   `intent_plan_demo.json` (If review enabled and `output_path` in `ApprovePlanTool` is set): An optional file copy of the generated intent plan that was reviewed.
+*   `intent_plan_demo.json` (If review enabled for 'intents' level and `output_path` in `ApprovePlanTool` is set): An optional file copy of the generated intent plan that was reviewed.
 
-*(**Note:** Example scripts in `examples/` are currently being updated to reflect the MongoDB backend. The `architect_zero_comprehensive_demo.py` is the primary focus for updates.)*
+*(**Note:** While `architect_zero_comprehensive_demo.py` is updated, other scripts in `examples/` are pending full migration to the MongoDB backend. We are working on these updates.)*
 
 ## Dive Deeper
 
 *   **Architecture Overview:** Understand the core components and their interactions in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) (updated for MongoDB).
 *   **MongoDB Setup:** Detailed guide for setting up MongoDB and Atlas Vector Search: [docs/MONGO-SETUP.md](./docs/MONGO-SETUP.md).
 *   **Key Concepts:** Learn about the `SystemAgent`, `SmartLibrary` (MongoDB), `SmartAgentBus` (MongoDB), `SmartContext`, `Evolution`, `Workflows`, and `Intent Review / Human-in-the-Loop` (IntentPlans in MongoDB).
-*   ... (Technical Reference links remain, but their content needs updating to reflect MongoDB) ...
-*   **Examples:** Explore the `examples/` directory (Note: these are pending updates for full MongoDB compatibility).
-*   **Contributing:** We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) *(Action Required: Create)*.
+*   **Examples:** Explore the `examples/` directory (Note: `architect_zero_comprehensive_demo.py` is the most current example reflecting MongoDB integration. Other examples are being updated).
+*   **Contributing:** We welcome contributions!
 
 ## Roadmap / Future Work
 
@@ -215,7 +225,8 @@ After the demo runs (and example scripts are updated for MongoDB):
 *   **Test Suite Migration:** Update all tests in `tests/` to work with MongoDB, potentially using `mongomock` for unit tests.
 *   **Circuit Breaker to MongoDB:** Migrate `SmartAgentBus` circuit breaker state from JSON file to MongoDB for unified persistence.
 *   **Enhanced Vector Search Strategies:** Explore more advanced MongoDB `$vectorSearch` options, such as hybrid search (combining vector and keyword search) within `SmartLibrary`.
-*   ... (Other roadmap items like Enhanced Smart Context, Smart Cache, Evolution, Intent Review, Observability, Providers, UI Integration remain relevant and will benefit from the MongoDB backend) ...
+*   **Enhanced `SmartContext`:** Further develop `SmartContext` for more sophisticated contextual data passing and retrieval.
+*   **UI Integration:** Develop a basic UI for interacting with the SystemAgent and visualizing the ecosystem.
 
 ## License
 

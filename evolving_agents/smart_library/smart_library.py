@@ -55,17 +55,17 @@ class SmartLibrary:
 
         if container and container.has('mongodb_client'):
             self.mongodb_client = container.get('mongodb_client')
-        elif isinstance(llm_service, MongoDBClient) and mongodb_client is None:
+        elif isinstance(llm_service, MongoDBClient) and mongodb_client is None: # Defensive check
             logger.warning("MongoDBClient instance might have been passed as llm_service to SmartLibrary. Correcting.")
             self.mongodb_client = llm_service
             self.llm_service = LLMService(container=container)
             if container: container.register('llm_service', self.llm_service)
-        elif isinstance(mongodb_uri, MongoDBClient) and mongodb_client is None:
+        elif isinstance(mongodb_uri, MongoDBClient) and mongodb_client is None: # Defensive check
             logger.warning("MongoDBClient instance might have been passed as mongodb_uri to SmartLibrary. Correcting.")
             self.mongodb_client = mongodb_uri
-        elif mongodb_client:
+        elif mongodb_client: # If an actual MongoDBClient instance was passed
             self.mongodb_client = mongodb_client
-        else:
+        else: # Default creation
             try:
                 self.mongodb_client = MongoDBClient(uri=mongodb_uri, db_name=mongodb_db_name)
             except ValueError as e:
@@ -235,46 +235,53 @@ class SmartLibrary:
         query_embedding_orig = await self.llm_service.embed(query)
         
         search_pipeline: List[Dict[str, Any]] = []
-
-        vector_search_operator_params: Dict[str, Any] = {
-            "queryVector": [],
-            "path": "",
-            "numCandidates": limit * 20, 
-            "limit": limit * 3           
-        }
         
+        # These are the names of your Atlas Search Indexes as defined in MongoDB Atlas
         content_embedding_index_name = "idx_components_content_embedding"
-        applicability_embedding_index_name = "applicability_embedding"
+        applicability_embedding_index_name = "applicability_embedding" # Matches your Atlas index name
 
         current_search_index_name = ""
         primary_score_field = ""
+        vector_search_clause = {} 
 
         if task_context:
             query_embedding_raz = await self.llm_service.embed(task_context)
-            vector_search_operator_params["queryVector"] = query_embedding_raz
-            vector_search_operator_params["path"] = "applicability_embedding"
             current_search_index_name = applicability_embedding_index_name
             primary_score_field = "task_score_raw"
+            vector_search_clause = {
+                "vectorSearch": { 
+                    "queryVector": query_embedding_raz,
+                    "path": "applicability_embedding", # Field path for the vector
+                    "numCandidates": limit * 20,
+                    "limit": limit * 3
+                }
+            }
         else:
-            vector_search_operator_params["queryVector"] = query_embedding_orig
-            vector_search_operator_params["path"] = "content_embedding"
             current_search_index_name = content_embedding_index_name
             primary_score_field = "content_score_raw"
+            vector_search_clause = {
+                "vectorSearch": { 
+                    "queryVector": query_embedding_orig,
+                    "path": "content_embedding", # Field path for the vector
+                    "numCandidates": limit * 20,
+                    "limit": limit * 3
+                }
+            }
         
-        compound_must_clauses = [{"vectorSearch": vector_search_operator_params}]
+        compound_query: Dict[str, Any] = {"must": [vector_search_clause]}
+        
         compound_filter_clauses = []
         if record_type: compound_filter_clauses.append({"text": {"path": "record_type", "query": record_type}})
         if domain: compound_filter_clauses.append({"text": {"path": "domain", "query": domain}})
         compound_filter_clauses.append({"text": {"path": "status", "query": "active"}})
-
+        
+        if compound_filter_clauses:
+            compound_query["filter"] = compound_filter_clauses
+            
         search_stage_definition: Dict[str, Any] = {
             "index": current_search_index_name,
-            "compound": {
-                "must": compound_must_clauses
-            }
+            "compound": compound_query
         }
-        if compound_filter_clauses:
-            search_stage_definition["compound"]["filter"] = compound_filter_clauses
         
         search_pipeline.append({"$search": search_stage_definition})
         search_pipeline.append({"$addFields": {primary_score_field: {"$meta": "searchScore"}}})
@@ -290,8 +297,8 @@ class SmartLibrary:
             candidate_docs = await candidate_docs_cursor.to_list(length=None)
         except Exception as e:
             logger.error(f"MongoDB aggregation failed: {e}", exc_info=True)
-            if "index not found" in str(e).lower() or "Unknown $vectorSearch index" in str(e).lower() or "unknown search index" in str(e).lower():
-                 logger.error(f"CRITICAL: Atlas Vector Search index '{current_search_index_name}' likely missing or misconfigured on collection '{self.components_collection_name}'. Please create it in Atlas with correct dimensions and path.")
+            if "index not found" in str(e).lower() or "Unknown $vectorSearch index" in str(e).lower() or "unknown search index" in str(e).lower() or "Invalid $search" in str(e).lower():
+                 logger.error(f"CRITICAL: Atlas Vector Search index '{current_search_index_name}' likely missing, misconfigured, or $search stage is malformed on collection '{self.components_collection_name}'. Please create/verify it in Atlas with correct dimensions and path.")
             return []
 
         search_results_tuples = []
