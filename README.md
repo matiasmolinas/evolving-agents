@@ -7,7 +7,7 @@
 **Build complex, adaptive AI agent systems designed for AI-First strategies. Define high-level goals, and let the toolkit orchestrate the discovery, creation, execution, and evolution of the agents and tools needed to achieve outcomes similar to sophisticated human workflows.**
 
 <p align="center">
-  <img height="400" src="./docs/eat_mongo.png"> <!-- ACTION: Update image path if you create a new one -->
+  <img height="400" src="eat.png">
 </p>
 
 EAT is a Python toolkit for constructing advanced, multi-agent applications where autonomy, adaptability, and robust orchestration are crucial. It enables the implementation of **AI-First strategies**, where agent-driven workflows are designed to handle tasks that complex human workflows are currently capable of doing. Move beyond simple agent chains to create ecosystems that can dynamically respond to requirements, learn from interactions, and improve over time—all within defined governance boundaries and now powered by a unified **MongoDB backend**.
