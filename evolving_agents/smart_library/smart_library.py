@@ -96,6 +96,7 @@ class SmartLibrary:
             logger.error(f"Cannot ensure indexes: components_collection '{self.components_collection_name}' is None.")
             return
         try:
+            # Standard indexes
             await self.components_collection.create_index([("id", pymongo.ASCENDING)], unique=True, background=True)
             await self.components_collection.create_index([("name", pymongo.ASCENDING)], background=True)
             await self.components_collection.create_index([("record_type", pymongo.ASCENDING)], background=True)
@@ -103,16 +104,31 @@ class SmartLibrary:
             await self.components_collection.create_index([("tags", pymongo.ASCENDING)], background=True)
             await self.components_collection.create_index([("status", pymongo.ASCENDING)], background=True)
             await self.components_collection.create_index([("last_updated", pymongo.DESCENDING)], background=True)
-            # Add standard text index if vector search is unavailable
+            
+            # Text index for fallback search
             try:
-                await self.components_collection.create_index([
-                    ("name", pymongo.TEXT), 
-                    ("description", pymongo.TEXT),
-                    ("tags", pymongo.TEXT)
-                ], name="text_search_fallback")
-                logger.info("Created text index for fallback search.")
+                await self.components_collection.create_index(
+                    [
+                        ("name", pymongo.TEXT), 
+                        ("description", pymongo.TEXT),
+                        ("tags", pymongo.TEXT),
+                        ("domain", pymongo.TEXT) 
+                    ], 
+                    name="component_text_search_fallback_idx", 
+                    default_language="english",
+                    weights={"name": 5, "tags": 3, "description": 2, "domain": 1},
+                    background=True
+                )
+                logger.info("Created/ensured text index for fallback search on components.")
+            except pymongo.errors.OperationFailure as op_fail:
+                if op_fail.code == 85: # IndexOptionsConflict
+                     logger.info(f"Text index 'component_text_search_fallback_idx' or equivalent already exists. Details: {op_fail.details}")
+                elif op_fail.code == 86: # IndexKeySpecsConflict
+                     logger.warning(f"Text index with different specs already exists. Details: {op_fail.details}")
+                else:
+                    logger.warning(f"Could not create/ensure text index for fallback search: {op_fail}")
             except Exception as text_idx_err:
-                logger.warning(f"Could not create text index for fallback search: {text_idx_err}")
+                logger.warning(f"Could not create/ensure text index for fallback search (generic error): {text_idx_err}")
                 
             logger.info(f"Ensured standard indexes on '{self.components_collection_name}' collection.")
             logger.info("Reminder: Atlas Vector Search Indexes must be configured manually in MongoDB Atlas.")
@@ -244,142 +260,132 @@ class SmartLibrary:
 
         effective_task_weight = task_weight if task_context and task_weight is not None else (0.7 if task_context else 0.0)
         query_embedding_orig = await self.llm_service.embed(query)
-        task_embedding = None
+        
+        task_embedding_for_fallback: Optional[List[float]] = None
         if task_context:
-            task_embedding = await self.llm_service.embed(task_context)
+            task_embedding_for_fallback = await self.llm_service.embed(task_context)
 
-        # Skip vector search entirely if VECTOR_SEARCH_ENABLED is explicitly set to false
         vector_search_enabled = os.environ.get("VECTOR_SEARCH_ENABLED", "true").lower() != "false"
         if not vector_search_enabled:
             logger.info("Vector search is disabled by configuration. Using fallback method directly.")
             return await self._perform_fallback_search(
-                query, query_embedding_orig, task_embedding,
-                record_type, domain, limit, effective_task_weight
+                query, query_embedding_orig, task_embedding_for_fallback,
+                record_type, domain, limit, effective_task_weight, task_context
             )
 
-        try:
-            # Determine search index and path
-            if task_context and task_embedding:
-                current_search_index_name = "applicability_embedding"
-                vector_path = "applicability_embedding"
-                query_vector = task_embedding
-                primary_score_field = "task_score_raw"
-            else:
-                current_search_index_name = "idx_components_content_embedding"
-                vector_path = "content_embedding"
-                query_vector = query_embedding_orig
-                primary_score_field = "content_score_raw"
-            
-            # Simplest possible vector search operator (removed compound query structure completely)
-            search_stage_definition = {
-                "index": current_search_index_name,
-                "vector": {
-                    "query": query_vector,
-                    "path": vector_path,
-                    "numCandidates": limit * 10
-                }
-            }
-            
-            # Build the aggregation pipeline - much simpler now
-            search_pipeline = [
-                {"$search": search_stage_definition},
-                {"$addFields": {primary_score_field: {"$meta": "searchScore"}}}
-            ]
-            
-            # Add a separate $match stage for filters
-            match_conditions = {"status": "active"}
-            if record_type:
-                match_conditions["record_type"] = record_type
-            if domain:
-                match_conditions["domain"] = domain
-                
-            search_pipeline.append({"$match": match_conditions})
-            
-            # Project needed fields
-            fields_to_project = {
-                "_id": 0, "id": 1, "name": 1, "record_type": 1, "domain": 1, "description": 1,
-                "version": 1, "usage_count": 1, "success_count": 1, "tags": 1, "metadata": 1,
-                primary_score_field: 1, "content_embedding": 1, "applicability_embedding": 1
-            }
-            search_pipeline.append({"$project": fields_to_project})
-            
-            # Sort by score and limit
-            search_pipeline.append({"$sort": {primary_score_field: -1}})
-            search_pipeline.append({"$limit": limit * 3})  # Get a few more than needed for scoring
+        current_search_index_name = ""
+        vector_path_for_search = ""
+        query_vector_for_search: List[float] = []
+        primary_score_field = "vector_search_score" 
 
-            logger.debug(f"MongoDB Aggregation Pipeline for semantic search: {json.dumps(search_pipeline, indent=2)}")
+        content_embedding_index_name = "idx_components_content_embedding"
+        applicability_embedding_index_name = "applicability_embedding"
+
+        if task_context and task_embedding_for_fallback:
+            current_search_index_name = applicability_embedding_index_name
+            vector_path_for_search = "applicability_embedding"
+            query_vector_for_search = task_embedding_for_fallback
+        else:
+            current_search_index_name = content_embedding_index_name
+            vector_path_for_search = "content_embedding"
+            query_vector_for_search = query_embedding_orig
+        
+        # Define the vectorSearch operator part
+        vector_search_operator = {
+            "path": vector_path_for_search,
+            "queryVector": query_vector_for_search,
+            "numCandidates": limit * 20, 
+            "limit": limit * 10 
+        }
+        
+        # Build the $search stage using "compound" operator to combine vectorSearch with filters
+        compound_filter_clauses = []
+        if record_type: compound_filter_clauses.append({"text": {"path": "record_type", "query": record_type}})
+        if domain: compound_filter_clauses.append({"text": {"path": "domain", "query": domain}})
+        compound_filter_clauses.append({"text": {"path": "status", "query": "active"}})
+
+        search_stage_definition: Dict[str, Any] = {
+            "index": current_search_index_name,
+            "compound": {
+                "must": [{"vectorSearch": vector_search_operator}] # vectorSearch is a "must" clause
+            }
+        }
+        if compound_filter_clauses:
+            search_stage_definition["compound"]["filter"] = compound_filter_clauses
+            
+        search_pipeline: List[Dict[str, Any]] = [
+            {"$search": search_stage_definition},
+            {"$addFields": {primary_score_field: {"$meta": "searchScore"}}}
+        ]
+        
+        fields_to_project = {
+            "_id": 0, "id": 1, "name": 1, "record_type": 1, "domain": 1, "description": 1,
+            "version": 1, "usage_count": 1, "success_count": 1, "tags": 1, "metadata": 1,
+            primary_score_field: 1, "content_embedding": 1, "applicability_embedding": 1
+        }
+        search_pipeline.append({"$project": fields_to_project})
+        
+        search_pipeline.append({"$sort": {primary_score_field: -1}}) 
+        search_pipeline.append({"$limit": limit * 3}) 
+
+        logger.debug(f"MongoDB Aggregation Pipeline for semantic search (SmartLibrary): {json.dumps(search_pipeline, indent=2)}")
+        
+        candidate_docs = []
+        try:
             candidate_docs_cursor = self.components_collection.aggregate(search_pipeline)
             candidate_docs = await candidate_docs_cursor.to_list(length=None)
             
-            if not candidate_docs:
-                logger.warning(f"Vector search returned no results. Falling back to alternative search methods.")
+            if not candidate_docs: 
+                logger.warning(f"Vector search with index '{current_search_index_name}' returned no results. Falling back.")
                 return await self._perform_fallback_search(
-                    query, query_embedding_orig, task_embedding,
-                    record_type, domain, limit, effective_task_weight
+                    query, query_embedding_orig, task_embedding_for_fallback,
+                    record_type, domain, limit, effective_task_weight, task_context
                 )
                 
-        except Exception as e:
-            logger.error(f"MongoDB aggregation or vector search failed: {e}", exc_info=True)
-            # More detailed error information for Search index issues
-            if "index not found" in str(e).lower() or "unknown search index" in str(e).lower():
-                error_msg = f"Atlas Vector Search index '{current_search_index_name}' is missing or misconfigured."
-                logger.error(f"CRITICAL: {error_msg} Please create it in MongoDB Atlas UI.")
-                
-            # Try text search as a fallback
-            try:
-                logger.info("Attempting text search as fallback...")
-                text_results = await self._try_text_search(query, record_type, domain, limit)
-                if text_results and len(text_results) > 0:
-                    logger.info(f"Text search found {len(text_results)} results.")
-                    # Format text search results to match expected return format
-                    search_results = []
-                    for doc in text_results:
-                        score = doc.get("score", 0.5)
-                        search_results.append((doc, score, score, score))
-                    return search_results[:limit]
-            except Exception as text_err:
-                logger.error(f"Text search fallback also failed: {text_err}")
-                
-            # Final fallback - direct document retrieval and local comparison
+        except pymongo.errors.OperationFailure as e: 
+            logger.error(f"MongoDB aggregation or vector search failed: {e}", exc_info=False) 
+            if "index not found" in str(e).lower() or "unknown search index" in str(e).lower() or "Invalid $search" in str(e).lower() or "Query should contain either operator or collector" in str(e).lower() :
+                 logger.error(f"CRITICAL: Atlas Vector Search index '{current_search_index_name}' likely missing, misconfigured, or $search stage is malformed. Details: {str(e)}")
+            
+            logger.info("Attempting fallback search due to vector search error...")
             return await self._perform_fallback_search(
-                query, query_embedding_orig, task_embedding,
-                record_type, domain, limit, effective_task_weight
+                query, query_embedding_orig, task_embedding_for_fallback, 
+                record_type, domain, limit, effective_task_weight, task_context
+            )
+        except Exception as e: 
+            logger.error(f"Unexpected error during semantic search: {e}", exc_info=True)
+            logger.info("Attempting fallback search due to unexpected error...")
+            return await self._perform_fallback_search(
+                query, query_embedding_orig, task_embedding_for_fallback, 
+                record_type, domain, limit, effective_task_weight, task_context
             )
         
-        # Process results with manual scoring
         search_results_tuples = []
         for doc in candidate_docs:
-            # Ensure all required fields exist
-            for key in ["name", "record_type", "domain", "description"]:
-                if key not in doc:
-                    doc[key] = f"Unknown {key}"
-                    
-            raw_score = doc.get(primary_score_field, 0.0)
+            raw_vector_score = doc.get(primary_score_field, 0.0)
             content_embedding_from_doc = doc.get("content_embedding", [])
             applicability_embedding_from_doc = doc.get("applicability_embedding", [])
 
-            # Calculate content_score and task_score based on embeddings
-            content_score = raw_score
-            if query_embedding_orig and content_embedding_from_doc:
-                # Recalculate or enhance content score with actual similarity
-                direct_content_score = await self.compute_similarity(query_embedding_orig, content_embedding_from_doc)
-                # Blend the scores, preferring the direct calculation if available
-                content_score = direct_content_score if direct_content_score > 0 else content_score
+            content_score = 0.0
+            task_score = 0.0
 
-            # Calculate task score if applicable
-            task_score = 0.5  # Default
-            if task_context and task_embedding and applicability_embedding_from_doc:
-                task_score = await self.compute_similarity(task_embedding, applicability_embedding_from_doc)
-            elif task_context is None and query_embedding_orig and applicability_embedding_from_doc:
-                # If no task context, use query for task score as fallback
-                task_score = await self.compute_similarity(query_embedding_orig, applicability_embedding_from_doc)
+            if task_context and task_embedding_for_fallback: 
+                task_score = raw_vector_score 
+                if query_embedding_orig and content_embedding_from_doc:
+                    content_score = await self.compute_similarity(query_embedding_orig, content_embedding_from_doc)
+                else:
+                    content_score = 0.5 
+            else: 
+                content_score = raw_vector_score
+                if query_embedding_orig and applicability_embedding_from_doc: 
+                    task_score = await self.compute_similarity(query_embedding_orig, applicability_embedding_from_doc)
+                else:
+                    task_score = 0.5 
 
-            # Calculate final score
             final_score = (effective_task_weight * task_score) + ((1.0 - effective_task_weight) * content_score)
             
-            # Apply usage-based boost
             usage_count = doc.get("usage_count", 0)
-            success_rate = doc.get("success_count", 0) / max(usage_count, 1)
+            success_rate = doc.get("success_count", 0) / max(usage_count, 1) if usage_count > 0 else 0.0
             boost = min(0.05, (usage_count / 200.0) * success_rate)
             adjusted_score = min(1.0, final_score + boost)
 
@@ -387,132 +393,126 @@ class SmartLibrary:
                 doc_copy = doc.copy()
                 doc_copy.pop("content_embedding", None)
                 doc_copy.pop("applicability_embedding", None)
-                doc_copy.pop(primary_score_field, None)
+                doc_copy.pop(primary_score_field, None) 
                 search_results_tuples.append((doc_copy, adjusted_score, content_score, task_score))
         
-        # Sort by final score
         search_results_tuples.sort(key=lambda x: x[1], reverse=True)
         return search_results_tuples[:limit]
 
-    async def _try_text_search(self, query: str, record_type: Optional[str] = None, domain: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
-        """Attempt to use MongoDB's text search as a fallback."""
-        if self.components_collection is None:
-            return []
+    async def _try_text_search(self, query_text: str, record_type: Optional[str] = None, domain: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
+        if self.components_collection is None: return []
             
-        search_query = {"$text": {"$search": query}, "status": "active"}
-        if record_type:
-            search_query["record_type"] = record_type
-        if domain:
-            search_query["domain"] = domain
+        text_search_filter: Dict[str, Any] = {"$text": {"$search": query_text}, "status": "active"}
+        if record_type: text_search_filter["record_type"] = record_type
+        if domain: text_search_filter["domain"] = domain
             
         try:
+            projection_with_score = {
+                "_id": 0, "id": 1, "name": 1, "record_type": 1, "domain": 1, 
+                "description": 1, "version": 1, "tags": 1, "metadata": 1,
+                "usage_count": 1, "success_count": 1, 
+                "content_embedding": 1, "applicability_embedding": 1, 
+                "text_search_score": {"$meta": "textScore"} 
+            }
             cursor = self.components_collection.find(
-                search_query,
-                {"_id": 0, "score": {"$meta": "textScore"}}
-            ).sort([("score", {"$meta": "textScore"})]).limit(limit)
+                text_search_filter,
+                projection_with_score
+            ).sort([("text_search_score", {"$meta": "textScore"})]).limit(limit)
             
-            return await cursor.to_list(length=None)
+            results = await cursor.to_list(length=None)
+            logger.info(f"Fallback text search found {len(results)} results for query '{query_text}'.")
+            return results
+        except pymongo.errors.OperationFailure as op_fail:
+            if "text index required" in str(op_fail).lower() or "No text index" in str(op_fail).lower() or "text index not found" in str(op_fail).lower():
+                logger.warning(f"Text search failed because no suitable text index exists on '{self.components_collection_name}'. Fallback will be less effective.")
+            else:
+                logger.error(f"Text search failed with OperationFailure: {op_fail}")
+            return []
         except Exception as e:
-            logger.error(f"Text search failed: {e}")
+            logger.error(f"Generic error during text search: {e}", exc_info=True)
             return []
 
     async def _perform_fallback_search(
-        self, query: str, query_embedding_orig: List[float], task_embedding: Optional[List[float]],
+        self, query: str, query_embedding_orig: List[float], 
+        task_embedding: Optional[List[float]], 
         record_type: Optional[str] = None, domain: Optional[str] = None, 
-        limit: int = 5, effective_task_weight: float = 0.7
+        limit: int = 5, effective_task_weight: float = 0.7,
+        task_context: Optional[str] = None # Added task_context parameter
     ) -> List[Tuple[Dict[str, Any], float, float, float]]:
-        """Perform fallback search based on direct document retrieval and local comparison."""
-        if self.components_collection is None:
-            return []
+        if self.components_collection is None: return []
+
+        docs_to_score = await self._try_text_search(query, record_type, domain, limit * 3) 
+
+        if not docs_to_score:
+            logger.info("Text search yielded no results or failed, trying broader regex/tag match for fallback.")
+            fallback_query_filter: Dict[str, Any] = {"status": "active"}
+            if record_type: fallback_query_filter["record_type"] = record_type
+            if domain: fallback_query_filter["domain"] = domain
             
-        fallback_query = {"status": "active"}
-        if record_type:
-            fallback_query["record_type"] = record_type
-        if domain:
-            fallback_query["domain"] = domain
-            
-        # Try to match on name, tags, or description if possible
-        if query:
-            query_terms = [term.lower() for term in query.split() if len(term) > 3]
+            query_terms = [term.lower() for term in re.split(r'\s+', query) if len(term) > 2]
             if query_terms:
-                or_conditions = []
-                # Partial text match conditions
+                regex_conditions = []
                 for term in query_terms:
-                    or_conditions.append({"name": {"$regex": re.escape(term), "$options": "i"}})
-                    or_conditions.append({"description": {"$regex": re.escape(term), "$options": "i"}})
-                # Tag match
-                or_conditions.append({"tags": {"$in": query_terms}})
-                
-                fallback_query["$or"] = or_conditions
-        
-        try:
-            # Include all fields needed for result processing
+                    safe_term = re.escape(term)
+                    regex_conditions.append({"name": {"$regex": safe_term, "$options": "i"}})
+                    regex_conditions.append({"description": {"$regex": safe_term, "$options": "i"}})
+                if regex_conditions:
+                    fallback_query_filter["$or"] = regex_conditions + [{"tags": {"$in": query_terms}}]
+            
             projection = {
                 "_id": 0, "id": 1, "name": 1, "record_type": 1, "domain": 1, 
                 "description": 1, "version": 1, "tags": 1, "metadata": 1,
-                "usage_count": 1, "success_count": 1, "content_embedding": 1, 
-                "applicability_embedding": 1
+                "usage_count": 1, "success_count": 1, 
+                "content_embedding": 1, "applicability_embedding": 1
             }
-            
-            cursor = self.components_collection.find(fallback_query, projection).limit(limit * 3)
-            docs = await cursor.to_list(length=None)
-            logger.info(f"Fallback search found {len(docs)} documents for local processing")
-            
-            # Manually compute similarity and sort
-            result_tuples = []
-            for doc in docs:
-                # Ensure all keys exist to prevent KeyErrors later
-                for key in ["name", "record_type", "domain", "description"]:
-                    if key not in doc:
-                        doc[key] = f"Unknown {key}"
-                
-                # Get the embeddings if available
-                content_embedding = doc.get("content_embedding", [])
-                applicability_embedding = doc.get("applicability_embedding", [])
-                
-                # Calculate similarities (with handling for missing embeddings)
-                content_score = 0.5  # Default score
-                if content_embedding and query_embedding_orig:
-                    try:
-                        content_score = await self.compute_similarity(query_embedding_orig, content_embedding)
-                    except Exception as cs_err:
-                        logger.warning(f"Error calculating content similarity: {cs_err}")
-                
-                task_score = 0.5  # Default score
-                if applicability_embedding:
-                    try:
-                        # Use task embedding if available, otherwise use query embedding
-                        embedding_for_task = task_embedding if task_embedding else query_embedding_orig
-                        if embedding_for_task:
-                            task_score = await self.compute_similarity(embedding_for_task, applicability_embedding)
-                    except Exception as ts_err:
-                        logger.warning(f"Error calculating task similarity: {ts_err}")
-                
-                # Calculate final score with weighting
-                final_score = (effective_task_weight * task_score) + ((1.0 - effective_task_weight) * content_score)
-                
-                # Add usage-based boost for frequently used components with good success rates
-                usage_count = doc.get("usage_count", 0)
-                success_count = doc.get("success_count", 0)
-                success_rate = success_count / max(1, usage_count)
-                boost = min(0.05, (usage_count / 200.0) * success_rate)
-                
-                adjusted_score = min(1.0, final_score + boost)
-                
-                # Remove embeddings to save memory in the returned object
-                doc_copy = doc.copy()
-                doc_copy.pop("content_embedding", None)
-                doc_copy.pop("applicability_embedding", None)
-                
-                result_tuples.append((doc_copy, adjusted_score, content_score, task_score))
-                
-            # Sort by adjusted score (highest first) and limit results
-            result_tuples.sort(key=lambda x: x[1], reverse=True)
-            return result_tuples[:limit]
-            
-        except Exception as e:
-            logger.error(f"Fallback search failed: {e}", exc_info=True)
+            try:
+                cursor = self.components_collection.find(fallback_query_filter, projection).limit(limit * 5)
+                docs_to_score = await cursor.to_list(length=None)
+                logger.info(f"Fallback regex/tag search found {len(docs_to_score)} documents.")
+            except Exception as e:
+                logger.error(f"Fallback regex/tag search query failed: {e}", exc_info=True)
+                return []
+        
+        if not docs_to_score:
+            logger.info("No documents found even with broader fallback search.")
             return []
+
+        result_tuples = []
+        for doc in docs_to_score:
+            content_embedding = doc.get("content_embedding", [])
+            applicability_embedding = doc.get("applicability_embedding", [])
+            
+            content_score = 0.5 
+            if content_embedding and query_embedding_orig:
+                content_score = await self.compute_similarity(query_embedding_orig, content_embedding)
+            
+            task_score = 0.5  
+            if applicability_embedding:
+                embedding_for_task_calc = task_embedding if task_context and task_embedding else query_embedding_orig
+                if embedding_for_task_calc:
+                    task_score = await self.compute_similarity(embedding_for_task_calc, applicability_embedding)
+            
+            text_search_score = doc.get("text_search_score", 0.0) 
+            combined_semantic_score = (effective_task_weight * task_score) + ((1.0 - effective_task_weight) * content_score)
+            
+            final_score = combined_semantic_score
+            if text_search_score > 0.5: 
+                final_score = (final_score * 0.7) + (text_search_score * 0.3) 
+
+            usage_count = doc.get("usage_count", 0)
+            success_rate = doc.get("success_count", 0) / max(1, usage_count) if usage_count > 0 else 0.0
+            boost = min(0.05, (usage_count / 200.0) * success_rate)
+            adjusted_score = min(1.0, final_score + boost)
+            
+            doc_copy = doc.copy()
+            doc_copy.pop("content_embedding", None)
+            doc_copy.pop("applicability_embedding", None)
+            doc_copy.pop("text_search_score", None) 
+            
+            result_tuples.append((doc_copy, adjusted_score, content_score, task_score))
+                
+        result_tuples.sort(key=lambda x: x[1], reverse=True)
+        return result_tuples[:limit]
 
     async def create_record(
         self, name: str, record_type: str, domain: str, description: str,
