@@ -1,7 +1,7 @@
 # evolving_agents/core/system_agent.py
 
 import logging
-import uuid # Added missing import potentially needed for fallback library name
+import uuid # For fallback library name
 from typing import Dict, Any, List, Optional
 
 # BeeAI Framework imports
@@ -14,8 +14,7 @@ from beeai_framework.memory import TokenMemory, UnconstrainedMemory
 from evolving_agents.tools.smart_library.search_component_tool import SearchComponentTool
 from evolving_agents.tools.smart_library.create_component_tool import CreateComponentTool
 from evolving_agents.tools.smart_library.evolve_component_tool import EvolveComponentTool
-from evolving_agents.tools.smart_library.task_context_tool import TaskContextTool
-from evolving_agents.tools.smart_library.task_context_tool import ContextualSearchTool
+from evolving_agents.tools.smart_library.task_context_tool import TaskContextTool, ContextualSearchTool # Combined import
 from evolving_agents.tools.agent_bus.register_agent_tool import RegisterAgentTool
 from evolving_agents.tools.agent_bus.request_agent_tool import RequestAgentTool
 from evolving_agents.tools.agent_bus.discover_agent_tool import DiscoverAgentTool
@@ -24,7 +23,7 @@ from evolving_agents.tools.agent_bus.discover_agent_tool import DiscoverAgentToo
 from evolving_agents.workflow.generate_workflow_tool import GenerateWorkflowTool
 from evolving_agents.workflow.process_workflow_tool import ProcessWorkflowTool
 
-# Intent Review Tools (Added in the update)
+# Intent Review Tools
 from evolving_agents.tools.intent_review.workflow_design_review_tool import WorkflowDesignReviewTool
 from evolving_agents.tools.intent_review.component_selection_review_tool import ComponentSelectionReviewTool
 from evolving_agents.tools.intent_review.approve_plan_tool import ApprovePlanTool
@@ -35,117 +34,116 @@ from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.dependency_container import DependencyContainer
-from evolving_agents.core.base import IAgent # Ensure IAgent is imported if used
+from evolving_agents.core.base import IAgent # Ensure IAgent is imported
+from evolving_agents.core.mongodb_client import MongoDBClient # For passing to tools
 
 logger = logging.getLogger(__name__)
 
 class SystemAgentFactory:
     @staticmethod
     async def create_agent(
-        llm_service: Optional[LLMService] = None, # Keep allowing direct pass for flexibility
+        # Direct passing still allowed for flexibility/testing, but container is preferred
+        llm_service: Optional[LLMService] = None,
         smart_library: Optional[SmartLibrary] = None,
-        agent_bus = None,
+        agent_bus: Optional[SmartAgentBus] = None,
+        mongodb_client: Optional[MongoDBClient] = None, # Added for explicit passing
         memory_type: str = "token",
         container: Optional[DependencyContainer] = None
     ) -> ReActAgent:
 
         # --- Resolve Dependencies ---
         logger.debug(f"SystemAgentFactory: Received container: {container is not None}")
-        resolved_llm_service = llm_service
-        if not resolved_llm_service and container:
-            logger.debug("SystemAgentFactory: Attempting to get 'llm_service' from container.")
-            if container.has('llm_service'):
-                resolved_llm_service = container.get('llm_service')
-                logger.debug(f"SystemAgentFactory: Retrieved 'llm_service' from container: {resolved_llm_service is not None}")
+
+        # Helper to resolve from container or use provided, with logging
+        def _resolve_dependency(name: str, provided_instance: Optional[Any], default_factory: Optional[callable] = None):
+            instance = provided_instance
+            if not instance and container and container.has(name):
+                instance = container.get(name)
+                logger.debug(f"SystemAgentFactory: Retrieved '{name}' from container.")
+            elif instance:
+                logger.debug(f"SystemAgentFactory: Using directly passed '{name}'.")
+            elif default_factory:
+                logger.warning(f"SystemAgentFactory: '{name}' not in container or provided, creating default.")
+                instance = default_factory()
+                if container and instance: container.register(name, instance) # Register if created
             else:
-                logger.warning("SystemAgentFactory: Container does not have 'llm_service'.")
-        elif resolved_llm_service:
-             logger.debug("SystemAgentFactory: Using directly passed 'llm_service'.")
-        else:
-             logger.error("SystemAgentFactory: No LLM service provided directly or via container.")
-             raise ValueError("LLM Service is required to create SystemAgent, but none was found.")
+                logger.error(f"SystemAgentFactory: Critical dependency '{name}' not found or provided, and no default factory.")
+                raise ValueError(f"{name} is required but was not found or provided.")
+            if instance is None: # Should be caught by the else above, but as a safeguard
+                raise ValueError(f"Critical Error: {name} resolved to None unexpectedly.")
+            return instance
 
-        if resolved_llm_service is None:
-             logger.critical("SystemAgentFactory: resolved_llm_service is None even after checks!")
-             raise ValueError("Critical Error: LLM Service resolved to None unexpectedly.")
-
-        # Access chat_model after ensuring resolved_llm_service is valid
+        resolved_llm_service = _resolve_dependency("llm_service", llm_service, lambda: LLMService())
         chat_model = resolved_llm_service.chat_model
-        logger.debug(f"SystemAgentFactory: Successfully accessed chat_model: {chat_model is not None}")
+        logger.debug(f"SystemAgentFactory: Using LLMService with chat_model: {chat_model is not None}")
 
-        # Resolve other dependencies
-        resolved_smart_library = smart_library
-        if not resolved_smart_library and container:
-            logger.debug("SystemAgentFactory: Attempting to get 'smart_library' from container.")
-            if container.has('smart_library'):
-                resolved_smart_library = container.get('smart_library')
-                logger.debug(f"SystemAgentFactory: Retrieved 'smart_library': {resolved_smart_library is not None}")
-            else:
-                 logger.warning("SystemAgentFactory: Container does not have 'smart_library', creating default.")
-                 resolved_smart_library = SmartLibrary(f"sys_agent_fallback_library_{uuid.uuid4().hex[:4]}.json")
-        elif not resolved_smart_library:
-             logger.error("SystemAgentFactory: Smart Library is required but none was provided or found.")
-             raise ValueError("Smart Library is required for SystemAgent.")
+        # For SmartLibrary, the default factory now needs the container or llm_service
+        # If container is present, SmartLibrary's __init__ can pull llm_service from it.
+        # If only llm_service is passed, it uses that.
+        def smart_lib_factory():
+            # SmartLibrary expects llm_service if no container, or will try to get from container
+            if container:
+                return SmartLibrary(container=container) # This will get llm_service and mongodb_client from container
+            else: # If no container, llm_service and mongodb_client must be explicitly passed
+                # This branch is less ideal as it might create a new MongoDBClient if not passed explicitly
+                resolved_mongo_for_lib = mongodb_client or (container.get('mongodb_client') if container and container.has('mongodb_client') else MongoDBClient())
+                return SmartLibrary(llm_service=resolved_llm_service, mongodb_client=resolved_mongo_for_lib)
 
-        resolved_agent_bus = agent_bus
-        if not resolved_agent_bus and container:
-            logger.debug("SystemAgentFactory: Attempting to get 'agent_bus' from container.")
-            if container.has('agent_bus'):
-                 resolved_agent_bus = container.get('agent_bus')
-                 logger.debug(f"SystemAgentFactory: Retrieved 'agent_bus': {resolved_agent_bus is not None}")
-            else:
-                 logger.warning("SystemAgentFactory: Container does not have 'agent_bus', creating default.")
-                 resolved_agent_bus = SmartAgentBus(container=container) # Use container for its deps
-        elif not resolved_agent_bus:
-            logger.error("SystemAgentFactory: Agent Bus is required but none was provided or found.")
-            raise ValueError("Agent Bus is required for SystemAgent.")
 
-        resolved_firmware = None
-        if container and container.has('firmware'):
-             resolved_firmware = container.get('firmware')
-        else:
-             logger.warning("SystemAgentFactory: Firmware not in container, creating default.")
-             resolved_firmware = Firmware()
+        resolved_smart_library = _resolve_dependency("smart_library", smart_library, smart_lib_factory)
+
+        resolved_mongodb_client = _resolve_dependency("mongodb_client", mongodb_client, lambda: MongoDBClient())
+
+
+        # For AgentBus, it also needs container or resolved dependencies
+        def agent_bus_factory():
+            if container:
+                return SmartAgentBus(container=container) # Will get smart_library, llm_service, mongodb_client from container
+            else: # Less ideal, direct dependency passing
+                return SmartAgentBus(smart_library=resolved_smart_library,
+                                     llm_service=resolved_llm_service,
+                                     mongodb_client=resolved_mongodb_client)
+
+        resolved_agent_bus = _resolve_dependency("agent_bus", agent_bus, agent_bus_factory)
+
+        resolved_firmware = _resolve_dependency("firmware", None, lambda: Firmware()) # Assuming firmware doesn't have complex deps
 
         # --- Create Tools using RESOLVED dependencies ---
+        logger.debug("SystemAgentFactory: Instantiating tools...")
         # Standard Tools
         search_tool = SearchComponentTool(resolved_smart_library)
         create_tool = CreateComponentTool(resolved_smart_library, resolved_llm_service, resolved_firmware)
         evolve_tool = EvolveComponentTool(resolved_smart_library, resolved_llm_service, resolved_firmware)
+
+        # Agent Bus Tools
         register_tool = RegisterAgentTool(resolved_agent_bus)
         request_tool = RequestAgentTool(resolved_agent_bus)
-        discover_tool = DiscoverAgentTool(resolved_agent_bus)
+        discover_tool = DiscoverAgentTool(resolved_agent_bus) # This tool now uses MongoDB via AgentBus
+
+        # Workflow Tools
         generate_workflow_tool = GenerateWorkflowTool(resolved_llm_service, resolved_smart_library)
-        process_workflow_tool = ProcessWorkflowTool()
+        # **MODIFIED: Pass mongodb_client or container to ProcessWorkflowTool**
+        process_workflow_tool = ProcessWorkflowTool(mongodb_client=resolved_mongodb_client, container=container)
 
         # Task context tools
         task_context_tool = TaskContextTool(resolved_llm_service)
         contextual_search_tool = ContextualSearchTool(task_context_tool, search_tool)
 
-        # Intent review tools (Added in the update)
-        workflow_design_review_tool = WorkflowDesignReviewTool()
-        component_selection_review_tool = ComponentSelectionReviewTool()
-        approve_plan_tool = ApprovePlanTool(llm_service=resolved_llm_service) # Needs LLM
+        # Intent review tools
+        workflow_design_review_tool = WorkflowDesignReviewTool() # Assumes no complex deps for now
+        component_selection_review_tool = ComponentSelectionReviewTool() # Assumes no complex deps
+        # **MODIFIED: Pass mongodb_client or container to ApprovePlanTool**
+        approve_plan_tool = ApprovePlanTool(llm_service=resolved_llm_service, mongodb_client=resolved_mongodb_client, container=container)
 
-        # Define the list of tools for the agent (Include ALL necessary tools)
         tools = [
-            contextual_search_tool,  # Prioritized for context-aware searching
-            task_context_tool,
-            search_tool,
-            create_tool,
-            evolve_tool,
-            register_tool,
-            request_tool,
-            discover_tool,
-            generate_workflow_tool,
-            process_workflow_tool,
-            # Intent Review Tools (Include these)
-            workflow_design_review_tool,
-            component_selection_review_tool,
-            approve_plan_tool,
+            contextual_search_tool, task_context_tool, search_tool, create_tool, evolve_tool,
+            register_tool, request_tool, discover_tool,
+            generate_workflow_tool, process_workflow_tool,
+            workflow_design_review_tool, component_selection_review_tool, approve_plan_tool,
         ]
+        logger.debug(f"SystemAgentFactory: {len(tools)} tools instantiated.")
 
-        # --- Agent Meta (Using the updated description) ---
+        # --- Agent Meta ---
         meta = AgentMeta(
             name="SystemAgent",
             description=(
@@ -153,7 +151,6 @@ class SystemAgentFactory:
                 "My primary purpose is to help you reuse, evolve, and create agents and tools "
                 "to solve your problems efficiently. I find the most relevant components by "
                 "deeply understanding the specific task context you're working in. "
-                # Added line for human-in-the-loop
                 "I can also operate in a human-in-the-loop workflow where my plans are reviewed "
                 "before execution to ensure safety and appropriateness."
             ),
@@ -161,56 +158,43 @@ class SystemAgentFactory:
                 "When faced with a complex task, I might need to break it down. This could involve analyzing requirements, "
                 "identifying or creating necessary agents/tools via the SmartLibrary, coordinating their execution, "
                 "and potentially generating an internal plan if multiple steps are needed. "
-                "I can also use task context to find components specifically relevant to the current operation. "
-                "My goal is to deliver the final result for your request."
+                "I use task context for relevant component discovery. My goal is to deliver the final result."
             ),
-            tools=tools # Pass the complete list of tools
+            tools=tools
         )
 
         # --- Memory and Agent Creation ---
         memory = UnconstrainedMemory() if memory_type == "unconstrained" else TokenMemory(chat_model)
         system_agent = ReActAgent(
             llm=chat_model,
-            tools=tools, # Use the complete list
+            tools=tools,
             memory=memory,
             meta=meta
         )
 
-        # --- Tool Mapping (Include ALL tools) ---
-        tools_dict = {
-            # Standard Tools
-            "search_component": search_tool,
-            "create_component": create_tool,
-            "evolve_component": evolve_tool,
-            "register_agent": register_tool,
-            "request_agent": request_tool,
-            "discover_agent": discover_tool,
-            "generate_workflow": generate_workflow_tool,
-            "process_workflow": process_workflow_tool,
-            "task_context": task_context_tool,
-            "contextual_search": contextual_search_tool,
-            # Intent Review Tools Map (Include these)
-            "workflow_design_review": workflow_design_review_tool,
-            "component_selection_review": component_selection_review_tool,
-            "approve_plan": approve_plan_tool,
-        }
-        system_agent.tools_map = tools_dict # Assign the complete map
+        # --- Tool Mapping ---
+        system_agent.tools_map = {tool_instance.name: tool_instance for tool_instance in tools}
+        # Log the actual mapped tools for verification
+        logger.debug(f"SystemAgent tools_map contains: {list(system_agent.tools_map.keys())}")
 
-        # --- Container Registration & Bus Update (FIXED Section) ---
+
+        # --- Container Registration & AgentBus Update ---
         if container and not container.has('system_agent'):
             container.register('system_agent', system_agent)
-            logger.debug("SystemAgentFactory: Registered self (SystemAgent instance) in container.")
+            logger.debug("SystemAgentFactory: Registered SystemAgent instance in container.")
 
-        # Ensure bus knows about system agent - USE DIRECT ASSIGNMENT
-        if resolved_agent_bus and resolved_agent_bus._system_agent_instance is None:
-            # resolved_agent_bus.set_system_agent(system_agent) # <-- Removed this line
-            resolved_agent_bus._system_agent_instance = system_agent # <-- Use this direct assignment
-            logger.debug("SystemAgentFactory: Set self as system_agent on the resolved AgentBus.")
-        elif resolved_agent_bus and resolved_agent_bus._system_agent_instance is not system_agent:
-            logger.warning("SystemAgentFactory: Agent Bus already has a system agent assigned, replacing.")
-            # resolved_agent_bus.set_system_agent(system_agent) # <-- Removed this line
-            resolved_agent_bus._system_agent_instance = system_agent # <-- Use this direct assignment
-        # ---------------------------------------------------------
+        # Ensure AgentBus knows about the SystemAgent instance for potential internal calls or context
+        # This uses a direct assignment to a property as discussed.
+        if resolved_agent_bus: # Check if agent_bus was successfully resolved
+            if resolved_agent_bus._system_agent_instance is None:
+                resolved_agent_bus._system_agent_instance = system_agent
+                logger.debug("SystemAgentFactory: Set SystemAgent instance on the resolved AgentBus.")
+            elif resolved_agent_bus._system_agent_instance is not system_agent:
+                logger.warning("SystemAgentFactory: AgentBus already had a different SystemAgent instance. Overwriting.")
+                resolved_agent_bus._system_agent_instance = system_agent
+        else:
+            logger.error("SystemAgentFactory: resolved_agent_bus is None, cannot set system_agent property on it.")
 
-        logger.info("SystemAgent created successfully with intent review capabilities.")
+
+        logger.info("SystemAgent created successfully with updated tool initializations.")
         return system_agent

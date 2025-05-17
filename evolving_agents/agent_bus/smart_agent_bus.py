@@ -6,923 +6,782 @@ import logging
 import asyncio
 import time
 import uuid
-from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple, Union
-from pathlib import Path
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List, Union
 
-import chromadb
-import numpy as np
+import pymongo
+import motor.motor_asyncio
+
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.dependency_container import DependencyContainer
-# Avoid importing specific agent types like ReActAgent directly if possible
-from evolving_agents.core.base import IAgent # Use the protocol
+from evolving_agents.core.base import IAgent
+from evolving_agents.core.mongodb_client import MongoDBClient
 
 logger = logging.getLogger(__name__)
 
-class SmartAgentBus:
-    """
-    An agent-centric service bus for discovering, managing, and orchestrating AI agents.
-    Implements a logical Dual Bus:
-    - System Bus: Handles registration, discovery, health monitoring (e.g., register_agent, discover_agents).
-    - Data Bus: Handles agent-to-agent capability requests and data exchange (e.g., request_capability).
-    """
+DEFAULT_AGENT_EMBEDDING_DIM = 1536 # Example dimension, align with your embedding model
 
+class SmartAgentBus:
     def __init__(
         self,
         smart_library: Optional[SmartLibrary] = None,
-        # system_agent: Optional[ReActAgent] = None, # Type hint using the protocol instead
         system_agent: Optional[IAgent] = None,
         llm_service: Optional[LLMService] = None,
-        storage_path: str = "agent_registry.json",
-        chroma_path: str = "./agent_db",
-        log_path: str = "agent_execution_logs.json",
-        container: Optional[DependencyContainer] = None
+        container: Optional[DependencyContainer] = None,
+        mongodb_client: Optional[MongoDBClient] = None,
+        mongodb_uri: Optional[str] = None,
+        mongodb_db_name: Optional[str] = None,
+        registry_collection_name: str = "eat_agent_registry",
+        logs_collection_name: str = "eat_agent_bus_logs",
+        circuit_breaker_path: str = "agent_bus_circuit_breakers.json"
     ):
-        """
-        Initialize the Agent Bus.
-        """
-        # Resolve dependencies from container if provided
+        self.container = container
+        self._system_agent_instance = system_agent
+        self._initialized = False
+        self._agent_instances: Dict[str, Any] = {}
+        self.circuit_breakers: Dict[str, Dict[str, Any]] = {}
+        self.circuit_breaker_path = circuit_breaker_path
+        self.mongodb_client: Optional[MongoDBClient] = None
+        self.registry_collection: Optional[motor.motor_asyncio.AsyncIOMotorCollection] = None
+        self.logs_collection: Optional[motor.motor_asyncio.AsyncIOMotorCollection] = None
+
+
+        # Resolve core dependencies: SmartLibrary and LLMService
         if container:
-            self.smart_library = smart_library or container.get('smart_library')
-            # system_agent is resolved later if needed
-            self.llm_service = llm_service or container.get('llm_service')
+            self.smart_library = smart_library or container.get('smart_library', None)
+            self.llm_service = llm_service or container.get('llm_service', None)
+            if not self.llm_service:
+                self.llm_service = LLMService(container=container)
+                container.register('llm_service', self.llm_service)
         else:
             self.smart_library = smart_library
             self.llm_service = llm_service or LLMService()
 
-        # System agent can be set later, allows circular dependency resolution
-        self._system_agent_instance = system_agent
-        self.container = container # Store container reference
+        # Resolve MongoDBClient
+        if mongodb_client is not None:
+            self.mongodb_client = mongodb_client
+            logger.debug("SmartAgentBus: Using directly passed MongoDBClient.")
+        elif container and container.has('mongodb_client'):
+            self.mongodb_client = container.get('mongodb_client')
+            logger.debug("SmartAgentBus: Using MongoDBClient from container.")
+        else:
+            logger.warning("SmartAgentBus: MongoDBClient not passed directly or found in container. Attempting to create new instance.")
+            try:
+                self.mongodb_client = MongoDBClient(uri=mongodb_uri, db_name=mongodb_db_name)
+                if container:
+                    container.register('mongodb_client', self.mongodb_client)
+            except ValueError as e:
+                logger.error(f"SmartAgentBus: Failed to initialize default MongoDBClient: {e}. DB operations will fail.")
+                self.mongodb_client = None # Explicitly set to None if creation fails
 
-        self.log_path = log_path
-        self._initialized = False
-        self._agent_instances: Dict[str, Any] = {} # Store live agent instances
+        if self.mongodb_client:
+            if not isinstance(self.mongodb_client.client, motor.motor_asyncio.AsyncIOMotorClient):
+                logger.critical("SmartAgentBus: MongoDBClient is NOT using an AsyncIOMotorClient (Motor). Async DB ops will fail.")
+                self.registry_collection = None
+                self.logs_collection = None
+            else:
+                self.registry_collection_name = registry_collection_name
+                self.logs_collection_name = logs_collection_name
+                self.registry_collection = self.mongodb_client.get_collection(self.registry_collection_name)
+                self.logs_collection = self.mongodb_client.get_collection(self.logs_collection_name)
+                asyncio.create_task(self._ensure_registry_indexes_and_load())
+        else:
+            logger.error("SmartAgentBus: MongoDBClient is not available. Database operations will not be possible.")
+            self.registry_collection_name = "N/A (MongoDB unavailable)"
+            self.logs_collection_name = "N/A (MongoDB unavailable)"
+            self.registry_collection = None
+            self.logs_collection = None
 
-        # Register with container if provided
+
+        self.agents: Dict[str, Dict[str, Any]] = {} # In-memory cache
+        self._load_circuit_breakers()
+
         if container and not container.has('agent_bus'):
             container.register('agent_bus', self)
 
-        # Initialize components
-        self._init_agent_database(chroma_path)
-        self._init_agent_registry(storage_path)
-
-        logger.info(f"AgentBus initialized with registry at {storage_path}")
+        logger.info(f"SmartAgentBus initialized. Registry: '{self.registry_collection_name}', Logs: '{self.logs_collection_name}'")
 
     @property
     def system_agent(self) -> Optional[IAgent]:
-        """Lazy load system agent from container if not set."""
         if not self._system_agent_instance and self.container and self.container.has('system_agent'):
              self._system_agent_instance = self.container.get('system_agent')
         return self._system_agent_instance
 
+    async def _ensure_registry_indexes_and_load(self):
+        """Ensure MongoDB indexes for the agent registry and load data into memory."""
+        if self.registry_collection is None: 
+            logger.error(f"Cannot ensure indexes: registry_collection '{self.registry_collection_name}' is None.")
+            return
+        try:
+            await self.registry_collection.create_index([("id", pymongo.ASCENDING)], unique=True, background=True)
+            await self.registry_collection.create_index([("name", pymongo.ASCENDING)], background=True)
+            await self.registry_collection.create_index([("status", pymongo.ASCENDING)], background=True)
+            await self.registry_collection.create_index([("type", pymongo.ASCENDING)], background=True)
+            await self.registry_collection.create_index([("capabilities.id", pymongo.ASCENDING)], background=True)
+            await self.registry_collection.create_index([("description", pymongo.TEXT)], name="description_text_index", background=True)
 
-    def _init_agent_database(self, chroma_path: str) -> None:
-        """Initialize the ChromaDB agent database."""
-        self.chroma_client = chromadb.PersistentClient(path=chroma_path)
-        self.agent_collection = self.chroma_client.get_or_create_collection(
-            name="agent_registry",
-            metadata={"hnsw:space": "cosine"}
-        )
+            logger.info(f"Ensured standard indexes on '{self.registry_collection_name}'.")
+            logger.info("Reminder: For vector search on agent descriptions (field 'description_embedding'), "
+                        "ensure 'vector_index_agent_description' Atlas Vector Search index is configured manually.")
+        except Exception as e:
+            logger.error(f"Error creating MongoDB indexes for {self.registry_collection_name}: {e}", exc_info=True)
+        
+        await self._load_registry_from_db()
 
-    def _init_agent_registry(self, storage_path: str) -> None:
-        """Initialize the agent registry system."""
-        self.registry_path = storage_path
-        self.agents: Dict[str, Dict[str, Any]] = {}
-        self.circuit_breakers: Dict[str, Dict[str, Any]] = {}
-        self._load_registry()
+
+    async def _load_registry_from_db(self) -> None:
+        """Load all agent records from MongoDB into the in-memory self.agents dictionary."""
+        if self.registry_collection is None: 
+            logger.error("Registry collection is not initialized. Cannot load from DB.")
+            return
+
+        logger.info(f"Loading agent registry from MongoDB collection '{self.registry_collection_name}'...")
+        self.agents = {}
+        try:
+            projection = {"_id": 0, "description_embedding": 0, "capabilities.description_embedding": 0}
+            cursor = self.registry_collection.find({}, projection)
+            async for agent_doc in cursor:
+                self.agents[agent_doc["id"]] = agent_doc
+            logger.info(f"Loaded {len(self.agents)} agents from MongoDB into in-memory cache.")
+        except Exception as e:
+            logger.error(f"Error loading agent registry from MongoDB: {e}", exc_info=True)
+
+
+    def _load_circuit_breakers(self) -> None:
+        if os.path.exists(self.circuit_breaker_path):
+            try:
+                with open(self.circuit_breaker_path, 'r') as f:
+                    self.circuit_breakers = json.load(f)
+                logger.info(f"Loaded {len(self.circuit_breakers)} circuit breaker states from {self.circuit_breaker_path}")
+            except Exception as e:
+                logger.error(f"Error loading circuit breakers: {e}")
+                self.circuit_breakers = {}
+        else:
+            logger.info(f"Circuit breaker file {self.circuit_breaker_path} not found. Starting with empty states.")
+            self.circuit_breakers = {}
+
+
+    async def _save_circuit_breakers(self) -> None:
+        try:
+            with open(self.circuit_breaker_path, 'w') as f:
+                json.dump(self.circuit_breakers, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving circuit breakers: {e}")
+
 
     async def initialize_from_library(self) -> None:
-        """Initialize agents from SmartLibrary records (System Bus Operation)."""
         if self._initialized:
+            logger.debug("AgentBus already initialized from library.")
             return
-
         if not self.smart_library:
-            logger.warning("Cannot initialize from library: SmartLibrary not provided")
+            logger.warning("SmartLibrary not provided; cannot initialize AgentBus from library.")
             return
 
-        library_records = await self.smart_library.export_records(record_type="AGENT") # Fetch only AGENT records
-        library_records.extend(await self.smart_library.export_records(record_type="TOOL")) # Fetch TOOL records
+        logger.info("AgentBus initializing from SmartLibrary...")
+        try:
+            agent_records = await self.smart_library.export_records(record_type="AGENT")
+            tool_records = await self.smart_library.export_records(record_type="TOOL")
+        except ConnectionError as e: 
+            logger.error(f"Failed to export records from SmartLibrary due to DB connection issue: {e}")
+            return
 
-        agents_initialized = 0
+        library_records = agent_records + tool_records
+        initialized_count = 0
+
         for record in library_records:
             if record.get("status") != "active":
                 continue
-
-            # Check if already registered by ID
-            if record["id"] in self.agents:
-                 continue
-            # Check if registered by name (less reliable, but useful during transition)
-            if any(a["name"] == record["name"] for a in self.agents.values()):
+            if record["id"] in self.agents: 
                 continue
 
             capabilities = record.get("metadata", {}).get("capabilities", [])
-            # Generate default capability if none provided
-            if not capabilities:
+            if not capabilities and record.get("name"):
                 cap_id = f"{record['name'].lower().replace(' ', '_')}_default_capability"
-                capabilities = [{
-                    "id": cap_id,
-                    "name": record["name"],
-                    "description": record.get("description", f"Default capability for {record['name']}"),
-                    "confidence": 0.7 # Lower confidence for default
-                }]
+                capabilities = [{"id": cap_id, "name": record["name"], "description": record.get("description", f"Default capability for {record['name']}"), "confidence": 0.7}]
 
-            # Attempt to create agent/tool instance using AgentFactory
             agent_instance = None
-            if self.container and self.container.has('agent_factory'):
-                 agent_factory = self.container.get('agent_factory')
-                 try:
-                      if record["record_type"] == "AGENT":
-                           agent_instance = await agent_factory.create_agent(record)
-                      elif record["record_type"] == "TOOL" and self.container.has('tool_factory'):
-                           tool_factory = self.container.get('tool_factory')
-                           agent_instance = await tool_factory.create_tool(record) # Tools are also 'agents' on the bus
-                      else:
-                           logger.warning(f"Cannot create instance for record type {record['record_type']} or missing factory.")
+            if self.container:
+                agent_factory = self.container.get('agent_factory', None)
+                tool_factory = self.container.get('tool_factory', None)
+                try:
+                    if record["record_type"] == "AGENT" and agent_factory:
+                        agent_instance = await agent_factory.create_agent(record)
+                    elif record["record_type"] == "TOOL" and tool_factory:
+                        agent_instance = await tool_factory.create_tool(record)
+                except Exception as e:
+                    logger.error(f"Instance creation failed for SmartLibrary component {record.get('name')} ({record.get('id')}): {e}", exc_info=True)
+            
+            try:
+                await self.register_agent(
+                    agent_id=record["id"], name=record["name"], description=record.get("description", ""),
+                    capabilities=capabilities, agent_type=record.get("record_type", "GENERIC"),
+                    metadata={"source": "SmartLibrary", **record.get("metadata", {})},
+                    agent_instance=agent_instance,
+                    embed_capabilities=True 
+                )
+                initialized_count += 1
+            except RuntimeError as reg_err:
+                 logger.error(f"Failed to register agent {record['name']} during library sync: {reg_err}")
 
-                 except Exception as e:
-                      logger.error(f"Failed to create instance for {record['name']} ({record['id']}): {e}", exc_info=True)
-
-
-            # Register with the agent instance if created
-            await self.register_agent(
-                agent_id=record["id"], # Use the library ID
-                name=record["name"],
-                description=record.get("description", ""),
-                capabilities=capabilities,
-                agent_type=record.get("record_type", "GENERIC"),
-                metadata={"source": "SmartLibrary", **record.get("metadata", {})},
-                agent_instance=agent_instance
-            )
-            agents_initialized += 1
 
         self._initialized = True
-        logger.info(f"AgentBus initialized/synced {agents_initialized} components from SmartLibrary.")
-
-
-    def _load_registry(self) -> None:
-        """Load agents from persistent storage."""
-        if Path(self.registry_path).exists():
-            try:
-                with open(self.registry_path, 'r') as f:
-                    data = json.load(f)
-                    self.agents = data.get("agents", {})
-                    self.circuit_breakers = data.get("circuit_breakers", {})
-                logger.info(f"Loaded {len(self.agents)} agents from registry {self.registry_path}")
-            except Exception as e:
-                logger.error(f"Error loading agent registry from {self.registry_path}: {str(e)}")
-                self.agents = {} # Start fresh on error
-                self.circuit_breakers = {}
-
-
-    async def _save_registry(self) -> None:
-        """Persist agents to storage."""
-        data = {
-            "agents": self.agents,
-            "circuit_breakers": self.circuit_breakers,
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        try:
-             with open(self.registry_path, 'w') as f:
-                 json.dump(data, f, indent=2)
-             logger.debug(f"Saved {len(self.agents)} agents to registry {self.registry_path}")
-        except Exception as e:
-             logger.error(f"Error saving agent registry to {self.registry_path}: {str(e)}")
-
-
-    async def _index_agent(self, agent: Dict[str, Any]) -> None:
-        """Index an agent for semantic search (System Bus Operation)."""
-        semantic_text = (
-            f"Agent Name: {agent['name']}\n"
-            f"Type: {agent.get('type', 'UNKNOWN')}\n"
-            f"Description: {agent.get('description', '')}\n"
-            f"Capabilities: {', '.join(c['name'] for c in agent.get('capabilities', []))}"
-        )
-
-        try:
-             embedding = await self.llm_service.embed(semantic_text)
-
-             # Convert capabilities list to a string to avoid ChromaDB error
-             capabilities_str = ",".join([c["id"] for c in agent.get("capabilities", [])])
-             # Ensure metadata values are simple types supported by ChromaDB
-             chroma_metadata = {
-                "name": agent["name"],
-                "type": agent.get("type", ""),
-                "capabilities": capabilities_str,
-                "source": agent.get("metadata", {}).get("source", "unknown") # Example: only store source
-             }
-             # Add other simple metadata if needed, avoiding nested dicts/lists
-
-             self.agent_collection.upsert( # Use upsert for easier sync
-                 ids=[agent["id"]],
-                 embeddings=[embedding],
-                 documents=[semantic_text],
-                 metadatas=[chroma_metadata]
-             )
-             logger.debug(f"Indexed/Updated agent {agent['id']} in vector DB.")
-        except Exception as e:
-             logger.error(f"Failed to index agent {agent['id']}: {e}", exc_info=True)
-
+        logger.info(f"AgentBus synced {initialized_count} new components from SmartLibrary into MongoDB registry.")
 
     async def _log_agent_execution(
-        self,
-        bus_type: str, # Added: 'system' or 'data'
-        agent_id: str,
-        task: Dict[str, Any],
-        result: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
+        self, bus_type: str, agent_id: str, task: Dict[str, Any],
+        result: Optional[Dict[str, Any]] = None, error: Optional[str] = None,
         duration: Optional[float] = None
     ) -> None:
-        """Log agent execution details, indicating bus type."""
+        if self.logs_collection is None: 
+            logger.warning("Logs collection not available. Skipping log.")
+            return
+            
+        agent_name = self.agents.get(agent_id, {}).get("name", "N/A") if agent_id != "N/A" else "N/A"
+
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "bus_type": bus_type, # Indicate System or Data Bus
-            "agent_id": agent_id,
-            "agent_name": self.agents.get(agent_id, {}).get("name", "N/A"),
-            "task_description": task.get("capability") or task.get("operation", "direct_execution"), # More specific task
-            "task_details": task, # Keep full task info
-            "result": result,
+            "log_id": f"log_{uuid.uuid4().hex[:12]}",
+            "timestamp": datetime.now(timezone.utc),
+            "bus_type": bus_type, "agent_id": agent_id, "agent_name": agent_name,
+            "task_description": task.get("capability") or task.get("operation", "direct_execution"),
+            "task_details": task, 
+            "result": result,   
             "error": error,
             "duration_ms": int(duration * 1000) if duration is not None else None,
-            "system_state": { # Optional: Keep system state snapshot
-                "total_agents": len(self.agents),
-                "active_agents": sum(1 for a in self.agents.values() if a["status"] == "active"),
-                "unhealthy_agents": sum(
-                    1 for ag_id in self.agents
-                    if self._check_circuit_breaker(ag_id)
-                )
-            }
         }
-
         try:
-            logs = []
-            if Path(self.log_path).exists():
-                with open(self.log_path, 'r') as f:
-                    # Handle potential empty file or invalid JSON
-                    try:
-                        content = f.read()
-                        if content.strip():
-                             logs = json.loads(content)
-                             if not isinstance(logs, list): logs = [] # Ensure it's a list
-                        else:
-                             logs = []
-                    except json.JSONDecodeError:
-                        logger.warning(f"Log file {self.log_path} contains invalid JSON. Starting fresh log.")
-                        logs = []
-
-            logs.append(log_entry)
-
-            with open(self.log_path, 'w') as f:
-                json.dump(logs, f, indent=2)
+            for key in ["task_details", "result"]:
+                if isinstance(log_entry[key], dict):
+                    log_entry[key] = json.loads(json.dumps(log_entry[key], default=str)) 
+            await self.logs_collection.insert_one(log_entry)
         except Exception as e:
-            logger.error(f"Failed to write execution log to {self.log_path}: {str(e)}")
-
+            logger.error(f"Failed to write execution log to MongoDB: {e}", exc_info=True)
 
     def _check_circuit_breaker(self, agent_id: str) -> bool:
-        """Check if agent is in circuit breaker state (System Bus Health Check)."""
-        if agent_id not in self.circuit_breakers:
-            return False
-
+        if agent_id not in self.circuit_breakers: return False
         cb = self.circuit_breakers[agent_id]
-        if cb["failures"] >= 3 and (time.time() - cb["last_failure"]) < 300:
-            logger.warning(f"Circuit breaker tripped for agent {agent_id}")
+        failures = cb.get("failures", 0)
+        last_failure_time = cb.get("last_failure", 0.0)
+        
+        if failures >= 3 and (time.time() - last_failure_time) < 300: 
+            logger.warning(f"Circuit breaker tripped for agent {agent_id}. Failures: {failures}, Last failure: {datetime.fromtimestamp(last_failure_time).isoformat()}")
             return True
         return False
 
-
-    def _record_failure(self, agent_id: str) -> None:
-        """Record an agent failure (System Bus Health Update)."""
+    async def _record_failure(self, agent_id: str) -> None:
         if agent_id not in self.circuit_breakers:
-            self.circuit_breakers[agent_id] = {
-                "failures": 1,
-                "last_failure": time.time()
-            }
-        else:
-            self.circuit_breakers[agent_id]["failures"] += 1
-            self.circuit_breakers[agent_id]["last_failure"] = time.time()
-        logger.warning(f"Failure recorded for agent {agent_id}. Count: {self.circuit_breakers[agent_id]['failures']}")
+            self.circuit_breakers[agent_id] = {"failures": 0, "last_failure": 0.0}
+        
+        self.circuit_breakers[agent_id]["failures"] = self.circuit_breakers[agent_id].get("failures", 0) + 1
+        self.circuit_breakers[agent_id]["last_failure"] = time.time()
+        
+        await self._save_circuit_breakers()
+        logger.warning(f"Failure recorded for agent {agent_id}. Total failures: {self.circuit_breakers[agent_id]['failures']}. Last failure: {datetime.fromtimestamp(self.circuit_breakers[agent_id]['last_failure']).isoformat()}")
 
 
-    def _reset_circuit_breaker(self, agent_id: str) -> None:
-        """Reset circuit breaker after successful operation (System Bus Health Update)."""
+    async def _reset_circuit_breaker(self, agent_id: str) -> None:
         if agent_id in self.circuit_breakers:
             logger.info(f"Resetting circuit breaker for agent {agent_id}")
             del self.circuit_breakers[agent_id]
-
+            await self._save_circuit_breakers()
 
     async def register_agent(
-        self,
-        name: str,
-        description: str,
-        capabilities: List[Dict[str, Any]],
-        agent_type: str = "GENERIC",
-        metadata: Optional[Dict[str, Any]] = None,
-        agent_instance = None,
-        agent_id: Optional[str] = None # Allow providing ID (e.g., from library)
+        self, name: str, description: str, capabilities: List[Dict[str, Any]],
+        agent_type: str = "GENERIC", metadata: Optional[Dict[str, Any]] = None,
+        agent_instance=None, agent_id: Optional[str] = None,
+        embed_capabilities: bool = False 
     ) -> str:
-        """
-        Register a new agent or update an existing one (System Bus Operation).
+        if self.registry_collection is None: 
+            logger.error("Registry collection not available. Cannot register agent.")
+            raise RuntimeError("Agent registry (MongoDB) is not available.")
 
-        Args:
-            name: Agent name
-            description: What this agent does
-            capabilities: List of capabilities the agent provides
-            agent_type: Type of agent (GENERIC, SPECIALIZED, etc.)
-            metadata: Additional agent configuration (must be JSON serializable)
-            agent_instance: Actual agent instance (not serialized, kept in memory)
-            agent_id: Optional existing agent ID to update or use
+        if not self.llm_service:
+            logger.error("LLMService not available. Cannot generate embeddings for agent registration.")
+            raise RuntimeError("LLMService is required for agent registration if embeddings are needed.")
 
-        Returns:
-            Agent ID
-        """
-        op_type = "Registered new"
         if not agent_id:
             agent_id = f"agent_{uuid.uuid4().hex[:8]}"
-        elif agent_id in self.agents:
-             op_type = "Updated"
+        
+        cap_names_str = ", ".join(c.get("name", c.get("id", "")) for c in capabilities)
+        agent_desc_for_embedding = f"Agent Name: {name}\nType: {agent_type}\nDescription: {description}\nCapabilities Offered: {cap_names_str}"
+        
+        description_embedding = []
+        try:
+            description_embedding = await self.llm_service.embed(agent_desc_for_embedding)
+        except Exception as e:
+            logger.error(f"Embedding generation failed for agent '{name}' description: {e}", exc_info=True)
+            description_embedding = [0.0] * DEFAULT_AGENT_EMBEDDING_DIM 
 
-
-        # Ensure metadata is serializable
-        clean_metadata = {}
-        if metadata:
-            for k, v in metadata.items():
+        processed_capabilities = []
+        for cap_data in capabilities:
+            cap_id = cap_data.get("id", f"{cap_data.get('name', 'capability').lower().replace(' ', '_')}_{uuid.uuid4().hex[:4]}")
+            cap = {
+                "id": cap_id,
+                "name": cap_data.get("name", cap_id),
+                "description": cap_data.get("description", f"Default description for {cap_id}"),
+                "confidence": cap_data.get("confidence", 0.8) 
+            }
+            if embed_capabilities and cap["description"]:
                 try:
-                    json.dumps({k: v}) # Test serializability
-                    clean_metadata[k] = v
-                except TypeError:
-                    logger.warning(f"Metadata key '{k}' with non-serializable value skipped for agent '{name}'")
+                    cap["description_embedding"] = await self.llm_service.embed(cap["description"])
+                except Exception as e:
+                    logger.error(f"Embedding generation failed for capability '{cap['name']}': {e}", exc_info=True)
+                    cap["description_embedding"] = [0.0] * DEFAULT_AGENT_EMBEDDING_DIM 
+            processed_capabilities.append(cap)
+        
+        current_time = datetime.now(timezone.utc)
+        existing_doc = await self.registry_collection.find_one({"id": agent_id}, {"registered_at": 1})
+        registered_at = existing_doc.get("registered_at", current_time) if existing_doc else current_time
 
-        # Create or update the agent record (serializable)
-        agent_record = {
-            "id": agent_id,
-            "name": name,
-            "description": description,
-            "type": agent_type,
-            "capabilities": capabilities,
-            "metadata": clean_metadata,
-            "status": "active", # Default to active on register/update
-            "registered_at": self.agents.get(agent_id, {}).get("registered_at", datetime.utcnow().isoformat()),
-            "last_updated": datetime.utcnow().isoformat(),
-            "last_seen": datetime.utcnow().isoformat() # Update last seen on registration
+        agent_doc = {
+            "id": agent_id, "name": name, "description": description, "type": agent_type,
+            "capabilities": processed_capabilities, 
+            "metadata": metadata or {}, "status": "active",
+            "description_embedding": description_embedding, 
+            "registered_at": registered_at, 
+            "last_updated": current_time,   
+            "last_seen": current_time       
         }
+        try:
+            result = await self.registry_collection.replace_one({"id": agent_id}, agent_doc, upsert=True)
+            op_type = "Registered new" if result.upserted_id else "Updated" if result.modified_count > 0 else "Refreshed (no change)"
+            
+            cached_doc = agent_doc.copy()
+            cached_doc.pop("description_embedding", None)
+            for cap_item in cached_doc.get("capabilities", []):
+                cap_item.pop("description_embedding", None)
+            self.agents[agent_id] = cached_doc
 
-        # Store the serializable record
-        self.agents[agent_id] = agent_record
-
-        # Store/Update the live instance
-        if agent_instance is not None:
-            self._agent_instances[agent_id] = agent_instance
-            logger.debug(f"Stored live instance for agent {agent_id} ({name})")
-        elif agent_id in self._agent_instances:
-            # If no instance provided on update, keep the existing one? Or remove?
-            # Let's keep it for now, assuming it might be managed elsewhere.
-             logger.debug(f"Agent {agent_id} updated without new instance, keeping existing.")
-
-
-        await self._index_agent(agent_record)
-        await self._save_registry()
-
-        # Log system event
-        await self._log_agent_execution(
-             bus_type='system',
-             agent_id=agent_id,
-             task={'operation': 'register', 'details': {'name': name, 'type': agent_type}},
-             result={'status': 'success'}
-        )
-
-        logger.info(f"{op_type} agent: {name} ({agent_id}) with {len(capabilities)} capabilities.")
-        return agent_id
-
+            if agent_instance:
+                self._agent_instances[agent_id] = agent_instance 
+            
+            await self._log_agent_execution('system', agent_id, {'operation': 'register', 'details': {'name': name, 'type': agent_type, 'capabilities_count': len(capabilities)}}, {'status': 'success', 'type': op_type})
+            logger.info(f"{op_type} agent: {name} ({agent_id}) in MongoDB registry.")
+            return agent_id
+        except Exception as e:
+            logger.error(f"MongoDB registration error for agent {name}: {e}", exc_info=True)
+            raise 
 
     async def discover_agents(
-        self,
-        task_description: Optional[str] = None,
-        capability_id: Optional[str] = None,
-        min_confidence: float = 0.6,
-        agent_type: Optional[str] = None,
-        limit: int = 5
+        self, task_description: Optional[str] = None, capability_id: Optional[str] = None,
+        min_confidence: float = 0.6, agent_type: Optional[str] = None, limit: int = 5
     ) -> List[Dict[str, Any]]:
-        """
-        Discover agents suitable for a task or capability (System Bus Operation).
-
-        Args:
-            task_description: Natural language description of the task (for semantic search)
-            capability_id: Specific capability ID to filter by (exact match)
-            min_confidence: Minimum match confidence threshold (for semantic search)
-            agent_type: Filter by agent type
-            limit: Max number of agents to return
-
-        Returns:
-            List of matching agents with details (including similarity if semantic search used)
-        """
+        if self.registry_collection is None:
+            logger.error("Registry collection unavailable. Cannot discover agents.")
+            return []
         if not task_description and not capability_id:
-             raise ValueError("Either task_description or capability_id must be provided for discovery.")
+             raise ValueError("Either task_description or capability_id must be provided for agent discovery.")
 
-        matches = []
-        # --- Semantic Search Path ---
-        if task_description:
-            logger.debug(f"Discovering agents via semantic search for: '{task_description[:50]}...'")
-            query_embedding = await self.llm_service.embed(task_description)
+        matches: List[Dict[str, Any]] = []
+        projection = {"_id": 0, "description_embedding": 0}
+        # projection["capabilities.description_embedding"] = 0 # Uncomment if you add this field and want to exclude
 
-            # Build ChromaDB filter
-            where_filter = {"status": {"$eq": "active"}} # Always filter active
-            if agent_type:
-                where_filter["type"] = {"$eq": agent_type}
-            # Note: Capability filtering is harder with ChromaDB metadata limitations on lists.
-            # We'll do post-filtering for capability_id if provided along with task_description.
+        if capability_id:
+            logger.debug(f"Discovering agents by capability_id '{capability_id}' via metadata query.")
+            query_filter: Dict[str, Any] = {"status": "active", "capabilities.id": capability_id}
+            if agent_type: query_filter["type"] = agent_type
+            
+            cursor = self.registry_collection.find(query_filter, projection).limit(limit * 2)
+            async for agent_doc in cursor:
+                cap_conf = 0.0
+                for cap in agent_doc.get("capabilities", []):
+                    if cap.get("id") == capability_id:
+                        cap_conf = cap.get("confidence", 0.0)
+                        break
+                if cap_conf >= min_confidence:
+                    is_healthy = not self._check_circuit_breaker(agent_doc["id"])
+                    if is_healthy:
+                        matches.append({**agent_doc, "similarity_score": cap_conf, "is_healthy": True})
+            matches.sort(key=lambda x: x.get("similarity_score", 0.0), reverse=True)
 
+        elif task_description:
+            if not self.llm_service:
+                logger.error("LLMService not available for embedding task description. Cannot perform vector search for agents.")
+                return []
+
+            logger.debug(f"Discovering agents by task_description '{task_description[:50]}...' using vector search on 'description_embedding'.")
             try:
-                 results = self.agent_collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=limit * 2, # Get more results initially for filtering
-                    where=where_filter,
-                    include=["distances", "metadatas"]
-                 )
+                query_embedding = await self.llm_service.embed(task_description)
+                
+                vs_op_params = {
+                    "path": "description_embedding", 
+                    "queryVector": query_embedding,
+                    "numCandidates": limit * 15, 
+                    "limit": limit * 3           
+                }
+                compound_filters = []
+                if agent_type: compound_filters.append({"text": {"path": "type", "query": agent_type}})
+                compound_filters.append({"text": {"path": "status", "query": "active"}}) 
 
-                 if not results or not results["ids"] or not results["ids"][0]:
-                      logger.info("Semantic discovery returned no results.")
-                      return []
-
-                 for i, result_id in enumerate(results["ids"][0]):
-                    distance = results["distances"][0][i]
-                    similarity = 1.0 - distance
-
-                    if similarity >= min_confidence and result_id in self.agents:
-                        agent = self.agents[result_id]
-
-                        # Post-filter by capability_id if provided
-                        if capability_id:
-                            agent_caps = {c["id"] for c in agent["capabilities"]}
-                            if capability_id not in agent_caps:
-                                continue # Skip if required capability not present
-
-                        # Check agent health
-                        is_healthy = not self._check_circuit_breaker(result_id)
-
-                        matches.append({
-                            "id": agent["id"],
-                            "name": agent["name"],
-                            "description": agent.get("description", ""),
-                            "type": agent.get("type", ""),
-                            "capabilities": agent.get("capabilities", []),
-                            "similarity": similarity, # Include similarity from semantic search
-                            "is_healthy": is_healthy
-                        })
-
+                search_stage_query = {
+                    "index": "vector_index_agent_description", # This name must match your Atlas Search Index name
+                    "compound": {
+                        "must": [{"vectorSearch": vs_op_params}]
+                    }
+                }
+                if compound_filters:
+                    search_stage_query["compound"]["filter"] = compound_filters
+                
+                pipeline = [
+                    {"$search": search_stage_query},
+                    {"$addFields": {"similarity_score": {"$meta": "searchScore"}}}, 
+                    {"$project": projection} 
+                ]
+                
+                logger.debug(f"AgentBus discover_agents (vector search) pipeline: {json.dumps(pipeline)}")
+                cursor = self.registry_collection.aggregate(pipeline)
+                async for agent_doc in cursor:
+                    if agent_doc.get("similarity_score", 0.0) >= min_confidence:
+                        is_healthy = not self._check_circuit_breaker(agent_doc["id"])
+                        if is_healthy:
+                            matches.append({**agent_doc, "is_healthy": True}) 
+                matches.sort(key=lambda x: x.get("similarity_score", 0.0), reverse=True)
+            
             except Exception as e:
-                 logger.error(f"Error during semantic discovery: {e}", exc_info=True)
-                 # Potentially fall back to direct filtering if Chroma fails? For now, return empty.
-                 return []
-
-        # --- Direct Capability Filter Path ---
-        elif capability_id:
-            logger.debug(f"Discovering agents directly for capability: '{capability_id}'")
-            for agent_id, agent in self.agents.items():
-                 if agent["status"] != "active":
-                      continue
-                 if agent_type and agent["type"] != agent_type:
-                      continue
-
-                 # Check if agent provides the capability
-                 provides_capability = False
-                 for cap in agent["capabilities"]:
-                      if cap["id"] == capability_id:
-                           provides_capability = True
-                           break
-                 if not provides_capability:
-                      continue
-
-                 is_healthy = not self._check_circuit_breaker(agent_id)
-                 matches.append({
-                    "id": agent["id"],
-                    "name": agent["name"],
-                    "description": agent.get("description", ""),
-                    "type": agent.get("type", ""),
-                    "capabilities": agent.get("capabilities", []),
-                    "similarity": 1.0, # Exact capability match implies high similarity conceptually
-                    "is_healthy": is_healthy
-                 })
-
-        # Sort final matches (primarily relevant for semantic search) and limit
-        return sorted(matches, key=lambda x: x.get("similarity", 0.0), reverse=True)[:limit]
+                logger.error(f"Vector search for agents failed: {e}. No fallback implemented for this path.", exc_info=True)
+                if "index not found" in str(e).lower() or "Unknown $vectorSearch index" in str(e).lower() or "unknown search index" in str(e).lower():
+                    logger.error(f"CRITICAL: Atlas Vector Search index 'vector_index_agent_description' likely missing or misconfigured on collection '{self.registry_collection_name}'.")
+            
+        return matches[:limit]
 
 
     async def request_capability(
-        self,
-        capability: str,
-        content: Dict[str, Any],
-        min_confidence: float = 0.6,
-        specific_agent_id: Optional[str] = None,
-        timeout: float = 60.0
+        self, capability: str, content: Dict[str, Any], min_confidence: float = 0.6,
+        specific_agent_id: Optional[str] = None, timeout: float = 60.0
     ) -> Dict[str, Any]:
-        """
-        Request a capability from a suitable agent (Data Bus Operation).
+        if self.registry_collection is None:
+            logger.error("Registry collection unavailable. Cannot request capability.")
+            raise RuntimeError("Agent registry (MongoDB) is not available for capability request.")
 
-        Finds an agent providing the capability and executes the task.
-
-        Args:
-            capability: The ID of the capability being requested.
-            content: The input data/payload for the capability request.
-            min_confidence: Minimum confidence if discovery is needed.
-            specific_agent_id: Optional ID of a specific agent to target.
-            timeout: Execution timeout in seconds.
-
-        Returns:
-            Dictionary with execution results.
-
-        Raises:
-            ValueError: If no suitable agent is found.
-            RuntimeError: If execution fails or agent is unhealthy.
-        """
         logger.info(f"Received data bus request for capability '{capability}'")
         start_time = time.time()
-        agent_to_use = None
+        agent_to_use_doc = None
         agent_id_to_use = None
+        task_details = {"capability": capability, "content_summary": str(content)[:200]} 
 
-        task_details = {"capability": capability, **content} # Combine for logging
-
-        # --- Find the Agent ---
         if specific_agent_id:
-            if specific_agent_id in self.agents:
-                if self.agents[specific_agent_id]["status"] == "active":
-                    agent_to_use = self.agents[specific_agent_id]
-                    agent_id_to_use = specific_agent_id
-                    logger.debug(f"Targeting specific agent: {agent_id_to_use}")
-                else:
-                     raise ValueError(f"Targeted agent {specific_agent_id} is not active.")
-            else:
-                raise ValueError(f"Targeted agent {specific_agent_id} not found in registry.")
-        else:
-            # Discover agents based on capability ID
-            suitable_agents = await self.discover_agents(
-                capability_id=capability,
-                min_confidence=min_confidence # Confidence applies if discovery uses semantic search fallback
-            )
-            # Filter for healthy agents
-            healthy_agents = [a for a in suitable_agents if a["is_healthy"]]
-
-            if not healthy_agents:
-                # Log discovery failure details
-                await self._log_agent_execution(
-                    bus_type='data',
-                    agent_id='N/A',
-                    task=task_details,
-                    error=f"No healthy agent found for capability '{capability}'",
-                    duration=time.time() - start_time
+            agent_to_use_doc = self.agents.get(specific_agent_id) 
+            if not (agent_to_use_doc and agent_to_use_doc.get("status") == "active"):
+                db_doc = await self.registry_collection.find_one(
+                    {"id": specific_agent_id, "status":"active"},
+                    {"_id": 0, "description_embedding": 0} 
                 )
-                unhealthy_count = len(suitable_agents) - len(healthy_agents)
-                raise ValueError(f"No available agent found for capability '{capability}'. "
-                                 f"(Found {len(suitable_agents)}, {unhealthy_count} unhealthy).")
-
-            # Select the best healthy agent (highest confidence/similarity)
-            # Confidence score might not be directly available if only capability_id was used
-            # For now, just pick the first healthy one found by discovery (already sorted)
-            best_agent_info = healthy_agents[0]
+                if db_doc:
+                    agent_to_use_doc = db_doc
+                    self.agents[specific_agent_id] = db_doc 
+                else:
+                    error_msg = f"Targeted agent {specific_agent_id} not found or not active in registry."
+                    await self._log_agent_execution('data', specific_agent_id or 'N/A', task_details, error=error_msg, duration=time.time()-start_time)
+                    raise ValueError(error_msg)
+            agent_id_to_use = specific_agent_id
+            logger.debug(f"Targeting specific agent: {agent_id_to_use} ({agent_to_use_doc.get('name')})")
+        else:
+            suitable_agents_info = await self.discover_agents(capability_id=capability, min_confidence=min_confidence)
+            if not suitable_agents_info:
+                error_msg = f"No healthy agent found for capability '{capability}' with confidence >= {min_confidence}."
+                await self._log_agent_execution('data', 'N/A', task_details, error=error_msg, duration=time.time()-start_time)
+                raise ValueError(error_msg)
+            
+            best_agent_info = suitable_agents_info[0]
             agent_id_to_use = best_agent_info["id"]
-            agent_to_use = self.agents[agent_id_to_use]
-            logger.debug(f"Discovered agent {agent_id_to_use} for capability '{capability}'.")
+            agent_to_use_doc = best_agent_info
+            logger.debug(f"Discovered agent {agent_id_to_use} ({agent_to_use_doc.get('name')}) for capability '{capability}' with score {best_agent_info.get('similarity_score', 0.0):.2f}.")
 
 
-        # --- Execute the Task ---
-        if not agent_to_use: # Should not happen if logic above is correct
-             raise RuntimeError("Internal error: Agent selected but not found.")
+        if not agent_to_use_doc: 
+            critical_error_msg = f"Internal error: Agent ID '{agent_id_to_use}' selected but document could not be retrieved/found."
+            await self._log_agent_execution('data', agent_id_to_use or 'N/A', task_details, error=critical_error_msg, duration=time.time()-start_time)
+            raise RuntimeError(critical_error_msg)
 
         if self._check_circuit_breaker(agent_id_to_use):
-             error_msg = f"Agent {agent_id_to_use} ({agent_to_use['name']}) is temporarily unavailable (circuit breaker tripped)."
+             error_msg = f"Agent {agent_id_to_use} ({agent_to_use_doc.get('name')}) is temporarily unavailable (circuit breaker tripped)."
              await self._log_agent_execution('data', agent_id_to_use, task_details, error=error_msg, duration=time.time()-start_time)
              raise RuntimeError(error_msg)
 
         try:
             result_data = await asyncio.wait_for(
-                self._execute_agent_task(agent_to_use, task=content), # Pass content as task
-                timeout=timeout
+                self._execute_agent_task(agent_to_use_doc, task=content), timeout=timeout
             )
+            await self._reset_circuit_breaker(agent_id_to_use) 
+            
+            current_time = datetime.now(timezone.utc)
+            await self.registry_collection.update_one({"id": agent_id_to_use}, {"$set": {"last_seen": current_time}})
+            if agent_id_to_use in self.agents:
+                self.agents[agent_id_to_use]["last_seen"] = current_time.isoformat()
 
-            # Record successful execution
-            self._reset_circuit_breaker(agent_id_to_use)
-            self.agents[agent_id_to_use]["last_seen"] = datetime.utcnow().isoformat()
             duration = time.time() - start_time
-
-            # Prepare response, ensuring result_data is included
             response = {
                 "status": "success",
                 "agent_id": agent_id_to_use,
-                "agent_name": agent_to_use["name"],
+                "agent_name": agent_to_use_doc.get("name"),
                 "capability_executed": capability,
-                "content": result_data, # Include the actual result here
-                "metadata": {
-                    "processing_time_ms": int(duration * 1000)
-                }
+                "content": result_data, 
+                "metadata": {"processing_time_ms": int(duration * 1000)}
             }
-
-            await self._log_agent_execution(
-                 bus_type='data',
-                 agent_id=agent_id_to_use,
-                 task=task_details,
-                 result=response, # Log the structured response
-                 duration=duration
-            )
-            logger.info(f"Capability '{capability}' executed successfully by {agent_id_to_use}.")
+            await self._log_agent_execution('data', agent_id_to_use, task_details, result={"content_summary": str(result_data)[:200]}, duration=duration)
+            logger.info(f"Capability '{capability}' executed by {agent_id_to_use} successfully in {duration:.2f}s.")
             return response
-
         except asyncio.TimeoutError:
-            self._record_failure(agent_id_to_use)
-            duration = time.time() - start_time
-            error_msg = f"Agent {agent_id_to_use} timed out executing capability '{capability}' after {timeout}s."
-            await self._log_agent_execution('data', agent_id_to_use, task_details, error=error_msg, duration=duration)
+            await self._record_failure(agent_id_to_use)
+            error_msg = f"Agent {agent_id_to_use} ({agent_to_use_doc.get('name')}) timed out for capability '{capability}' after {timeout}s."
+            await self._log_agent_execution('data', agent_id_to_use, task_details, error=error_msg, duration=timeout)
             raise RuntimeError(error_msg)
         except Exception as e:
-            self._record_failure(agent_id_to_use)
-            duration = time.time() - start_time
-            error_msg = f"Agent {agent_id_to_use} failed executing capability '{capability}': {str(e)}"
-            await self._log_agent_execution('data', agent_id_to_use, task_details, error=error_msg, duration=duration)
-            logger.error(f"Error during capability execution: {e}", exc_info=True)
-            raise RuntimeError(error_msg)
+            await self._record_failure(agent_id_to_use)
+            error_msg = f"Agent {agent_id_to_use} ({agent_to_use_doc.get('name')}) failed capability '{capability}': {str(e)}"
+            await self._log_agent_execution('data', agent_id_to_use, task_details, error=error_msg, duration=time.time()-start_time)
+            logger.error(f"Capability execution error for agent {agent_id_to_use} on capability '{capability}': {e}", exc_info=True)
+            raise RuntimeError(error_msg) 
 
 
     async def execute_with_agent(
-        self,
-        agent_id: str,
-        task: Dict[str, Any],
-        timeout: float = 30.0
+        self, agent_id: str, task: Dict[str, Any], timeout: float = 30.0
     ) -> Dict[str, Any]:
-        """
-        Execute a task *directly* using a specific agent (System Bus/Debug Operation).
-        Use request_capability for standard inter-agent communication.
+        if self.registry_collection is None:
+            logger.error("Registry collection unavailable. Cannot execute agent.")
+            raise RuntimeError("Agent registry (MongoDB) is not available for agent execution.")
 
-        Args:
-            agent_id: ID of the agent to use.
-            task: Dictionary containing task details and input data.
-            timeout: Maximum execution time in seconds.
-
-        Returns:
-            Dictionary with execution results and metadata.
-
-        Raises:
-            ValueError: If agent not found.
-            RuntimeError: If execution fails or agent is unhealthy.
-        """
         logger.info(f"Received direct execution request for agent {agent_id}")
         start_time = time.time()
-        if agent_id not in self.agents:
-            raise ValueError(f"Agent not found: {agent_id}")
-
-        agent = self.agents[agent_id]
-        if agent["status"] != "active":
-             raise ValueError(f"Agent {agent_id} is not active.")
+        task_summary_for_log = {"task_summary": str(task)[:200]}
+        
+        agent_doc = self.agents.get(agent_id) 
+        if not agent_doc:
+            agent_doc_db = await self.registry_collection.find_one({"id": agent_id}, {"_id":0, "description_embedding":0})
+            if agent_doc_db:
+                self.agents[agent_id] = agent_doc_db 
+                agent_doc = agent_doc_db
+        
+        if not agent_doc:
+            raise ValueError(f"Agent with ID '{agent_id}' not found in registry.")
+        if agent_doc.get("status") != "active":
+            raise ValueError(f"Agent {agent_id} ({agent_doc.get('name')}) is not active.")
 
         if self._check_circuit_breaker(agent_id):
-            error_msg = f"Agent {agent_id} is temporarily unavailable (circuit breaker tripped)."
-            # Log this as a system-level failure attempt
-            await self._log_agent_execution('system', agent_id, task, error=error_msg, duration=time.time()-start_time)
+            error_msg = f"Agent {agent_id} ({agent_doc.get('name')}) temporarily unavailable (circuit breaker)."
+            await self._log_agent_execution('system', agent_id, task_summary_for_log, error=error_msg, duration=time.time()-start_time)
             raise RuntimeError(error_msg)
-
+        
         try:
-            result_data = await asyncio.wait_for(
-                self._execute_agent_task(agent, task),
-                timeout=timeout
-            )
-
-            # Record successful execution
-            self._reset_circuit_breaker(agent_id)
-            agent["last_seen"] = datetime.utcnow().isoformat()
+            result_data = await asyncio.wait_for(self._execute_agent_task(agent_doc, task), timeout=timeout)
+            await self._reset_circuit_breaker(agent_id) 
+            
+            current_time = datetime.now(timezone.utc)
+            await self.registry_collection.update_one({"id": agent_id}, {"$set": {"last_seen": current_time}})
+            if agent_id in self.agents:
+                self.agents[agent_id]["last_seen"] = current_time.isoformat()
+            
             duration = time.time() - start_time
-
             response = {
-                "result": result_data, # Main result data
+                "result": result_data,
                 "metadata": {
                     "agent_id": agent_id,
-                    "agent_name": agent["name"],
-                    "processing_time_ms": int(duration * 1000),
+                    "agent_name": agent_doc.get("name"),
+                    "processing_time_ms": int(duration*1000),
                     "success": True
                 }
             }
-
-            # Log as a system-level execution
-            await self._log_agent_execution(
-                bus_type='system', # Log direct execution as system bus activity
-                agent_id=agent_id,
-                task=task,
-                result=response,
-                duration=duration
-            )
-
+            await self._log_agent_execution('system', agent_id, task_summary_for_log, result={"result_summary": str(result_data)[:200]}, duration=duration)
+            logger.info(f"Direct execution for agent {agent_id} completed successfully in {duration:.2f}s.")
             return response
-
         except asyncio.TimeoutError:
-             self._record_failure(agent_id)
-             duration = time.time() - start_time
-             error_msg = f"Agent {agent_id} timed out during direct execution after {timeout}s."
-             await self._log_agent_execution('system', agent_id, task, error=error_msg, duration=duration)
-             raise RuntimeError(error_msg)
+            await self._record_failure(agent_id)
+            error_msg = f"Agent {agent_id} ({agent_doc.get('name')}) timed out (direct execution) after {timeout}s."
+            await self._log_agent_execution('system', agent_id, task_summary_for_log, error=error_msg, duration=timeout)
+            raise RuntimeError(error_msg)
         except Exception as e:
-            self._record_failure(agent_id)
-            duration = time.time() - start_time
-            error_msg = f"Agent {agent_id} failed during direct execution: {str(e)}"
-            await self._log_agent_execution('system', agent_id, task, error=error_msg, duration=duration)
-            logger.error(f"Error during direct agent execution: {e}", exc_info=True)
+            await self._record_failure(agent_id)
+            error_msg = f"Agent {agent_id} ({agent_doc.get('name')}) failed (direct execution): {str(e)}"
+            await self._log_agent_execution('system', agent_id, task_summary_for_log, error=error_msg, duration=time.time()-start_time)
+            logger.error(f"Direct agent execution error for agent {agent_id}: {e}", exc_info=True)
             raise RuntimeError(error_msg)
 
 
-    async def _execute_agent_task(
-        self,
-        agent_record: Dict[str, Any],
-        task: Dict[str, Any]
-    ) -> Any:
-        """
-        Internal helper to execute a task using the specified agent's instance.
-        This can be called by both data bus (request_capability) and system bus (execute_with_agent).
-
-        Args:
-             agent_record: The registry record of the agent.
-             task: The task payload (e.g., content from request_capability or direct task).
-
-        Returns:
-             The result from the agent's execution.
-
-        Raises:
-             RuntimeError: If no execution method is available or execution fails.
-        """
-        agent_id = agent_record["id"]
+    async def _execute_agent_task(self, agent_record_doc: Dict[str, Any], task: Dict[str, Any]) -> Any:
+        """Internal helper to execute a task on an agent instance."""
+        agent_id = agent_record_doc["id"]
         agent_instance = self._agent_instances.get(agent_id)
 
         if not agent_instance:
-            # Try to dynamically create instance if not already loaded
-            logger.warning(f"Live instance for agent {agent_id} not found, attempting dynamic creation...")
-            if self.container and self.container.has('agent_factory'):
-                 agent_factory = self.container.get('agent_factory')
-                 try:
-                      if agent_record["record_type"] == "AGENT":
-                           agent_instance = await agent_factory.create_agent(agent_record)
-                      elif agent_record["record_type"] == "TOOL" and self.container.has('tool_factory'):
-                           tool_factory = self.container.get('tool_factory')
-                           agent_instance = await tool_factory.create_tool(agent_record) # Tools are also 'agents' on the bus
+            logger.warning(f"Live instance for agent {agent_id} ({agent_record_doc.get('name')}) not found in cache, attempting dynamic creation...")
+            if self.container:
+                agent_factory = self.container.get('agent_factory', None)
+                tool_factory = self.container.get('tool_factory', None) 
+                created = False
+                
+                if agent_factory and agent_record_doc.get("record_type") == "AGENT": 
+                    try:
+                        agent_instance = await agent_factory.create_agent(agent_record_doc)
+                        created = True
+                    except Exception as e:
+                        logger.error(f"Dynamic AGENT creation failed for {agent_id}: {e}", exc_info=True)
+                        raise RuntimeError(f"Failed to dynamically create AGENT instance for {agent_id}: {e}") from e
+                elif tool_factory and agent_record_doc.get("record_type") == "TOOL": 
+                    try:
+                        agent_instance = await tool_factory.create_tool(agent_record_doc) 
+                        created = True
+                    except Exception as e:
+                        logger.error(f"Dynamic TOOL creation failed for {agent_id}: {e}", exc_info=True)
+                        raise RuntimeError(f"Failed to dynamically create TOOL instance for {agent_id}: {e}") from e
+                
+                if created and agent_instance:
+                    self._agent_instances[agent_id] = agent_instance
+                    logger.info(f"Dynamically created and cached live instance for {agent_id} (type: {agent_record_doc.get('record_type')})")
+                elif not agent_factory and not tool_factory:
+                     raise RuntimeError(f"No agent_factory or tool_factory available in container to create instance for {agent_id}")
+                elif (agent_record_doc.get("record_type") == "AGENT" and not agent_factory) or \
+                     (agent_record_doc.get("record_type") == "TOOL" and not tool_factory):
+                     raise RuntimeError(f"No suitable factory found for component {agent_id} of type {agent_record_doc.get('record_type')}")
 
-                      if agent_instance:
-                           self._agent_instances[agent_id] = agent_instance # Store for future use
-                           logger.info(f"Dynamically created and stored instance for {agent_id}")
-                      else:
-                           raise RuntimeError(f"Agent factory could not create instance for {agent_id}.")
+            else: 
+                raise RuntimeError(f"No live instance for agent {agent_id} and no DependencyContainer available for dynamic instantiation.")
 
-                 except Exception as e:
-                      logger.error(f"Dynamic instance creation failed for {agent_id}: {e}", exc_info=True)
-                      raise RuntimeError(f"Could not get or create live instance for agent {agent_id}.")
-            else:
-                 raise RuntimeError(f"No live instance found for agent {agent_id} and no AgentFactory available.")
-
-        # --- Execute based on instance type ---
-        # Check if it's an Evolving Agents/BeeAI style agent/tool with a run method
         if hasattr(agent_instance, 'run') and callable(agent_instance.run):
             try:
-                # Prepare input for the run method
-                # If task has 'text', use it as prompt, otherwise serialize task dict
-                input_prompt = task.get("text", json.dumps(task))
-                run_result = await agent_instance.run(input_prompt) # Assuming run takes a single prompt string
+                input_for_run = task.get("text", task) if isinstance(task, dict) else task
+                if not isinstance(input_for_run, (str, dict)): 
+                    input_for_run = str(input_for_run) 
 
-                # Extract meaningful result (adapt based on actual return type of run)
+                logger.debug(f"Executing .run() on instance for agent {agent_id} with input type {type(input_for_run)}")
+                run_result = await agent_instance.run(input_for_run) 
+                
                 if hasattr(run_result, 'result') and hasattr(run_result.result, 'text'):
-                     return run_result.result.text
-                elif hasattr(run_result, 'text'): # Simpler result object
-                     return run_result.text
+                    return run_result.result.text
+                elif hasattr(run_result, 'text'):
+                    return run_result.text
                 elif isinstance(run_result, str):
-                     return run_result
-                else:
-                     # Attempt to serialize if it's a complex object
-                     try: return json.loads(json.dumps(run_result)) # Convert complex objects if possible
-                     except: return str(run_result) # Fallback to string representation
-
+                    return run_result
+                try: return json.loads(json.dumps(run_result, default=str))
+                except: return str(run_result)
             except Exception as e:
-                logger.error(f"Execution failed for agent {agent_id} using run method: {e}", exc_info=True)
-                raise RuntimeError(f"Agent execution via run method failed: {str(e)}")
+                logger.error(f"Execution via .run() method failed for agent {agent_id}: {e}", exc_info=True)
+                raise RuntimeError(f"Agent's .run() method failed: {e}") from e
 
-        # Check for OpenAI Agent SDK style execution (requires provider)
-        elif agent_record.get("metadata", {}).get("framework") == "openai-agents":
-             if self.container and self.container.has('agent_factory'):
-                  agent_factory = self.container.get('agent_factory')
-                  provider = agent_factory.provider_registry.get_provider_for_framework("openai-agents")
-                  if provider:
-                       try:
-                            input_text = task.get("text", json.dumps(task))
-                            exec_result = await provider.execute_agent(agent_instance, input_text)
-                            if exec_result.get("status") == "success":
-                                 return exec_result.get("result")
-                            else:
-                                 raise RuntimeError(f"OpenAI Agent execution failed: {exec_result.get('message')}")
-                       except Exception as e:
-                            logger.error(f"Execution failed for OpenAI agent {agent_id}: {e}", exc_info=True)
-                            raise RuntimeError(f"OpenAI Agent execution failed: {str(e)}")
-                  else:
-                       raise RuntimeError(f"OpenAI provider not found for agent {agent_id}.")
-             else:
-                  raise RuntimeError(f"AgentFactory not available to execute OpenAI agent {agent_id}.")
+        elif agent_record_doc.get("metadata", {}).get("framework") == "openai-agents":
+            if self.container and self.container.has('agent_factory'):
+                agent_factory = self.container.get('agent_factory')
+                provider = agent_factory.provider_registry.get_provider_for_framework("openai-agents")
+                if provider:
+                    try:
+                        input_text = task.get("text", json.dumps(task) if isinstance(task, dict) else str(task))
+                        logger.debug(f"Executing OpenAI agent {agent_id} via provider with input_text.")
+                        exec_result = await provider.execute_agent(agent_instance, input_text) 
+                        if exec_result.get("status") == "success":
+                            return exec_result.get("result")
+                        else:
+                            raise RuntimeError(f"OpenAI Agent execution via provider failed: {exec_result.get('message', 'No message')}")
+                    except Exception as e:
+                        logger.error(f"Execution of OpenAI agent {agent_id} via provider failed: {e}", exc_info=True)
+                        raise RuntimeError(f"OpenAI agent execution failed: {e}") from e
+                else:
+                    raise RuntimeError(f"OpenAI Agents provider not found in registry for agent {agent_id}.")
+            else:
+                raise RuntimeError(f"AgentFactory not available in container for executing OpenAI agent {agent_id}.")
+        
+        raise RuntimeError(f"No recognized execution method for agent {agent_id} (type: {type(agent_instance)}, framework: {agent_record_doc.get('metadata', {}).get('framework')})")
 
-        # Fallback to System Agent if no other method works? (Risky - might lead to loops)
-        # Let's disable this for now to enforce explicit execution methods.
-        # if self.system_agent:
-        #     logger.warning(f"No standard execution method for agent {agent_id}, falling back to SystemAgent.")
-        #     prompt = self._create_agent_prompt(agent_record, task)
-        #     # Make sure the system_agent.run call returns something useful
-        #     sys_agent_result = await self.system_agent.run(prompt)
-        #     # Extract result from system agent's response (this might need specific logic)
-        #     if hasattr(sys_agent_result, 'result') and hasattr(sys_agent_result.result, 'text'):
-        #         return sys_agent_result.result.text
-        #     return str(sys_agent_result) # Fallback
-
-        raise RuntimeError(f"No execution method available for agent {agent_id} (type: {type(agent_instance)})")
-
-
-    def _create_agent_prompt(
-        self,
-        agent: Dict[str, Any],
-        task: Dict[str, Any]
-    ) -> str:
-        """Create execution prompt for fallback system agent execution."""
-        # This is less likely to be used now with direct instance execution
-        return (
-            f"Act as the agent '{agent['name']}' ({agent['type']}) described as: '{agent['description']}'.\n"
-            f"Capabilities: {', '.join(c['name'] for c in agent['capabilities'])}\n\n"
-            f"Perform the following task based on your capabilities:\n"
-            f"Task Details: {json.dumps(task, indent=2)}\n\n"
-            "Provide the result of performing this task."
-        )
-
-    # --- System Bus Helper Methods ---
 
     async def get_agent_status(self, agent_id: str) -> Dict[str, Any]:
-        """
-        Get detailed status of an agent (System Bus Operation).
-        """
-        if agent_id not in self.agents:
-            raise ValueError(f"Agent not found: {agent_id}")
+        if self.registry_collection is None:
+            logger.error("Registry collection unavailable. Cannot get agent status.")
+            raise RuntimeError("Agent registry (MongoDB) is not available for getting agent status.")
 
-        agent_data = self.agents[agent_id]
-        status = {
-            **agent_data,
-            "health_status": "unhealthy" if self._check_circuit_breaker(agent_id) else "healthy",
+        agent_data = self.agents.get(agent_id) 
+        if not agent_data:
+            agent_data_db = await self.registry_collection.find_one({"id": agent_id}, {"_id": 0, "description_embedding": 0})
+            if not agent_data_db:
+                raise ValueError(f"Agent with ID '{agent_id}' not found in registry.")
+            self.agents[agent_id] = agent_data_db 
+            agent_data = agent_data_db
+        
+        status_dict = {
+            **agent_data, 
+            "health_status": "healthy" if not self._check_circuit_breaker(agent_id) else "unhealthy (circuit breaker tripped)",
             "is_instance_loaded": agent_id in self._agent_instances
         }
-
+        
         if agent_id in self.circuit_breakers:
-            cb = self.circuit_breakers[agent_id]
-            status.update({
-                "failure_count": cb["failures"],
-                "last_failure_timestamp": cb["last_failure"],
-                "seconds_since_last_failure": time.time() - cb["last_failure"]
+            cb_info = self.circuit_breakers[agent_id]
+            status_dict.update({
+                "circuit_breaker_failures": cb_info.get("failures", 0),
+                "circuit_breaker_last_failure": datetime.fromtimestamp(cb_info.get("last_failure", 0)).isoformat() if cb_info.get("last_failure") else None
             })
         else:
-             status.update({
-                "failure_count": 0,
-                "last_failure_timestamp": None,
-             })
-
-
-        return status
+            status_dict.update({
+                "circuit_breaker_failures": 0,
+                "circuit_breaker_last_failure": None
+            })
+        return status_dict
 
     async def health_check(self) -> Dict[str, Any]:
-        """
-        Get system health status (System Bus Operation).
-        """
-        unhealthy_count = sum(1 for agent_id in self.agents if self._check_circuit_breaker(agent_id))
-        overall_status = "unhealthy" if unhealthy_count > 0 else "healthy"
+        db_ping_ok = False
+        db_name_str = "N/A"
+        if self.mongodb_client:
+            db_ping_ok = await self.mongodb_client.ping_server()
+            db_name_str = self.mongodb_client.db_name or "N/A (DB name not set)"
+        
+        total_agents_in_cache = len(self.agents)
+        active_agents_in_cache = sum(1 for a in self.agents.values() if a.get("status") == "active")
+        unhealthy_agents_count = sum(1 for agent_id in self.agents if self._check_circuit_breaker(agent_id))
+        
+        overall_status = "healthy"
+        if not db_ping_ok: overall_status = "degraded (DB ping failed)"
+        elif unhealthy_agents_count > 0 : overall_status = f"degraded ({unhealthy_agents_count} agents in circuit breaker)"
+
 
         return {
             "status": overall_status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "mongodb_connection": "ok" if db_ping_ok else "failed_ping",
             "stats": {
-                "total_agents": len(self.agents),
-                "active_agents": sum(1 for a in self.agents.values() if a["status"] == "active"),
-                "loaded_instances": len(self._agent_instances),
-                "unhealthy_agents": unhealthy_count,
+                "total_agents_in_registry_cache": total_agents_in_cache,
+                "active_agents_in_registry_cache": active_agents_in_cache,
+                "loaded_live_instances": len(self._agent_instances),
+                "agents_in_circuit_breaker": unhealthy_agents_count,
             },
-            "storage": {
-                "registry_path": self.registry_path,
-                "chromadb_path": str(Path(self.chroma_client._path).resolve()), # Use _path attribute
-                "log_path": self.log_path
+            "storage_config": {
+                "registry_collection": self.registry_collection_name, 
+                "logs_collection": self.logs_collection_name,       
+                "mongodb_database": db_name_str,
+                "circuit_breaker_file": self.circuit_breaker_path
             },
-            "dependencies": { # Basic check for core dependencies
-                 "llm_service": "available" if self.llm_service else "missing",
-                 "smart_library": "available" if self.smart_library else "missing",
-                 "system_agent": "available" if self.system_agent else "not_set_or_missing",
-                 "agent_factory": "available" if self.container and self.container.has('agent_factory') else "missing_or_not_in_container"
+            "dependencies": {
+                "llm_service": "ok" if self.llm_service else "N/A",
+                "smart_library": "ok" if self.smart_library else "N/A",
+                "system_agent": "ok" if self.system_agent else "N/A", 
+                "agent_factory": "ok" if self.container and self.container.has('agent_factory') else "N/A",
+                "tool_factory": "ok" if self.container and self.container.has('tool_factory') else "N/A"
             }
         }
 
-    async def clear_logs(self) -> None:
-        """Clear all execution logs (System Bus Operation)."""
+    async def clear_logs(self) -> Dict[str, Any]:
+        if self.logs_collection is None: 
+            msg = "Logs collection not available. Cannot clear logs."
+            logger.warning(msg)
+            return {"status": "skipped", "message": msg, "deleted_count": 0}
         try:
-            if Path(self.log_path).exists():
-                Path(self.log_path).unlink()
-                logger.info(f"Cleared all execution logs from {self.log_path}")
+            result = await self.logs_collection.delete_many({})
+            deleted_count = result.deleted_count
+            logger.info(f"Cleared {deleted_count} execution logs from MongoDB '{self.logs_collection_name}'.")
+            return {"status": "success", "message": f"Cleared {deleted_count} logs.", "deleted_count": deleted_count}
         except Exception as e:
-            logger.error(f"Failed to clear logs: {str(e)}")
+            logger.error(f"Failed to clear logs from MongoDB: {e}", exc_info=True)
+            return {"status": "error", "message": f"Failed to clear logs: {e}", "deleted_count": 0}
+
 
     async def list_all_agents(self, agent_type: Optional[str] = None) -> List[Dict[str, Any]]:
-         """List all registered agents, optionally filtered by type (System Bus Operation)."""
+         if not self.agents and self.registry_collection is not None:
+             await self._load_registry_from_db()
+
          agents_list = list(self.agents.values())
          if agent_type:
-              agents_list = [a for a in agents_list if a.get("type") == agent_type]
-         # Return essential info, not the full record necessarily
-         return [
-              {"id": a["id"], "name": a["name"], "type": a["type"], "status": a["status"], "description": a.get("description", "")[:100]+"..."}
-              for a in agents_list
-         ]
+             agents_list = [a for a in agents_list if a.get("type", "").lower() == agent_type.lower()]
+         
+         return [{
+             "id": a["id"],
+             "name": a.get("name", "Unnamed Agent"),
+             "type": a.get("type", "UNKNOWN"),
+             "status": a.get("status", "unknown"),
+             "description_snippet": (a.get("description","No description")[:70]+"...") if a.get("description") else "No description",
+             "capabilities_count": len(a.get("capabilities", []))
+         } for a in agents_list]
