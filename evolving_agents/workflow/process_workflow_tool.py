@@ -109,7 +109,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
 
     async def _ensure_intent_plan_indexes(self):
         """Ensure MongoDB indexes for the intent_plans collection."""
-        if self.intent_plans_collection:
+        if self.intent_plans_collection is not None: # <--- THIS IS THE CORRECTED LINE
             try:
                 # Using motor syntax for async index creation
                 await self.intent_plans_collection.create_index(
@@ -124,6 +124,9 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                 logger.info(f"Ensured indexes on '{self.intent_plans_collection_name}' collection.")
             except Exception as e:
                 logger.error(f"Error creating indexes for '{self.intent_plans_collection_name}': {e}", exc_info=True)
+        else:
+            logger.warning(f"Cannot ensure indexes on '{self.intent_plans_collection_name}' as collection is None.")
+
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(
@@ -218,7 +221,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                 intent_plan_obj = validated_output
                 intent_plan_dict = intent_plan_obj.to_dict()
 
-                if self.intent_plans_collection:
+                if self.intent_plans_collection is not None: # Correct check
                     try:
                         # Use replace_one with upsert: if plan_id_override was used and plan exists, it's updated.
                         # If it's a new UUID, it's inserted.
@@ -243,7 +246,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                             "intent_plan": intent_plan_dict
                         }
                 else: # MongoDB not available
-                    logger.warning("MongoDB client not available. IntentPlan was generated but not saved to database.")
+                    logger.warning("MongoDB client/collection not available. IntentPlan was generated but not saved to database.")
                     return_payload = {
                         "status": "intent_plan_created_no_db",
                         "message": "Intent plan created (MongoDB unavailable). Pass this full plan to review tool.",
@@ -338,6 +341,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
 
         intents_list: List[Intent] = []
         step_index_to_intent_id: Dict[int, str] = {} # Maps original step index to its generated Intent ID
+        current_time = datetime.now(timezone.utc) # For created_at timestamp
 
         for i, step_dict in enumerate(workflow_steps):
             intent_id = f"intent_{plan_id}_{i+1}_{uuid.uuid4().hex[:6]}" # More traceable Intent ID
@@ -355,42 +359,32 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             elif step_type_str == "RETURN": params_or_input_dict = {"value": step_dict.get("value")}
 
             # Resolve dependencies based on `output_var` usage
-            # This assumes that `_substitute_params_recursive` has already handled `{{params.var}}`
-            # and we are now looking for `{{step_output_var}}` type placeholders.
             depends_on_ids: List[str] = []
-            # Recursively search for variable placeholders in the params_or_input_dict
-            # This needs a robust way to find {{variable_name}} placeholders
-            
-            # Simple string scan for placeholders (can be improved with recursive dict/list traversal)
             params_str_for_scan = safe_json_dumps(params_or_input_dict)
-            # Regex for {{ variable_name }} allowing spaces
-            step_var_pattern = r'{{\s*([\w_]+)\s*}}' # Matches variables from previous steps output_var
+            step_var_pattern = r'{{\s*([\w_]+)\s*}}' 
             
             found_step_vars = set(re.findall(step_var_pattern, params_str_for_scan))
             
             for var_name in found_step_vars:
-                # Find which previous step (intent) defined this var_name as output_var
-                for prev_step_idx, prev_step_dict in enumerate(workflow_steps[:i]): # Only previous steps
+                for prev_step_idx, prev_step_dict in enumerate(workflow_steps[:i]): 
                     if prev_step_dict.get("output_var") == var_name:
                         if prev_step_idx in step_index_to_intent_id:
                             depends_on_ids.append(step_index_to_intent_id[prev_step_idx])
                             logger.debug(f"Intent '{intent_id}' depends on Intent '{step_index_to_intent_id[prev_step_idx]}' via output_var '{var_name}'.")
-                            break # Found the source of this variable
-                        else: # Should not happen if mapping is correct
+                            break 
+                        else: 
                             logger.warning(f"Could not find mapped Intent ID for previous step index {prev_step_idx} defining '{var_name}'.")
-
 
             intent_obj = Intent(
                 intent_id=intent_id,
                 step_type=step_type_str,
-                component_type=step_dict.get("item_type", "GENERIC_COMPONENT"), # Default if missing
+                component_type=step_dict.get("item_type", "GENERIC_COMPONENT"),
                 component_name=step_dict.get("name", "UnnamedComponent"),
-                action=step_dict.get("action", step_type_str.lower()), # Default action to step type
+                action=step_dict.get("action", step_type_str.lower()), 
                 params=params_or_input_dict,
                 justification=step_dict.get("description", f"Execute step {i+1} of type {step_type_str}"),
-                depends_on=sorted(list(set(depends_on_ids))), # Ensure unique and sorted
-                # output_var can be added to Intent dataclass if needed for execution tracking
-                status=IntentStatus.PENDING # Initial status
+                depends_on=sorted(list(set(depends_on_ids))),
+                status=IntentStatus.PENDING
             )
             intents_list.append(intent_obj)
 
@@ -401,6 +395,8 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             objective=objective,
             intents=intents_list,
             status=PlanStatus.PENDING_REVIEW,
+            # Add created_at here for indexing
+            created_at=current_time # type: ignore # Pydantic might complain if not in model, add if needed
             # review_timestamp, reviewer_comments, rejection_reason will be set by ApprovePlanTool
         )
 
@@ -416,7 +412,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
              raise ValueError("Workflow 'steps' must be a list.")
 
         validated_steps_list = []
-        current_objective = objective or "Objective not explicitly provided." # Ensure objective is a string
+        current_objective = objective or "Objective not explicitly provided." 
 
         for i, step in enumerate(steps):
             step_num = i + 1
@@ -445,7 +441,6 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                  logger.error(f"Validation Error in Step {step_num}: 'input' field is not a dictionary. Found type: {type(step['input'])}. Step content: {step}")
                  raise ValueError(f"Step {step_num} (EXECUTE): 'input' field MUST be a dictionary, but found type {type(step['input'])}.")
 
-            # Objective extraction (if intent_mode and objective is still default)
             if intent_mode and current_objective == "Objective not explicitly provided." and \
                step_type == "EXECUTE" and isinstance(step.get("input"), dict):
                 input_params = step["input"]
@@ -457,8 +452,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                             break
             validated_steps_list.append(step)
 
-        # Conditional Conversion to IntentPlan
-        if intent_mode: # No need to re-check global config here, already done in _run
+        if intent_mode:
             logger.info("Intent mode active, converting validated steps to IntentPlan object.")
             return self._convert_steps_to_intent_plan_obj(validated_steps_list, current_objective, workflow_name, plan_id_override)
         else:
