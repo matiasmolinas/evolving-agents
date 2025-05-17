@@ -384,9 +384,9 @@ class SmartAgentBus:
             cursor = self.registry_collection.find(query_filter, projection).limit(limit * 2)
             async for agent_doc in cursor:
                 cap_conf = 0.0
-                for cap in agent_doc.get("capabilities", []):
-                    if cap.get("id") == capability_id:
-                        cap_conf = cap.get("confidence", 0.0)
+                for cap_item in agent_doc.get("capabilities", []): # Renamed 'cap' to 'cap_item' to avoid conflict with outer scope
+                    if cap_item.get("id") == capability_id:
+                        cap_conf = cap_item.get("confidence", 0.0)
                         break
                 if cap_conf >= min_confidence:
                     is_healthy = not self._check_circuit_breaker(agent_doc["id"])
@@ -403,27 +403,32 @@ class SmartAgentBus:
             try:
                 query_embedding = await self.llm_service.embed(task_description)
                 
-                vs_op_params = {
-                    "path": "description_embedding", 
-                    "queryVector": query_embedding,
-                    "numCandidates": limit * 15, 
-                    "limit": limit * 3           
-                }
-                compound_filters = []
-                if agent_type: compound_filters.append({"text": {"path": "type", "query": agent_type}})
-                compound_filters.append({"text": {"path": "status", "query": "active"}}) 
-
-                search_stage_query = {
-                    "index": "vector_index_agent_description", # This name must match your Atlas Search Index name
-                    "compound": {
-                        "must": [{"vectorSearch": vs_op_params}]
+                vector_search_operator = {
+                    "vectorSearch": {
+                        "path": "description_embedding", 
+                        "queryVector": query_embedding,
+                        "numCandidates": limit * 15, 
+                        "limit": limit * 3           
                     }
                 }
-                if compound_filters:
-                    search_stage_query["compound"]["filter"] = compound_filters
+
+                compound_filter_clauses = []
+                if agent_type: compound_filter_clauses.append({"text": {"path": "type", "query": agent_type}})
+                compound_filter_clauses.append({"text": {"path": "status", "query": "active"}}) 
+
+                compound_query: Dict[str, Any] = {
+                    "must": [vector_search_operator] 
+                }
+                if compound_filter_clauses: 
+                    compound_query["filter"] = compound_filter_clauses
+                
+                search_stage_definition = {
+                    "index": "vector_index_agent_description", 
+                    "compound": compound_query
+                }
                 
                 pipeline = [
-                    {"$search": search_stage_query},
+                    {"$search": search_stage_definition},
                     {"$addFields": {"similarity_score": {"$meta": "searchScore"}}}, 
                     {"$project": projection} 
                 ]
@@ -439,8 +444,8 @@ class SmartAgentBus:
             
             except Exception as e:
                 logger.error(f"Vector search for agents failed: {e}. No fallback implemented for this path.", exc_info=True)
-                if "index not found" in str(e).lower() or "Unknown $vectorSearch index" in str(e).lower() or "unknown search index" in str(e).lower():
-                    logger.error(f"CRITICAL: Atlas Vector Search index 'vector_index_agent_description' likely missing or misconfigured on collection '{self.registry_collection_name}'.")
+                if "index not found" in str(e).lower() or "Unknown $vectorSearch index" in str(e).lower() or "unknown search index" in str(e).lower() or "Invalid $search" in str(e).lower():
+                    logger.error(f"CRITICAL: Atlas Vector Search index 'vector_index_agent_description' likely missing, misconfigured, or $search stage is malformed on collection '{self.registry_collection_name}'.")
             
         return matches[:limit]
 
