@@ -123,7 +123,7 @@ class SmartAgentBus:
 
             logger.info(f"Ensured standard indexes on '{self.registry_collection_name}'.")
             logger.info("Reminder: For vector search on agent descriptions (field 'description_embedding'), "
-                        "ensure 'vector_index_agent_description' Atlas Vector Search index is configured manually.")
+                        "ensure an Atlas Vector Search index (e.g., 'vector_index_agent_description') is configured manually on the 'description_embedding' field.")
         except Exception as e:
             logger.error(f"Error creating MongoDB indexes for {self.registry_collection_name}: {e}", exc_info=True)
         
@@ -373,18 +373,21 @@ class SmartAgentBus:
              raise ValueError("Either task_description or capability_id must be provided for agent discovery.")
 
         matches: List[Dict[str, Any]] = []
-        projection = {"_id": 0, "description_embedding": 0}
-        # projection["capabilities.description_embedding"] = 0 # Uncomment if you add this field and want to exclude
+        # Projection: Exclude embedding fields unless needed by caller (they are large)
+        # For discovery, we typically don't need the full embeddings in the response.
+        projection = {"_id": 0, "description_embedding": 0} 
+        # If capabilities also have embeddings and they are not needed:
+        # projection["capabilities.description_embedding"] = 0 
 
         if capability_id:
             logger.debug(f"Discovering agents by capability_id '{capability_id}' via metadata query.")
             query_filter: Dict[str, Any] = {"status": "active", "capabilities.id": capability_id}
             if agent_type: query_filter["type"] = agent_type
             
-            cursor = self.registry_collection.find(query_filter, projection).limit(limit * 2)
+            cursor = self.registry_collection.find(query_filter, projection).limit(limit * 2) # Fetch more to filter by health
             async for agent_doc in cursor:
                 cap_conf = 0.0
-                for cap_item in agent_doc.get("capabilities", []): # Renamed 'cap' to 'cap_item' to avoid conflict with outer scope
+                for cap_item in agent_doc.get("capabilities", []): 
                     if cap_item.get("id") == capability_id:
                         cap_conf = cap_item.get("confidence", 0.0)
                         break
@@ -403,51 +406,58 @@ class SmartAgentBus:
             try:
                 query_embedding = await self.llm_service.embed(task_description)
                 
-                vector_search_operator = {
-                    "vectorSearch": {
-                        "path": "description_embedding", 
-                        "queryVector": query_embedding,
-                        "numCandidates": limit * 15, 
-                        "limit": limit * 3           
-                    }
+                # Atlas Vector Search index name for agent descriptions
+                # Ensure this index exists on the 'description_embedding' field in the 'eat_agent_registry' collection.
+                atlas_vs_index_name = "vector_index_agent_description" 
+
+                vs_stage_definition: Dict[str, Any] = {
+                    "index": atlas_vs_index_name,
+                    "path": "description_embedding",
+                    "queryVector": query_embedding,
+                    "numCandidates": limit * 15, # Number of candidates for the KNN search
+                    "limit": limit * 3           # Number of documents to return from the $vectorSearch stage
                 }
 
-                compound_filter_clauses = []
-                if agent_type: compound_filter_clauses.append({"text": {"path": "type", "query": agent_type}})
-                compound_filter_clauses.append({"text": {"path": "status", "query": "active"}}) 
+                # MQL filters to be applied by $vectorSearch
+                mql_filter_conditions = []
+                if agent_type:
+                    mql_filter_conditions.append({"type": agent_type})
+                mql_filter_conditions.append({"status": "active"})
+                
+                if mql_filter_conditions:
+                    vs_stage_definition["filter"] = {"$and": mql_filter_conditions} if len(mql_filter_conditions) > 1 else mql_filter_conditions[0]
 
-                compound_query: Dict[str, Any] = {
-                    "must": [vector_search_operator] 
-                }
-                if compound_filter_clauses: 
-                    compound_query["filter"] = compound_filter_clauses
-                
-                search_stage_definition = {
-                    "index": "vector_index_agent_description", 
-                    "compound": compound_query
-                }
-                
                 pipeline = [
-                    {"$search": search_stage_definition},
-                    {"$addFields": {"similarity_score": {"$meta": "searchScore"}}}, 
-                    {"$project": projection} 
+                    {"$vectorSearch": vs_stage_definition},
+                    # Project the document fields and the search score
+                    {"$project": {**projection, "similarity_score": {"$meta": "vectorSearchScore"}}}
+                    # Sorting by similarity_score is implicitly handled by $vectorSearch
+                    # The final limit is applied after health checks
                 ]
                 
-                logger.debug(f"AgentBus discover_agents (vector search) pipeline: {json.dumps(pipeline)}")
+                logger.debug(f"SmartAgentBus discover_agents ($vectorSearch) pipeline: {json.dumps(pipeline)}")
                 cursor = self.registry_collection.aggregate(pipeline)
+                
                 async for agent_doc in cursor:
+                    # $vectorSearch score is typically 0-1, higher is better.
+                    # min_confidence can be directly compared.
                     if agent_doc.get("similarity_score", 0.0) >= min_confidence:
                         is_healthy = not self._check_circuit_breaker(agent_doc["id"])
                         if is_healthy:
                             matches.append({**agent_doc, "is_healthy": True}) 
-                matches.sort(key=lambda x: x.get("similarity_score", 0.0), reverse=True)
+                
+                # If $vectorSearch's limit was higher, sort again and limit here if needed,
+                # but it's generally better to let $vectorSearch do the primary limiting.
+                # matches.sort(key=lambda x: x.get("similarity_score", 0.0), reverse=True) # Already sorted
             
-            except Exception as e:
+            except pymongo.errors.OperationFailure as e:
                 logger.error(f"Vector search for agents failed: {e}. No fallback implemented for this path.", exc_info=True)
-                if "index not found" in str(e).lower() or "Unknown $vectorSearch index" in str(e).lower() or "unknown search index" in str(e).lower() or "Invalid $search" in str(e).lower():
-                    logger.error(f"CRITICAL: Atlas Vector Search index 'vector_index_agent_description' likely missing, misconfigured, or $search stage is malformed on collection '{self.registry_collection_name}'.")
-            
-        return matches[:limit]
+                if "index not found" in str(e).lower() or "Unknown $vectorSearch index" in str(e).lower() or "unknown search index" in str(e).lower() or "Invalid $vectorSearch" in str(e).lower():
+                    logger.error(f"CRITICAL: Atlas Vector Search index '{atlas_vs_index_name}' likely missing or misconfigured on collection '{self.registry_collection_name}'. Query: {vs_stage_definition}")
+            except Exception as e:
+                logger.error(f"Unexpected error during agent discovery with vector search: {e}", exc_info=True)
+
+        return matches[:limit] # Apply final limit
 
 
     async def request_capability(
@@ -481,7 +491,7 @@ class SmartAgentBus:
             agent_id_to_use = specific_agent_id
             logger.debug(f"Targeting specific agent: {agent_id_to_use} ({agent_to_use_doc.get('name')})")
         else:
-            suitable_agents_info = await self.discover_agents(capability_id=capability, min_confidence=min_confidence)
+            suitable_agents_info = await self.discover_agents(task_description=capability, capability_id=capability, min_confidence=min_confidence) # Pass both for flexibility
             if not suitable_agents_info:
                 error_msg = f"No healthy agent found for capability '{capability}' with confidence >= {min_confidence}."
                 await self._log_agent_execution('data', 'N/A', task_details, error=error_msg, duration=time.time()-start_time)
@@ -614,14 +624,20 @@ class SmartAgentBus:
                 tool_factory = self.container.get('tool_factory', None) 
                 created = False
                 
-                if agent_factory and agent_record_doc.get("record_type") == "AGENT": 
+                # Use record_type from the agent_record_doc, not metadata.record_type
+                record_type = agent_record_doc.get("type", "AGENT") # Default to AGENT if "type" (registry) or "record_type" (library) is missing
+                if "record_type" in agent_record_doc: # Prefer "record_type" if from library format
+                    record_type = agent_record_doc["record_type"]
+
+
+                if agent_factory and record_type == "AGENT": 
                     try:
                         agent_instance = await agent_factory.create_agent(agent_record_doc)
                         created = True
                     except Exception as e:
                         logger.error(f"Dynamic AGENT creation failed for {agent_id}: {e}", exc_info=True)
                         raise RuntimeError(f"Failed to dynamically create AGENT instance for {agent_id}: {e}") from e
-                elif tool_factory and agent_record_doc.get("record_type") == "TOOL": 
+                elif tool_factory and record_type == "TOOL": 
                     try:
                         agent_instance = await tool_factory.create_tool(agent_record_doc) 
                         created = True
@@ -631,12 +647,12 @@ class SmartAgentBus:
                 
                 if created and agent_instance:
                     self._agent_instances[agent_id] = agent_instance
-                    logger.info(f"Dynamically created and cached live instance for {agent_id} (type: {agent_record_doc.get('record_type')})")
+                    logger.info(f"Dynamically created and cached live instance for {agent_id} (type: {record_type})")
                 elif not agent_factory and not tool_factory:
                      raise RuntimeError(f"No agent_factory or tool_factory available in container to create instance for {agent_id}")
-                elif (agent_record_doc.get("record_type") == "AGENT" and not agent_factory) or \
-                     (agent_record_doc.get("record_type") == "TOOL" and not tool_factory):
-                     raise RuntimeError(f"No suitable factory found for component {agent_id} of type {agent_record_doc.get('record_type')}")
+                elif (record_type == "AGENT" and not agent_factory) or \
+                     (record_type == "TOOL" and not tool_factory):
+                     raise RuntimeError(f"No suitable factory found for component {agent_id} of type {record_type}")
 
             else: 
                 raise RuntimeError(f"No live instance for agent {agent_id} and no DependencyContainer available for dynamic instantiation.")
@@ -665,6 +681,10 @@ class SmartAgentBus:
         elif agent_record_doc.get("metadata", {}).get("framework") == "openai-agents":
             if self.container and self.container.has('agent_factory'):
                 agent_factory = self.container.get('agent_factory')
+                # Ensure provider_registry is accessible from agent_factory
+                if not hasattr(agent_factory, 'provider_registry'):
+                    raise RuntimeError("AgentFactory does not have a provider_registry attribute.")
+
                 provider = agent_factory.provider_registry.get_provider_for_framework("openai-agents")
                 if provider:
                     try:

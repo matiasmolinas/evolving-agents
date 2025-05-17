@@ -1,8 +1,9 @@
-# evolving_agents/tools/smart_library/evolve_component_tool.py (updated)
+# evolving_agents/tools/smart_library/evolve_component_tool.py
 
 from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel, Field
-import json
+import json # Keep for loading
+from datetime import datetime, timezone # For timestamp
 
 from beeai_framework.tools.tool import Tool, StringToolOutput
 from beeai_framework.context import RunContext
@@ -11,6 +12,8 @@ from beeai_framework.emitter.emitter import Emitter
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.firmware.firmware import Firmware
+# Import the corrected safe_json_dumps
+from evolving_agents.workflow.process_workflow_tool import safe_json_dumps
 
 class EvolveComponentInput(BaseModel):
     """Input schema for the EvolveComponentTool."""
@@ -89,10 +92,10 @@ class EvolveComponentTool(Tool[EvolveComponentInput, None, StringToolOutput]):
             # First, retrieve the parent record
             parent_record = await self.library.find_record_by_id(input.parent_id)
             if not parent_record:
-                return StringToolOutput(json.dumps({
+                return StringToolOutput(safe_json_dumps({ # Use safe_json_dumps
                     "status": "error",
                     "message": f"Parent record with ID {input.parent_id} not found"
-                }, indent=2))
+                }))
             
             # Select appropriate evolution strategy
             strategy = input.evolution_strategy or "standard"
@@ -137,7 +140,7 @@ class EvolveComponentTool(Tool[EvolveComponentInput, None, StringToolOutput]):
                 evolved_record["metadata"]["domain_adaptation"] = {
                     "original_domain": parent_record.get("domain", "unknown"),
                     "target_domain": input.target_domain,
-                    "adaptation_timestamp": self._get_current_timestamp()
+                    "adaptation_timestamp": datetime.now(timezone.utc).isoformat() # Use consistent timestamp
                 }
                 
                 await self.library.save_record(evolved_record)
@@ -150,13 +153,18 @@ class EvolveComponentTool(Tool[EvolveComponentInput, None, StringToolOutput]):
                 "strategy": strategy,
                 "description": strategy_details["description"],
                 "preservation_level": strategy_details["preservation_level"],
-                "timestamp": self._get_current_timestamp()
+                "timestamp": datetime.now(timezone.utc).isoformat() # Use consistent timestamp
             }
             
             await self.library.save_record(evolved_record)
             
+            # Ensure created_at is an ISO string for JSON dump
+            created_at_iso = evolved_record["created_at"]
+            if isinstance(created_at_iso, datetime):
+                created_at_iso = created_at_iso.isoformat()
+
             # Return success response
-            return StringToolOutput(json.dumps({
+            response_data = {
                 "status": "success",
                 "message": f"Successfully evolved {parent_record['record_type']} '{parent_record['name']}' using '{strategy}' strategy",
                 "parent_id": input.parent_id,
@@ -172,27 +180,27 @@ class EvolveComponentTool(Tool[EvolveComponentInput, None, StringToolOutput]):
                     "domain": evolved_record["domain"],
                     "description": evolved_record["description"],
                     "version": evolved_record["version"],
-                    "created_at": evolved_record["created_at"]
+                    "created_at": created_at_iso # Use ISO string
                 },
                 "next_steps": [
                     "Test the evolved component to verify it meets the new requirements",
                     "Register the evolved component with the Agent Bus if needed",
                     "Consider further evolution if it doesn't fully meet requirements"
                 ]
-            }, indent=2))
+            }
+            return StringToolOutput(safe_json_dumps(response_data)) # Use safe_json_dumps
             
         except Exception as e:
             import traceback
-            return StringToolOutput(json.dumps({
+            return StringToolOutput(safe_json_dumps({ # Use safe_json_dumps
                 "status": "error",
                 "message": f"Error evolving component: {str(e)}",
                 "details": traceback.format_exc()
-            }, indent=2))
+            }))
     
-    def _get_current_timestamp(self) -> str:
+    def _get_current_timestamp(self) -> str: # No longer used, directly using datetime.now().isoformat()
         """Get current timestamp in ISO format."""
-        from datetime import datetime
-        return datetime.utcnow().isoformat()
+        return datetime.now(timezone.utc).isoformat()
     
     async def _generate_evolved_code(
         self,
