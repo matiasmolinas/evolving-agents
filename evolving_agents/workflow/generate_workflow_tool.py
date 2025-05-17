@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Any, List, Optional
 import re # Added for cleaning output
 import yaml # Import yaml for basic validation during generation (optional)
+# from datetime import datetime, timezone # Not directly used here, but good for consistency if needed
 
 # Pydantic for input validation
 from pydantic import BaseModel, Field
@@ -20,32 +21,11 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 # Import the specific Input model and the config module
 from evolving_agents.tools.intent_review.workflow_design_review_tool import WorkflowDesignReviewTool, WorkflowDesignInput
 from evolving_agents import config # Import the config module
+# Import the centralized safe_json_dumps
+from evolving_agents.utils.json_utils import safe_json_dumps
+
 
 logger = logging.getLogger(__name__)
-
-# --- Helper Function for Safe JSON Dumping ---
-def safe_json_dumps(data: Any, indent: int = 2) -> str:
-    """Safely dump data to JSON, handling common non-serializable types."""
-    def default_serializer(obj):
-        if isinstance(obj, set): return list(obj)
-        if obj is Ellipsis: return None # Handle Ellipsis if it appears
-        # Let the default raise the error for other unhandled types
-        try:
-            # Use ensure_ascii=False for broader character support if needed, otherwise keep default
-            return json.JSONEncoder(ensure_ascii=True).encode(obj)
-        except TypeError:
-             # Attempt to convert common non-serializable types to string representation
-             if hasattr(obj, '__str__'):
-                 logger.warning(f"Object of type {obj.__class__.__name__} is not JSON serializable, using str(). Value: {str(obj)[:100]}")
-                 return str(obj)
-             raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable and has no __str__ method.")
-
-    try:
-        return json.dumps(data, indent=indent, default=default_serializer)
-    except TypeError as e:
-         logger.error(f"JSON serialization failed even with custom handler: {e}", exc_info=True)
-         # Return a string indicating the error, making it valid JSON
-         return json.dumps({"error": f"Data not fully serializable: {str(e)}"})
 
 
 # --- Input Schema ---
@@ -112,14 +92,22 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
                         )
                         try:
                             review_result = await design_review_tool._run(tool_input=review_input_model, options=options, context=context)
-                            review_data = json.loads(review_result.get_text_content())
+                            # Use safe_json_dumps to load the review result if it's a string
+                            if isinstance(review_result, StringToolOutput):
+                                review_content = review_result.get_text_content()
+                                review_data = json.loads(review_content) if review_content else {}
+                            elif isinstance(review_result, dict): # Should not happen based on StringToolOutput
+                                review_data = review_result
+                            else:
+                                review_data = {}
+                                
                             if review_data.get("status") != "approved":
-                                return StringToolOutput(json.dumps({
+                                return StringToolOutput(safe_json_dumps({
                                     "status": "design_rejected",
                                     "message": "The workflow design was rejected and YAML generation was aborted.",
                                     "reason": review_data.get("reason", "No reason provided"),
                                     "original_design": tool_input.workflow_design
-                                }, indent=2))
+                                }))
                             logger.info("Workflow design approved by human reviewer, proceeding to YAML generation")
                             if "modified_design" in review_data: # If review suggested modifications
                                 tool_input.workflow_design = review_data["modified_design"]
@@ -176,7 +164,7 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         except Exception as e:
             import traceback
             logger.error(f"Error generating workflow: {str(e)}")
-            error_output = safe_json_dumps({ # Use safe_json_dumps here
+            error_output = safe_json_dumps({ 
                 "status": "error",
                 "message": f"Error generating workflow: {str(e)}",
                 "details": traceback.format_exc()
@@ -334,7 +322,8 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         start_index = 0
         for i, line in enumerate(lines):
             stripped_line = line.strip()
-            if stripped_line and (stripped_line.split(':')[0] in ["scenario_name", "domain", "description", "steps"] or stripped_line.startswith("- type:")):
+            # More robust check for start of YAML content
+            if stripped_line and (re.match(r"^\s*[\w_-]+:", stripped_line) or stripped_line.startswith("-")):
                 start_index = i
                 break
         
@@ -342,9 +331,37 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         # This is harder, but we can try to find a reasonable end point.
         # For now, we'll just take from the start_index if found.
         # If YAML starts with a list, wrap it.
-        if start_index < len(lines) and lines[start_index].strip().startswith("- type:"):
+        if start_index < len(lines) and lines[start_index].strip().startswith("-"): # Check if content starts with a list item
             logger.warning("YAML seems to start directly with steps list. Wrapping with default top-level keys.")
-            yaml_content_from_steps = "\n".join(lines[start_index:])
+            # Extract only the list part and indent it correctly
+            list_content = []
+            yaml_started = False
+            # Determine base indentation of the first list item
+            first_list_item_indent = lines[start_index].find('-')
+
+            for line_idx in range(start_index, len(lines)):
+                line = lines[line_idx]
+                current_indent = len(line) - len(line.lstrip())
+                
+                if line.strip().startswith("-") and current_indent == first_list_item_indent:
+                    yaml_started = True
+                    # Add 2 spaces for indentation under 'steps:'
+                    list_content.append("  " + line.lstrip()) 
+                elif yaml_started and (line.strip() == "" or current_indent > first_list_item_indent):
+                    # Continue if it's an empty line or indented more than the list item (i.e., part of the list item's content)
+                    list_content.append("  " + line.lstrip()) # Ensure relative indentation is preserved by lstrip then adding fixed indent
+                elif yaml_started and current_indent <= first_list_item_indent and line.strip() != "":
+                    # Line is not part of the list item anymore (less indented or equally indented but not a list item)
+                    break 
+                elif not yaml_started and line.strip() == "": # Skip empty lines before list starts
+                    continue
+                elif not yaml_started and line.strip() != "": # Non-list item before the list started as expected
+                    logger.warning(f"Unexpected content before list started at line {line_idx}, stopping list extraction.")
+                    break
+
+
+            
+            yaml_content_from_steps = "\n".join(list_content)
             reconstructed_yaml = f"scenario_name: Recovered Workflow\ndomain: general\ndescription: Recovered from steps list\nsteps:\n{yaml_content_from_steps.strip()}"
             return reconstructed_yaml.strip()
         elif start_index < len(lines):

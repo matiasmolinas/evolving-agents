@@ -1,9 +1,8 @@
 # evolving_agents/core/intent_review.py
-
 from enum import Enum
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone # Keep timezone for consistency
 
 class IntentStatus(str, Enum):
     """Status of an intent in a plan."""
@@ -41,7 +40,7 @@ class Intent:
             "params": self.params,
             "justification": self.justification,
             "depends_on": self.depends_on,
-            "status": self.status,
+            "status": self.status.value if isinstance(self.status, Enum) else self.status, # Ensure enum is converted
             "result": self.result,
             "errors": self.errors,
             "review_comments": self.review_comments
@@ -86,7 +85,8 @@ class IntentPlan:
     review_timestamp: Optional[str] = None
     reviewer_comments: Optional[str] = None
     rejection_reason: Optional[str] = None
-    
+    created_at: Optional[str] = field(default_factory=lambda: datetime.now(timezone.utc).isoformat()) # Added field
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert plan to dictionary."""
         return {
@@ -95,10 +95,11 @@ class IntentPlan:
             "description": self.description,
             "objective": self.objective,
             "intents": [intent.to_dict() for intent in self.intents],
-            "status": self.status,
+            "status": self.status.value if isinstance(self.status, Enum) else self.status, # Ensure enum is converted
             "review_timestamp": self.review_timestamp,
             "reviewer_comments": self.reviewer_comments,
-            "rejection_reason": self.rejection_reason
+            "rejection_reason": self.rejection_reason,
+            "created_at": self.created_at
         }
     
     @classmethod
@@ -109,9 +110,10 @@ class IntentPlan:
             title=data["title"],
             description=data["description"],
             objective=data["objective"],
-            intents=[Intent.from_dict(intent_data) for intent_data in data["intents"]],
+            intents=[Intent.from_dict(intent_data) for intent_data in data.get("intents", [])], # Handle missing intents gracefully
             status=PlanStatus(data.get("status", "PENDING_REVIEW")),
             review_timestamp=data.get("review_timestamp"),
             reviewer_comments=data.get("reviewer_comments"),
-            rejection_reason=data.get("rejection_reason")
+            rejection_reason=data.get("rejection_reason"),
+            created_at=data.get("created_at") # Allow created_at to be loaded
         )

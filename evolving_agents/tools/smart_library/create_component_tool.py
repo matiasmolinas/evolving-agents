@@ -1,8 +1,9 @@
-# evolving_agents/tools/smart_library/create_component_tool.py (updated)
+# evolving_agents/tools/smart_library/create_component_tool.py
 
 from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel, Field
-import json
+import json # Keep for loading, but use safe_json_dumps for output
+from datetime import datetime, timezone # For timestamp
 
 from beeai_framework.tools.tool import Tool, StringToolOutput
 from beeai_framework.context import RunContext
@@ -11,6 +12,9 @@ from beeai_framework.emitter.emitter import Emitter
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.firmware.firmware import Firmware
+# Import the corrected safe_json_dumps
+from evolving_agents.workflow.process_workflow_tool import safe_json_dumps
+
 
 class CreateComponentInput(BaseModel):
     """Input schema for the CreateComponentTool."""
@@ -98,7 +102,7 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
             # Add creation strategy to metadata
             metadata["creation_strategy"] = {
                 "method": "requirements" if input.requirements else "direct_code",
-                "timestamp": self._get_current_timestamp(),
+                "timestamp": datetime.now(timezone.utc).isoformat(), # Use consistent timestamp
                 "requirements_summary": self._summarize_text(input.requirements) if input.requirements else None
             }
             
@@ -114,7 +118,12 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
             )
             
             # Return the success response
-            return StringToolOutput(json.dumps({
+            # Ensure record["created_at"] is an ISO string if it's a datetime object for JSON dump
+            created_at_iso = record["created_at"]
+            if isinstance(created_at_iso, datetime):
+                created_at_iso = created_at_iso.isoformat()
+
+            response_data = {
                 "status": "success",
                 "message": f"Created new {input.record_type} '{input.name}'",
                 "record_id": record["id"],
@@ -124,7 +133,7 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
                     "domain": record["domain"],
                     "description": record["description"],
                     "version": record["version"],
-                    "created_at": record["created_at"],
+                    "created_at": created_at_iso, # Use ISO string
                     "code_size": len(code_snippet),
                     "metadata": metadata
                 },
@@ -133,15 +142,16 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
                     "Test the component with sample inputs to verify functionality",
                     f"Consider evolving this component if it doesn't fully meet requirements"
                 ]
-            }, indent=2))
+            }
+            return StringToolOutput(safe_json_dumps(response_data)) # Use safe_json_dumps
             
         except Exception as e:
             import traceback
-            return StringToolOutput(json.dumps({
+            return StringToolOutput(safe_json_dumps({ # Use safe_json_dumps
                 "status": "error",
                 "message": f"Error creating component: {str(e)}",
                 "details": traceback.format_exc()
-            }, indent=2))
+            }))
     
     def _extract_required_tools(self, code_snippet: str) -> List[str]:
         """Extract required tools from agent code."""
@@ -163,8 +173,7 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
     
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format."""
-        from datetime import datetime
-        return datetime.utcnow().isoformat()
+        return datetime.now(timezone.utc).isoformat()
     
     def _summarize_text(self, text: str, max_length: int = 100) -> str:
         """Create a short summary of text."""

@@ -9,7 +9,10 @@ from typing import Dict, Any, List, Optional, Union, Tuple
 from dotenv import load_dotenv 
 
 # Add parent directory to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+# Corrected path for the demo script if it's inside examples/agent_evolution/
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(script_dir)) # Goes up two levels: agent_evolution -> examples -> project_root
+sys.path.insert(0, project_root)
 
 
 from evolving_agents.smart_library.smart_library import SmartLibrary
@@ -199,38 +202,76 @@ class AgentEvolutionTracker:
         return self.evolutions.get(agent_id, [])
 
 # --- Helper: extract_component_id ---
-def extract_component_id(response_text: str, id_field: str = "id") -> Optional[str]:
-    if not response_text: return None
-    try:
-        data = json.loads(response_text)
-        if isinstance(data, dict):
-            if "results" in data and isinstance(data["results"], list) and data["results"]:
-                return data["results"][0].get(id_field)
-            elif "record_id" in data: 
-                return data["record_id"]
-            elif "evolved_id" in data: 
-                return data["evolved_id"]
-            elif "plan_id" in data: 
-                return data["plan_id"]
-            elif id_field in data: 
-                return data[id_field]
-    except json.JSONDecodeError:
-        logger.debug(f"Failed to parse response_text as JSON for ID extraction: {response_text[:200]}")
+def extract_component_id(response_text: str, id_field_key: str = "record_id") -> Optional[str]:
+    """
+    Extracts a component ID from a response string.
+    It first tries to parse the string as JSON, then falls back to regex.
+    """
+    if not response_text:
+        return None
 
-    id_patterns = [
+    # Attempt to parse as JSON first
+    try:
+        # Try to find the JSON part of the response if it's embedded
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            data = json.loads(json_str)
+            if isinstance(data, dict):
+                if id_field_key in data and isinstance(data[id_field_key], str):
+                    return data[id_field_key]
+                if "record_id" in data and isinstance(data["record_id"], str):
+                    return data["record_id"]
+                if "evolved_id" in data and isinstance(data["evolved_id"], str):
+                    return data["evolved_id"]
+                if "plan_id" in data and isinstance(data["plan_id"], str):
+                    return data["plan_id"]
+                if "id" in data and isinstance(data["id"], str):
+                    return data["id"]
+                for nested_key in ["record", "evolved_record", "saved_record"]: # Added saved_record
+                    if nested_key in data and isinstance(data[nested_key], dict):
+                        if "id" in data[nested_key] and isinstance(data[nested_key]["id"], str):
+                            return data[nested_key]["id"]
+                if "results" in data and isinstance(data["results"], list) and data["results"]:
+                    if isinstance(data["results"][0], dict) and "id" in data["results"][0]:
+                        return data["results"][0].get("id")
+                logger.debug(f"JSON parsed from response, but no standard ID field found. Data: {str(data)[:200]}")
+        else:
+            logger.debug(f"No JSON object found in response_text. Falling back to regex. Response: {response_text[:200]}")
+
+    except json.JSONDecodeError:
+        logger.debug(f"Response_text is not valid JSON, or JSON part extraction failed. Falling back to regex. Response: {response_text[:200]}")
+    except Exception as e:
+        logger.error(f"Unexpected error during JSON parsing in extract_component_id: {e}")
+
+
+    # Regex patterns to find IDs
+    patterns = [
+        rf'"{id_field_key}":\s*"([^"]+)"',
         rf'"record_id":\s*"([^"]+)"',
         rf'"evolved_id":\s*"([^"]+)"',
         rf'"plan_id":\s*"([^"]+)"',
-        rf'"{id_field}":\s*"([^"]+)"', 
-        r'ID:\s*([a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})', 
-        r'([a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})' 
+        rf'"id":\s*"([^"]+)"',
+        r'ID:\s*([a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}|[a-fA-F0-9]{24}|[a-zA-Z0-9_.\-]+)',
+        r'record id:\s*([a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}|[a-zA-Z0-9_.\-]+)',
+        r'evolved id:\s*([a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}|[a-zA-Z0-9_.\-]+)',
+        r'plan id:\s*([a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}|[a-zA-Z0-9_.\-]+)',
+        r'([a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12})', # Loose UUID
     ]
-    for pattern in id_patterns:
-        match = re.search(pattern, response_text, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    logger.warning(f"Could not extract component ID using field '{id_field}' or regex from: {response_text[:200]}")
+
+    for pattern in patterns:
+        match = re.search(pattern, response_text)
+        if match and match.group(1):
+            extracted_id = match.group(1).strip()
+            if len(extracted_id) > 5 and not extracted_id.lower().startswith("http"): # Avoid matching URLs
+                logger.info(f"Regex extracted ID: '{extracted_id}' using pattern: {pattern}")
+                return extracted_id
+            else:
+                logger.debug(f"Regex match '{extracted_id}' for pattern {pattern} too short or looks like URL, skipping.")
+    
+    logger.warning(f"Could not extract component ID using JSON parsing or regex from: {response_text[:300]}...")
     return None
+
 
 # --- Sample Datasets ---
 SAMPLE_WEATHER_QUERY = "What's the weather like in New York today?"
@@ -300,20 +341,22 @@ async def create_sentiment_analysis_tool(system_agent: ReActAgent) -> Tuple[Opti
     4. Return results as a structured JSON string.
     
     Ensure it's a complete, executable BeeAI Tool class.
+    IMPORTANT: Your final response should be ONLY the raw JSON output from the CreateComponentTool.
     """
     
     print("\nCreating BeeAISentimentAnalysisTool...")
-    create_result = await system_agent.run(create_tool_prompt)
-    
+    run_output_message = await system_agent.run(create_tool_prompt)
+    tool_creation_response_text = run_output_message.result.text if hasattr(run_output_message, 'result') and hasattr(run_output_message.result, 'text') else str(run_output_message)
+
     print("\nTool creation result:")
-    print(create_result.result.text)
+    print(tool_creation_response_text) 
     
-    tool_id = extract_component_id(create_result.result.text, "record_id")
+    tool_id = extract_component_id(tool_creation_response_text, "record_id")
     if tool_id:
         print(f"✓ Sentiment tool created with ID: {tool_id}")
     else:
         print("✗ Failed to extract sentiment tool ID from creation response.")
-    return tool_id, create_result
+    return tool_id, run_output_message
 
 async def create_customer_feedback_agent(system_agent: ReActAgent, sentiment_tool_id: Optional[str] = None) -> Tuple[Optional[str], Any]:
     """Create a customer feedback analysis agent using the System Agent"""
@@ -340,20 +383,22 @@ async def create_customer_feedback_agent(system_agent: ReActAgent, sentiment_too
     {tool_integration_instruction}
     
     Implement a complete BeeAI Agent class.
+    IMPORTANT: Your final response should be ONLY the raw JSON output from the CreateComponentTool.
     """
     
     print("\nCreating BeeAICustomerFeedbackAgent...")
-    agent_result = await system_agent.run(feedback_agent_prompt)
-    
+    agent_result_message = await system_agent.run(feedback_agent_prompt)
+    agent_creation_response_text = agent_result_message.result.text if hasattr(agent_result_message, 'result') and hasattr(agent_result_message.result, 'text') else str(agent_result_message)
+
     print("\nAgent creation result:")
-    print(agent_result.result.text)
+    print(agent_creation_response_text)
     
-    agent_id = extract_component_id(agent_result.result.text, "record_id")
+    agent_id = extract_component_id(agent_creation_response_text, "record_id")
     if agent_id:
         print(f"✓ Customer feedback agent created with ID: {agent_id}")
     else:
         print("✗ Failed to extract customer feedback agent ID from creation response.")
-    return agent_id, agent_result
+    return agent_id, agent_result_message
 
 async def evolve_sentiment_tool(system_agent: ReActAgent, tool_id: Optional[str] = None) -> Tuple[Optional[str], Any]:
     """Evolve the sentiment analysis tool"""
@@ -362,10 +407,10 @@ async def evolve_sentiment_tool(system_agent: ReActAgent, tool_id: Optional[str]
     print("-"*80)
     
     tool_to_evolve_name = "BeeAISentimentAnalysisTool" 
-    
+    tool_identifier = f"tool with ID '{tool_id}'" if tool_id else f"the '{tool_to_evolve_name}' tool by searching for its name"
+
     evolve_prompt = f"""
-    I want to evolve the '{tool_to_evolve_name}' tool to enhance its capabilities.
-    If its ID is '{tool_id}', use that directly. Otherwise, search for it by name.
+    I want to evolve {tool_identifier} to enhance its capabilities.
     
     The enhanced version should:
     1. Support multiple languages (at least English, Spanish, French).
@@ -373,22 +418,24 @@ async def evolve_sentiment_tool(system_agent: ReActAgent, tool_id: Optional[str]
     3. Provide confidence scores for detected emotions.
     
     Use a standard evolution strategy.
+    IMPORTANT: Your final response should be ONLY the raw JSON output from the EvolveComponentTool.
     """
     
-    print(f"\nEvolving {tool_to_evolve_name}...")
-    evolve_result = await system_agent.run(evolve_prompt)
+    print(f"\nEvolving {tool_to_evolve_name} (using identifier: {tool_identifier})...")
+    evolve_result_message = await system_agent.run(evolve_prompt)
+    evolution_response_text = evolve_result_message.result.text if hasattr(evolve_result_message, 'result') and hasattr(evolve_result_message.result, 'text') else str(evolve_result_message)
     
     print("\nEvolution result:")
-    print(evolve_result.result.text)
+    print(evolution_response_text)
     
-    evolved_tool_id = extract_component_id(evolve_result.result.text, "evolved_id")
+    evolved_tool_id = extract_component_id(evolution_response_text, "evolved_id")
     if evolved_tool_id:
         print(f"✓ Sentiment tool evolved. New ID: {evolved_tool_id}")
     else:
         print(f"✗ Failed to extract evolved sentiment tool ID. Original ID was: {tool_id}")
         evolved_tool_id = tool_id 
         
-    return evolved_tool_id, evolve_result
+    return evolved_tool_id, evolve_result_message
 
 async def adapt_to_finance_domain(system_agent: ReActAgent, agent_id: Optional[str] = None) -> Tuple[Optional[str], Any]:
     """Adapt the customer feedback agent to the financial domain"""
@@ -397,32 +444,34 @@ async def adapt_to_finance_domain(system_agent: ReActAgent, agent_id: Optional[s
     print("-"*80)
     
     agent_to_adapt_name = "BeeAICustomerFeedbackAgent"
-    
+    agent_identifier = f"agent with ID '{agent_id}'" if agent_id else f"the '{agent_to_adapt_name}' agent by searching for its name"
+
     adapt_prompt = f"""
-    I want to adapt our '{agent_to_adapt_name}' (ID: {agent_id if agent_id else 'search by name'}) for the financial domain.
-    
+    I want to adapt {agent_identifier} for the financial domain.
     The adapted agent, to be named 'BeeAIFinancialFeedbackAgent', should:
     1. Extract financial-specific metrics from feedback (e.g., mentions of interest rates, fees).
     2. Identify mentions of financial products (e.g., loans, investments).
     3. Flag potential compliance-related issues or complaints.
     
     Use a domain_adaptation strategy.
+    IMPORTANT: Your final response should be ONLY the raw JSON output from the EvolveComponentTool.
     """
     
-    print(f"\nAdapting {agent_to_adapt_name} to financial domain...")
-    adapt_result = await system_agent.run(adapt_prompt)
+    print(f"\nAdapting {agent_to_adapt_name} (using identifier: {agent_identifier}) to financial domain...")
+    adapt_result_message = await system_agent.run(adapt_prompt)
+    adaptation_response_text = adapt_result_message.result.text if hasattr(adapt_result_message, 'result') and hasattr(adapt_result_message.result, 'text') else str(adapt_result_message)
     
     print("\nDomain adaptation result:")
-    print(adapt_result.result.text)
+    print(adaptation_response_text)
     
-    adapted_agent_id = extract_component_id(adapt_result.result.text, "evolved_id")
+    adapted_agent_id = extract_component_id(adaptation_response_text, "evolved_id")
     if adapted_agent_id:
         print(f"✓ Agent adapted to finance domain. New ID: {adapted_agent_id}")
     else:
         print(f"✗ Failed to extract adapted financial agent ID. Original ID was: {agent_id}")
-        adapted_agent_id = agent_id 
+        adapted_agent_id = agent_id
         
-    return adapted_agent_id, adapt_result
+    return adapted_agent_id, adapt_result_message
 
 async def transform_to_web_analyzer(system_agent: ReActAgent, tool_id: Optional[str] = None) -> Tuple[Optional[str], Any]:
     """Aggressively evolve a tool into a web content analyzer"""
@@ -430,7 +479,7 @@ async def transform_to_web_analyzer(system_agent: ReActAgent, tool_id: Optional[
     print("TRANSFORMING TOOL TO WEB CONTENT ANALYZER (BeeAI)")
     print("-"*80)
     
-    tool_to_transform_identifier = f"tool with ID '{tool_id}'" if tool_id else "the evolved sentiment analysis tool"
+    tool_to_transform_identifier = f"tool with ID '{tool_id}'" if tool_id else "the evolved sentiment analysis tool (search by name 'BeeAISentimentAnalysisTool' if ID unknown)"
 
     transform_prompt = f"""
     I want to aggressively transform {tool_to_transform_identifier} into a comprehensive web content analyzer.
@@ -443,22 +492,24 @@ async def transform_to_web_analyzer(system_agent: ReActAgent, tool_id: Optional[
     4. Generate a concise summary of the web page content.
     
     This requires an aggressive evolution strategy.
+    IMPORTANT: Your final response should be ONLY the raw JSON output from the EvolveComponentTool.
     """
     
     print(f"\nAggressively transforming {tool_to_transform_identifier} into web content analyzer...")
-    transform_result = await system_agent.run(transform_prompt)
+    transform_result_message = await system_agent.run(transform_prompt)
+    transformation_response_text = transform_result_message.result.text if hasattr(transform_result_message, 'result') and hasattr(transform_result_message.result, 'text') else str(transform_result_message)
     
     print("\nTransformation result:")
-    print(transform_result.result.text)
+    print(transformation_response_text)
     
-    transformed_tool_id = extract_component_id(transform_result.result.text, "evolved_id")
+    transformed_tool_id = extract_component_id(transformation_response_text, "evolved_id")
     if transformed_tool_id:
         print(f"✓ Tool transformed to web analyzer. New ID: {transformed_tool_id}")
     else:
         print(f"✗ Failed to extract transformed web analyzer ID. Original ID was: {tool_id}")
         transformed_tool_id = tool_id 
         
-    return transformed_tool_id, transform_result
+    return transformed_tool_id, transform_result_message
 
 async def test_evolved_components(system_agent: ReActAgent, smart_library: SmartLibrary, component_ids: Dict[str, Optional[str]]):
     """Test the evolved components"""
@@ -475,9 +526,9 @@ async def test_evolved_components(system_agent: ReActAgent, smart_library: Smart
         2. Spanish: "Estoy muy decepcionado con el producto, no funciona como esperaba."
         Provide structured results for each.
         """
-        sentiment_result = await system_agent.run(sentiment_test_prompt)
+        sentiment_result_message = await system_agent.run(sentiment_test_prompt)
         print("\nEvolved Sentiment Analysis Results:")
-        print(sentiment_result.result.text)
+        print(sentiment_result_message.result.text if hasattr(sentiment_result_message, 'result') and hasattr(sentiment_result_message.result, 'text') else str(sentiment_result_message))
 
     financial_agent_id = component_ids.get("financial_agent")
     if financial_agent_id:
@@ -487,9 +538,9 @@ async def test_evolved_components(system_agent: ReActAgent, smart_library: Smart
         "{SAMPLE_FINANCIAL_FEEDBACK}"
         Extract financial metrics, product mentions, compliance flags, and sentiment.
         """
-        financial_result = await system_agent.run(financial_test_prompt)
+        financial_result_message = await system_agent.run(financial_test_prompt)
         print("\nFinancial Feedback Analysis Results:")
-        print(financial_result.result.text)
+        print(financial_result_message.result.text if hasattr(financial_result_message, 'result') and hasattr(financial_result_message.result, 'text') else str(financial_result_message))
 
     web_analyzer_id = component_ids.get("web_analyzer")
     if web_analyzer_id:
@@ -501,9 +552,9 @@ async def test_evolved_components(system_agent: ReActAgent, smart_library: Smart
         ```
         Extract topics, entities, product info, and summarize.
         """
-        web_result = await system_agent.run(web_test_prompt)
+        web_result_message = await system_agent.run(web_test_prompt)
         print("\nWeb Content Analysis Results:")
-        print(web_result.result.text)
+        print(web_result_message.result.text if hasattr(web_result_message, 'result') and hasattr(web_result_message.result, 'text') else str(web_result_message))
 
 async def compare_components(system_agent: ReActAgent, smart_library: SmartLibrary, original_id: Optional[str], evolved_id: Optional[str]):
     """Compare original and evolved components"""
@@ -528,10 +579,10 @@ async def compare_components(system_agent: ReActAgent, smart_library: SmartLibra
     """
     
     print("\nComparing components...")
-    comparison_result = await system_agent.run(comparison_prompt)
+    comparison_result_message = await system_agent.run(comparison_prompt)
     
     print("\nComparison Results:")
-    print(comparison_result.result.text)
+    print(comparison_result_message.result.text if hasattr(comparison_result_message, 'result') and hasattr(comparison_result_message.result, 'text') else str(comparison_result_message))
 
 async def analyze_library_health(system_agent: ReActAgent, smart_library: SmartLibrary):
     """Analyze the health and structure of the library"""
@@ -555,17 +606,17 @@ async def analyze_library_health(system_agent: ReActAgent, smart_library: SmartL
     """
     
     print("\nAnalyzing library health...")
-    analysis_result = await system_agent.run(analysis_prompt)
+    analysis_result_message = await system_agent.run(analysis_prompt)
     
     print("\nLibrary Health Analysis:")
-    print(analysis_result.result.text)
+    print(analysis_result_message.result.text if hasattr(analysis_result_message, 'result') and hasattr(analysis_result_message.result, 'text') else str(analysis_result_message))
 
 async def setup_and_clean_demo_environment(container: DependencyContainer):
     """Sets up the MongoDB environment and cleans specific demo data."""
     print("\n[MONGODB DEMO SETUP & CLEANUP]")
     
-    smart_library: SmartLibrary = container.get('smart_library')
-    if not smart_library or smart_library.components_collection is None: # Corrected check
+    smart_library: Optional[SmartLibrary] = container.get('smart_library', None) 
+    if not smart_library or smart_library.components_collection is None: 
         logger.error("SmartLibrary could not be initialized with MongoDB or components_collection is None. Demo cannot proceed with DB cleanup.")
         return
 
@@ -575,25 +626,33 @@ async def setup_and_clean_demo_environment(container: DependencyContainer):
         "BeeAICustomerFeedbackAgent", 
         "BeeAIFinancialFeedbackAgent", 
         "BeeAIWebContentAnalyzer",
+        "BeeAISentimentAnalysisToolV2" # Added from an evolution step in the log
     ]
 
     print(f"  Targeting demo domains for cleanup: {demo_domains}")
     print(f"  Targeting demo names for cleanup: {demo_names_to_delete}")
 
     delete_count = 0
-    # The collection is already confirmed not to be None by the check above
     for name in demo_names_to_delete:
-        records_to_delete = await smart_library.components_collection.find({"name": name}).to_list(length=None)
-        if records_to_delete:
-            ids_to_delete = [r["id"] for r in records_to_delete]
-            result = await smart_library.components_collection.delete_many({"id": {"$in": ids_to_delete}})
-            delete_count += result.deleted_count
-            print(f"    Deleted {result.deleted_count} records with name '{name}'.")
+        if smart_library.components_collection is not None: 
+            records_to_delete = await smart_library.components_collection.find({"name": name}).to_list(length=None)
+            if records_to_delete:
+                ids_to_delete = [r["id"] for r in records_to_delete]
+                result = await smart_library.components_collection.delete_many({"id": {"$in": ids_to_delete}})
+                delete_count += result.deleted_count
+                print(f"    Deleted {result.deleted_count} records with name '{name}'.")
+        else:
+            logger.warning(f"Skipping deletion for name '{name}' as components_collection is None.")
+
 
     for domain in demo_domains:
-        result = await smart_library.components_collection.delete_many({"domain": domain})
-        delete_count += result.deleted_count
-        print(f"    Deleted {result.deleted_count} records from domain '{domain}'.")
+        if smart_library.components_collection is not None: 
+            result = await smart_library.components_collection.delete_many({"domain": domain})
+            delete_count += result.deleted_count
+            print(f"    Deleted {result.deleted_count} records from domain '{domain}'.")
+        else:
+            logger.warning(f"Skipping deletion for domain '{domain}' as components_collection is None.")
+
 
     print(f"  MongoDB: Cleaned up {delete_count} previous BeeAI evolution demo components.")
 
@@ -616,24 +675,41 @@ async def main():
         container = DependencyContainer()
         
         try:
-            mongo_client = MongoDBClient() 
+            mongo_uri = os.getenv("MONGODB_URI", eat_config.MONGODB_URI)
+            mongo_db_name = os.getenv("MONGODB_DATABASE_NAME", eat_config.MONGODB_DATABASE_NAME)
+
+            mongo_client = MongoDBClient(uri=mongo_uri, db_name=mongo_db_name) 
             await mongo_client.ping_server() 
             container.register('mongodb_client', mongo_client)
-            print(f"✓ MongoDB Client initialized and connected to DB: '{mongo_client.db_name}'")
+            print(f"✓ MongoDB Client initialized and connected to DB: '{mongo_client.db_name}' using URI from env/config.")
         except Exception as e:
+            mongo_uri_log = os.getenv("MONGODB_URI", "Not Set in Env") 
+            mongo_db_name_log = os.getenv("MONGODB_DATABASE_NAME", "Not Set in Env")
+            if mongo_uri_log == "Not Set in Env" and hasattr(eat_config, 'MONGODB_URI'):
+                mongo_uri_log = eat_config.MONGODB_URI 
+            if mongo_db_name_log == "Not Set in Env" and hasattr(eat_config, 'MONGODB_DATABASE_NAME'):
+                 mongo_db_name_log = eat_config.MONGODB_DATABASE_NAME
+            
             logger.error(f"CRITICAL: Failed to initialize MongoDBClient: {e}. Ensure .env is configured and MongoDB is accessible.")
+            logger.error(f"MongoDB URI used (from env or config): {mongo_uri_log}, DB Name: {mongo_db_name_log}")
             return
 
-        llm_service = LLMService(provider="openai", model="gpt-4o", container=container) 
+        llm_service = LLMService(
+            provider=eat_config.LLM_PROVIDER, 
+            model=eat_config.LLM_MODEL,
+            embedding_model=eat_config.LLM_EMBEDDING_MODEL,
+            use_cache=eat_config.LLM_USE_CACHE, 
+            container=container 
+        ) 
         container.register('llm_service', llm_service)
         
-        smart_library = SmartLibrary(container=container)
+        smart_library = SmartLibrary(container=container) 
         container.register('smart_library', smart_library)
         
         firmware = Firmware()
         container.register('firmware', firmware)
         
-        agent_bus = SmartAgentBus(container=container)
+        agent_bus = SmartAgentBus(container=container) 
         container.register('agent_bus', agent_bus)
         
         provider_registry = ProviderRegistry()
@@ -703,8 +779,24 @@ async def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
+    dotenv_path = os.path.join(project_root, '.env') 
+    if not os.path.exists(dotenv_path):
+        logger.warning(f".env file not found at expected project root: {dotenv_path}. Trying current directory...")
+        dotenv_path_cwd = os.path.join(os.getcwd(), '.env')
+        if os.path.exists(dotenv_path_cwd):
+            load_dotenv(dotenv_path_cwd)
+            logger.info(f"Loaded .env from current working directory: {dotenv_path_cwd}")
+        else:
+            logger.error(f"No .env file found at {dotenv_path} or {dotenv_path_cwd}. Critical environment variables MONGODB_URI and OPENAI_API_KEY might be missing.")
+    else:
+        load_dotenv(dotenv_path)
+        logger.info(f"Loaded .env from: {dotenv_path}")
+
+
     if not os.getenv("MONGODB_URI") or not os.getenv("OPENAI_API_KEY"):
-        logger.error("CRITICAL: MONGODB_URI and/or OPENAI_API_KEY not found in .env file or environment.")
-        logger.error("Please ensure your .env file is correctly configured and python-dotenv is installed.")
+        logger.error("CRITICAL: MONGODB_URI and/or OPENAI_API_KEY not found in environment after attempting to load .env.")
+        logger.error("Please ensure your .env file is correctly configured with these variables and is in the project root, or that these variables are set in your environment.")
+        logger.error(f"Current MONGODB_URI from env: {os.getenv('MONGODB_URI')}")
+        logger.error(f"Current OPENAI_API_KEY from env: {os.getenv('OPENAI_API_KEY')}")
     else:
         asyncio.run(main())

@@ -25,6 +25,9 @@ from evolving_agents.core.mongodb_client import MongoDBClient # For DB interacti
 from evolving_agents.core.dependency_container import DependencyContainer # For resolving MongoDBClient
 import asyncio # For async operations
 
+# Import the centralized safe_json_dumps
+from evolving_agents.utils.json_utils import safe_json_dumps
+
 logger = logging.getLogger(__name__)
 
 # --- Input Schema ---
@@ -35,28 +38,6 @@ class ProcessWorkflowInput(BaseModel):
     objective: Optional[str] = Field(None, description="Overall objective of the workflow if not found in params")
     # Optional: to force a specific plan_id if reprocessing or for traceability
     plan_id_override: Optional[str] = Field(None, description="Optional specific ID to use for the IntentPlan")
-
-
-# --- Helper Function for Safe JSON Dumping ---
-def safe_json_dumps(data: Any, indent: int = 2) -> str:
-    """Safely dump data to JSON, handling common non-serializable types."""
-    def default_serializer(obj):
-        if isinstance(obj, set): return list(obj)
-        if isinstance(obj, (datetime, timezone)): return obj.isoformat()
-        if hasattr(obj, 'to_dict') and callable(obj.to_dict): return obj.to_dict()
-        if isinstance(obj, (IntentStatus, PlanStatus)): return obj.value
-        try:
-            # Standard JSONEncoder, ensure_ascii=False could be useful for broader charsets
-            # but default (True) is safer for many systems.
-            return json.JSONEncoder().encode(obj)
-        except TypeError:
-            logger.warning(f"Object of type {obj.__class__.__name__} is not JSON serializable, using str(). Value: {str(obj)[:100]}")
-            return str(obj)
-    try:
-        return json.dumps(data, indent=indent, default=default_serializer)
-    except TypeError as e:
-        logger.error(f"JSON serialization error: {e}", exc_info=True)
-        return json.dumps({"error": f"Data not fully serializable: {str(e)}"})
 
 
 # --- Tool Implementation ---
@@ -119,7 +100,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                 )
                 await self.intent_plans_collection.create_index(
                     [("created_at", pymongo.DESCENDING)], background=True 
-                )
+                ) # Assuming IntentPlan has created_at
                 logger.info(f"Ensured indexes on '{self.intent_plans_collection_name}' collection.")
             except Exception as e:
                 logger.error(f"Error creating indexes for '{self.intent_plans_collection_name}': {e}", exc_info=True)
@@ -244,7 +225,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                             "status": "intent_plan_created_db_error",
                             "message": f"Intent plan created but FAILED to save to MongoDB: {db_err}. Pass this full plan to review tool.",
                             "plan_id": intent_plan_obj.plan_id,
-                            "intent_plan": intent_plan_dict
+                            "intent_plan": intent_plan_dict # include full plan if DB save failed
                         }
                 else: 
                     logger.warning("MongoDB client/collection not available. IntentPlan was generated but not saved to database.")
@@ -252,11 +233,12 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                         "status": "intent_plan_created_no_db",
                         "message": "Intent plan created (MongoDB unavailable). Pass this full plan to review tool.",
                         "plan_id": intent_plan_obj.plan_id,
-                        "intent_plan": intent_plan_dict
+                        "intent_plan": intent_plan_dict # include full plan if no DB
                     }
                 
                 if context and hasattr(context, "set_value"):
                     try:
+                        # Save the potentially modified intent_plan_dict to context
                         context.set_value("intent_plan_json_output", safe_json_dumps(intent_plan_dict))
                         logger.debug(f"Full IntentPlan '{intent_plan_obj.plan_id}' also saved to run context.")
                     except Exception as ctx_err:
@@ -327,7 +309,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
 
         intents_list: List[Intent] = []
         step_index_to_intent_id: Dict[int, str] = {} 
-        current_time = datetime.now(timezone.utc) 
+        current_time_iso = datetime.now(timezone.utc).isoformat()
 
         for i, step_dict in enumerate(workflow_steps):
             intent_id = f"intent_{plan_id}_{i+1}_{uuid.uuid4().hex[:6]}" 
@@ -343,7 +325,8 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             elif step_type_str == "RETURN": params_or_input_dict = {"value": step_dict.get("value")}
 
             depends_on_ids: List[str] = []
-            params_str_for_scan = safe_json_dumps(params_or_input_dict)
+            # Use the centralized safe_json_dumps for scanning parameters
+            params_str_for_scan = safe_json_dumps(params_or_input_dict, indent=None) # No indent needed for scanning
             step_var_pattern = r'{{\s*([\w_]+)\s*}}' 
             
             found_step_vars = set(re.findall(step_var_pattern, params_str_for_scan))
@@ -378,7 +361,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
             objective=objective,
             intents=intents_list,
             status=PlanStatus.PENDING_REVIEW,
-            created_at=current_time # type: ignore 
+            created_at=current_time_iso # Initialize created_at
         )
 
     def _validate_steps(self, steps: List[Dict[str, Any]], intent_mode: bool = False,
@@ -405,7 +388,7 @@ class ProcessWorkflowTool(Tool[ProcessWorkflowInput, None, StringToolOutput]):
                 raise ValueError(f"Step {step_num} invalid type '{step_type}'. Must be one of {valid_types}.")
 
             required_keys = set()
-            if step_type == "DEFINE": required_keys = {"item_type", "name", "description"}
+            if step_type == "DEFINE": required_keys = {"item_type", "name", "description"} # code_snippet is often generated
             elif step_type == "CREATE": required_keys = {"item_type", "name"}
             elif step_type == "EXECUTE": required_keys = {"item_type", "name"}
             elif step_type == "RETURN": required_keys = {"value"}

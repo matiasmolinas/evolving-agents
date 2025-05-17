@@ -45,6 +45,10 @@ class SmartLibrary:
         self.components_collection: Optional[motor.motor_asyncio.AsyncIOMotorCollection] = None
         self.components_collection_name = components_collection_name
 
+        # --- Atlas Vector Search Index Names (Assumed to exist in Atlas) ---
+        self.atlas_vs_idx_content_embedding = "idx_components_content_embedding"
+        self.atlas_vs_idx_applicability_embedding = "idx_components_applicability_embedding" # Corrected assumption
+
         if container and container.has('llm_service'):
             self.llm_service = llm_service or container.get('llm_service')
         elif llm_service:
@@ -131,7 +135,7 @@ class SmartLibrary:
                 logger.warning(f"Could not create/ensure text index for fallback search (generic error): {text_idx_err}")
                 
             logger.info(f"Ensured standard indexes on '{self.components_collection_name}' collection.")
-            logger.info("Reminder: Atlas Vector Search Indexes must be configured manually in MongoDB Atlas.")
+            logger.info(f"Reminder: Atlas Vector Search Indexes ({self.atlas_vs_idx_content_embedding}, {self.atlas_vs_idx_applicability_embedding}) must be configured manually in MongoDB Atlas.")
         except Exception as e:
             logger.error(f"Error creating MongoDB indexes for {self.components_collection_name}: {e}", exc_info=True)
 
@@ -216,6 +220,18 @@ class SmartLibrary:
             if key in record and record[key] is not None:
                 record[key] = [float(x) for x in record[key]]
         try:
+            # Ensure datetime fields are BSON compatible datetimes
+            for dt_field in ["created_at", "last_updated"]:
+                if dt_field in record and isinstance(record[dt_field], str):
+                    try:
+                        record[dt_field] = datetime.fromisoformat(record[dt_field].replace("Z", "+00:00"))
+                    except ValueError: # if already a datetime object, or different format
+                        if not isinstance(record[dt_field], datetime):
+                            logger.warning(f"Could not parse {dt_field} string '{record[dt_field]}' to datetime for record {record_id}. Leaving as is or consider UTC default.")
+                            record[dt_field] = datetime.now(timezone.utc) # Fallback
+                elif dt_field in record and not isinstance(record[dt_field], datetime):
+                     record[dt_field] = datetime.now(timezone.utc) # Fallback if not str or datetime
+
             result = await self.components_collection.replace_one({"id": record_id}, record, upsert=True)
             log_action = "Inserted new" if result.upserted_id else "Updated" if result.modified_count > 0 else "Refreshed (no change to)"
             logger.info(f"{log_action} record {record_id} ({record.get('name')}) in MongoDB.")
@@ -273,79 +289,72 @@ class SmartLibrary:
                 record_type, domain, limit, effective_task_weight, task_context
             )
 
-        current_search_index_name = ""
-        vector_path_for_search = ""
-        query_vector_for_search: List[float] = []
-        primary_score_field = "vector_search_score" 
-
-        content_embedding_index_name = "idx_components_content_embedding"
-        applicability_embedding_index_name = "applicability_embedding"
+        current_atlas_search_index_name: str
+        vector_path_for_search: str
+        query_vector_for_search: List[float]
 
         if task_context and task_embedding_for_fallback:
-            current_search_index_name = applicability_embedding_index_name
+            current_atlas_search_index_name = self.atlas_vs_idx_applicability_embedding
             vector_path_for_search = "applicability_embedding"
             query_vector_for_search = task_embedding_for_fallback
         else:
-            current_search_index_name = content_embedding_index_name
+            current_atlas_search_index_name = self.atlas_vs_idx_content_embedding
             vector_path_for_search = "content_embedding"
             query_vector_for_search = query_embedding_orig
         
-        # Define the vectorSearch operator part
-        vector_search_operator = {
+        vs_stage_definition: Dict[str, Any] = {
+            "index": current_atlas_search_index_name,
             "path": vector_path_for_search,
             "queryVector": query_vector_for_search,
             "numCandidates": limit * 20, 
             "limit": limit * 10 
         }
         
-        # Build the $search stage using "compound" operator to combine vectorSearch with filters
-        compound_filter_clauses = []
-        if record_type: compound_filter_clauses.append({"text": {"path": "record_type", "query": record_type}})
-        if domain: compound_filter_clauses.append({"text": {"path": "domain", "query": domain}})
-        compound_filter_clauses.append({"text": {"path": "status", "query": "active"}})
+        mql_filter_conditions = []
+        if record_type: mql_filter_conditions.append({"record_type": record_type})
+        if domain: mql_filter_conditions.append({"domain": domain})
+        mql_filter_conditions.append({"status": "active"})
 
-        search_stage_definition: Dict[str, Any] = {
-            "index": current_search_index_name,
-            "compound": {
-                "must": [{"vectorSearch": vector_search_operator}] # vectorSearch is a "must" clause
-            }
-        }
-        if compound_filter_clauses:
-            search_stage_definition["compound"]["filter"] = compound_filter_clauses
-            
-        search_pipeline: List[Dict[str, Any]] = [
-            {"$search": search_stage_definition},
-            {"$addFields": {primary_score_field: {"$meta": "searchScore"}}}
-        ]
+        if mql_filter_conditions:
+            vs_stage_definition["filter"] = {"$and": mql_filter_conditions} if len(mql_filter_conditions) > 1 else mql_filter_conditions[0]
         
-        fields_to_project = {
+        # Define fields to project, ensuring embeddings are included for re-ranking if needed,
+        # but can be excluded from the final result passed to the caller.
+        projected_doc_fields = {
             "_id": 0, "id": 1, "name": 1, "record_type": 1, "domain": 1, "description": 1,
             "version": 1, "usage_count": 1, "success_count": 1, "tags": 1, "metadata": 1,
-            primary_score_field: 1, "content_embedding": 1, "applicability_embedding": 1
+            "content_embedding": 1, "applicability_embedding": 1 # Needed for re-ranking
         }
-        search_pipeline.append({"$project": fields_to_project})
+            
+        search_pipeline: List[Dict[str, Any]] = [
+            {"$vectorSearch": vs_stage_definition},
+            {"$project": {**projected_doc_fields, "similarity_score": {"$meta": "vectorSearchScore"}}},
+            # $vectorSearch already sorts by score and applies its limit.
+            # Additional sort/limit here applies to the results from $vectorSearch.
+            # {"$sort": {"similarity_score": -1}}, # Usually redundant
+            # {"$limit": limit * 3 } # Redundant if $vectorSearch limit is well-tuned
+        ]
         
-        search_pipeline.append({"$sort": {primary_score_field: -1}}) 
-        search_pipeline.append({"$limit": limit * 3}) 
-
-        logger.debug(f"MongoDB Aggregation Pipeline for semantic search (SmartLibrary): {json.dumps(search_pipeline, indent=2)}")
+        logger.debug(f"MongoDB $vectorSearch Pipeline for semantic search (SmartLibrary): {json.dumps(search_pipeline, indent=2)}")
         
         candidate_docs = []
         try:
             candidate_docs_cursor = self.components_collection.aggregate(search_pipeline)
-            candidate_docs = await candidate_docs_cursor.to_list(length=None)
+            # The limit in $vectorSearch stage should fetch enough candidates.
+            # The to_list length here should match or be slightly more than the final desired limit.
+            candidate_docs = await candidate_docs_cursor.to_list(length=limit * 3) 
             
             if not candidate_docs: 
-                logger.warning(f"Vector search with index '{current_search_index_name}' returned no results. Falling back.")
+                logger.warning(f"Vector search with index '{current_atlas_search_index_name}' returned no results. Falling back.")
                 return await self._perform_fallback_search(
                     query, query_embedding_orig, task_embedding_for_fallback,
                     record_type, domain, limit, effective_task_weight, task_context
                 )
                 
         except pymongo.errors.OperationFailure as e: 
-            logger.error(f"MongoDB aggregation or vector search failed: {e}", exc_info=False) 
-            if "index not found" in str(e).lower() or "unknown search index" in str(e).lower() or "Invalid $search" in str(e).lower() or "Query should contain either operator or collector" in str(e).lower() :
-                 logger.error(f"CRITICAL: Atlas Vector Search index '{current_search_index_name}' likely missing, misconfigured, or $search stage is malformed. Details: {str(e)}")
+            logger.error(f"MongoDB $vectorSearch failed: {e}", exc_info=False) 
+            if "index not found" in str(e).lower() or "unknown search index" in str(e).lower() or "Invalid $vectorSearch" in str(e).lower():
+                 logger.error(f"CRITICAL: Atlas Vector Search index '{current_atlas_search_index_name}' likely missing or misconfigured. Details: {str(e)}. Query: {vs_stage_definition}")
             
             logger.info("Attempting fallback search due to vector search error...")
             return await self._perform_fallback_search(
@@ -362,7 +371,8 @@ class SmartLibrary:
         
         search_results_tuples = []
         for doc in candidate_docs:
-            raw_vector_score = doc.get(primary_score_field, 0.0)
+            # The primary score from $vectorSearch is in 'similarity_score'
+            raw_vector_score = doc.get("similarity_score", 0.0) 
             content_embedding_from_doc = doc.get("content_embedding", [])
             applicability_embedding_from_doc = doc.get("applicability_embedding", [])
 
@@ -370,30 +380,35 @@ class SmartLibrary:
             task_score = 0.0
 
             if task_context and task_embedding_for_fallback: 
+                # If task_context was used, raw_vector_score is based on applicability_embedding
                 task_score = raw_vector_score 
+                # Recalculate content_score based on original query and content_embedding
                 if query_embedding_orig and content_embedding_from_doc:
                     content_score = await self.compute_similarity(query_embedding_orig, content_embedding_from_doc)
-                else:
-                    content_score = 0.5 
+                else: # If content_embedding is missing or query_embedding_orig is missing
+                    content_score = 0.0 if content_embedding_from_doc else 0.5 # Penalize if no content embedding
             else: 
+                # If no task_context, raw_vector_score is based on content_embedding
                 content_score = raw_vector_score
+                # Recalculate task_score based on query_embedding_orig and applicability_embedding
                 if query_embedding_orig and applicability_embedding_from_doc: 
                     task_score = await self.compute_similarity(query_embedding_orig, applicability_embedding_from_doc)
-                else:
-                    task_score = 0.5 
+                else: # If applicability_embedding is missing
+                    task_score = 0.0 if applicability_embedding_from_doc else 0.5 # Penalize if no applicability embedding
 
             final_score = (effective_task_weight * task_score) + ((1.0 - effective_task_weight) * content_score)
             
             usage_count = doc.get("usage_count", 0)
             success_rate = doc.get("success_count", 0) / max(usage_count, 1) if usage_count > 0 else 0.0
-            boost = min(0.05, (usage_count / 200.0) * success_rate)
+            boost = min(0.05, (usage_count / 200.0) * success_rate) # Small boost for usage/success
             adjusted_score = min(1.0, final_score + boost)
 
             if adjusted_score >= threshold:
                 doc_copy = doc.copy()
+                # Remove embeddings from the copy returned to the user to save space
                 doc_copy.pop("content_embedding", None)
                 doc_copy.pop("applicability_embedding", None)
-                doc_copy.pop(primary_score_field, None) 
+                doc_copy.pop("similarity_score", None) # Remove the raw $vectorSearch score
                 search_results_tuples.append((doc_copy, adjusted_score, content_score, task_score))
         
         search_results_tuples.sort(key=lambda x: x[1], reverse=True)
@@ -411,7 +426,7 @@ class SmartLibrary:
                 "_id": 0, "id": 1, "name": 1, "record_type": 1, "domain": 1, 
                 "description": 1, "version": 1, "tags": 1, "metadata": 1,
                 "usage_count": 1, "success_count": 1, 
-                "content_embedding": 1, "applicability_embedding": 1, 
+                "content_embedding": 1, "applicability_embedding": 1, # Keep for scoring
                 "text_search_score": {"$meta": "textScore"} 
             }
             cursor = self.components_collection.find(
@@ -459,7 +474,7 @@ class SmartLibrary:
                 if regex_conditions:
                     fallback_query_filter["$or"] = regex_conditions + [{"tags": {"$in": query_terms}}]
             
-            projection = {
+            projection = { # Ensure embeddings are projected for scoring
                 "_id": 0, "id": 1, "name": 1, "record_type": 1, "domain": 1, 
                 "description": 1, "version": 1, "tags": 1, "metadata": 1,
                 "usage_count": 1, "success_count": 1, 
@@ -482,21 +497,21 @@ class SmartLibrary:
             content_embedding = doc.get("content_embedding", [])
             applicability_embedding = doc.get("applicability_embedding", [])
             
-            content_score = 0.5 
+            content_score = 0.5 # Default if no embedding
             if content_embedding and query_embedding_orig:
                 content_score = await self.compute_similarity(query_embedding_orig, content_embedding)
             
-            task_score = 0.5  
+            task_score = 0.5  # Default if no embedding
             if applicability_embedding:
                 embedding_for_task_calc = task_embedding if task_context and task_embedding else query_embedding_orig
                 if embedding_for_task_calc:
                     task_score = await self.compute_similarity(embedding_for_task_calc, applicability_embedding)
             
-            text_search_score = doc.get("text_search_score", 0.0) 
+            text_search_score = doc.get("text_search_score", 0.0) # From _try_text_search
             combined_semantic_score = (effective_task_weight * task_score) + ((1.0 - effective_task_weight) * content_score)
             
             final_score = combined_semantic_score
-            if text_search_score > 0.5: 
+            if text_search_score > 0.5: # If text search provided a good score, blend it
                 final_score = (final_score * 0.7) + (text_search_score * 0.3) 
 
             usage_count = doc.get("usage_count", 0)
@@ -543,14 +558,14 @@ class SmartLibrary:
             "id": record_id, "name": name, "record_type": record_type, "domain": domain,
             "description": description, "code_snippet": code_snippet, "version": version,
             "usage_count": 0, "success_count": 0, "fail_count": 0, "status": status,
-            "created_at": current_time_dt, 
-            "last_updated": current_time_dt, 
+            "created_at": current_time_dt, # Store as datetime object
+            "last_updated": current_time_dt, # Store as datetime object
             "tags": tags or [], 
             "metadata": {**(metadata or {}), "applicability_text": applicability_text},
             "content_embedding": content_embedding, 
             "applicability_embedding": applicability_embedding
         }
-        await self.save_record(record)
+        await self.save_record(record) # save_record will handle datetime conversion if necessary
         logger.info(f"Created new {record_type} record '{name}' (ID: {record_id}) in MongoDB.")
         return record
 
@@ -614,14 +629,14 @@ class SmartLibrary:
             "id": str(uuid.uuid4()), "name": parent["name"], "record_type": parent["record_type"],
             "domain": parent["domain"], "description": evolved_desc, "code_snippet": new_code_snippet,
             "version": evolved_version_str, "usage_count": 0, "success_count": 0, "fail_count": 0, "status": status,
-            "created_at": current_time_dt, 
-            "last_updated": current_time_dt,
+            "created_at": current_time_dt, # Store as datetime object
+            "last_updated": current_time_dt, # Store as datetime object
             "parent_id": parent_id, "tags": parent.get("tags", []).copy(),
             "metadata": evolved_metadata, 
             "content_embedding": new_content_embedding,
             "applicability_embedding": new_applicability_embedding
         }
-        await self.save_record(evolved_record)
+        await self.save_record(evolved_record) # save_record handles datetime
         logger.info(f"Evolved record {parent['name']} to {evolved_version_str} (ID: {evolved_record['id']}).")
         return evolved_record
 
@@ -667,11 +682,17 @@ class SmartLibrary:
                 content_embedding = [0.0] * DEFAULT_EMBEDDING_DIMENSION
                 applicability_embedding = [0.0] * DEFAULT_EMBEDDING_DIMENSION
             
+            # Ensure datetime fields are actual datetime objects for MongoDB
+            created_at = r_dict.get("created_at", now_dt)
+            if isinstance(created_at, str): created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            
+            last_updated = now_dt # Always set last_updated to now for bulk import/update
+
             full_rec = {
                 **r_dict,
                 "id":record_id,
-                "created_at": r_dict.get("created_at", now_dt),
-                "last_updated": now_dt,
+                "created_at": created_at,
+                "last_updated": last_updated,
                 "status": r_dict.get("status", "active"),
                 "metadata": {**(r_dict.get("metadata", {})), "applicability_text": applicability_text},
                 "content_embedding": content_embedding,
@@ -701,8 +722,26 @@ class SmartLibrary:
         query: Dict[str, Any] = {}
         if record_type: query["record_type"] = record_type
         if domain: query["domain"] = domain
+        # Exclude embeddings from export by default
         cursor = self.components_collection.find(query, {"_id": 0, "content_embedding": 0, "applicability_embedding": 0})
-        return await cursor.to_list(length=None)
+        
+        exported_records = []
+        async for doc in cursor:
+            # Convert datetime objects to ISO strings for JSON compatibility if needed by caller
+            if isinstance(doc.get("created_at"), datetime):
+                doc["created_at"] = doc["created_at"].isoformat()
+            if isinstance(doc.get("last_updated"), datetime):
+                doc["last_updated"] = doc["last_updated"].isoformat()
+            if isinstance(doc.get("metadata", {}).get("evolved_at"), datetime):
+                doc["metadata"]["evolved_at"] = doc["metadata"]["evolved_at"].isoformat()
+            if isinstance(doc.get("metadata", {}).get("creation_strategy", {}).get("timestamp"), datetime):
+                 doc["metadata"]["creation_strategy"]["timestamp"] = doc["metadata"]["creation_strategy"]["timestamp"].isoformat()
+            if isinstance(doc.get("metadata", {}).get("domain_adaptation", {}).get("adaptation_timestamp"), datetime):
+                 doc["metadata"]["domain_adaptation"]["adaptation_timestamp"] = doc["metadata"]["domain_adaptation"]["adaptation_timestamp"].isoformat()
+
+            exported_records.append(doc)
+        return exported_records
+
 
     async def clear_cache(self, older_than: Optional[int] = None) -> int:
         if not self.llm_service or not hasattr(self.llm_service, 'cache') or not self.llm_service.cache:

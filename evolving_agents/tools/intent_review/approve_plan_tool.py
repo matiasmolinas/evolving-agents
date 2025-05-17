@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timezone # Use timezone-aware datetimes
 import logging
 from typing import Dict, Any, List, Optional
+import re # Added for robust JSON extraction in _agent_review_plan
 
 from pydantic import BaseModel, Field
 import pymongo # For pymongo constants
@@ -21,8 +22,8 @@ from evolving_agents.core.llm_service import LLMService
 from evolving_agents.core.intent_review import IntentPlan, PlanStatus, IntentStatus # Import data classes
 from evolving_agents.core.mongodb_client import MongoDBClient # For DB interaction
 from evolving_agents.core.dependency_container import DependencyContainer # For resolving MongoDBClient
-# Using safe_json_dumps from process_workflow_tool for consistency
-from evolving_agents.workflow.process_workflow_tool import safe_json_dumps
+# Using safe_json_dumps from the new utils location
+from evolving_agents.utils.json_utils import safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -156,19 +157,19 @@ class ApprovePlanTool(Tool[ApprovePlanInput, None, StringToolOutput]):
         if tool_input.use_agent_reviewer and self.llm_service:
             # _agent_review_plan now works with the IntentPlan object
             agent_review_output_str = await self._agent_review_plan(modified_plan_for_saving, tool_input.agent_prompt)
-            review_decision = json.loads(agent_review_output_str.get_text_content())
+            review_decision = json.loads(agent_review_output_str.get_text_content()) # Assuming AI returns valid JSON
             # If AI review modifies the plan (e.g., adds comments to intents), it should update `modified_plan_for_saving`
             # For now, assume _agent_review_plan doesn't modify the plan object, only returns decision.
         elif tool_input.interactive_mode:
             interactive_output_str = await self._interactive_review_plan(modified_plan_for_saving)
             review_decision = json.loads(interactive_output_str.get_text_content())
-            if review_decision.get("status") == "approved" and "approved_plan" in review_decision:
+            if review_decision.get("status") == PlanStatus.APPROVED.value and "approved_plan" in review_decision:
                 # The interactive review might have modified the plan (e.g. statuses)
                 modified_plan_for_saving = IntentPlan.from_dict(review_decision["approved_plan"])
         else: # CLI mode
             cli_output_str = await self._cli_review_plan(modified_plan_for_saving)
             review_decision = json.loads(cli_output_str.get_text_content())
-            if review_decision.get("status") == "approved" and "approved_plan" in review_decision:
+            if review_decision.get("status") == PlanStatus.APPROVED.value and "approved_plan" in review_decision:
                 modified_plan_for_saving = IntentPlan.from_dict(review_decision["approved_plan"])
 
         # --- Update IntentPlan Object and Persist to MongoDB ---
@@ -179,17 +180,17 @@ class ApprovePlanTool(Tool[ApprovePlanInput, None, StringToolOutput]):
             modified_plan_for_saving.reviewer_comments = review_decision.get("comments", modified_plan_for_saving.reviewer_comments)
             modified_plan_for_saving.review_timestamp = datetime.now(timezone.utc).isoformat()
             # Mark all intents as approved if the plan is approved (unless per-intent review is implemented)
-            for intent in modified_plan_for_saving.intents:
-                intent.status = IntentStatus.APPROVED # Or PENDING if execution is separate
-                intent.review_comments = review_decision.get("comments", "") # Propagate plan comments to intents
+            for intent_item in modified_plan_for_saving.intents: # Renamed intent to intent_item
+                intent_item.status = IntentStatus.APPROVED # Or PENDING if execution is separate
+                intent_item.review_comments = review_decision.get("comments", "") # Propagate plan comments to intents
 
         elif final_status_str == PlanStatus.REJECTED.value:
             modified_plan_for_saving.status = PlanStatus.REJECTED
             modified_plan_for_saving.rejection_reason = review_decision.get("reason", "No reason provided.")
             modified_plan_for_saving.review_timestamp = datetime.now(timezone.utc).isoformat()
-            for intent in modified_plan_for_saving.intents:
-                intent.status = IntentStatus.REJECTED
-                intent.review_comments = review_decision.get("reason", "Plan rejected")
+            for intent_item in modified_plan_for_saving.intents: # Renamed intent to intent_item
+                intent_item.status = IntentStatus.REJECTED
+                intent_item.review_comments = review_decision.get("reason", "Plan rejected")
 
 
         # Persist updated plan to MongoDB if approved or rejected
@@ -213,12 +214,12 @@ class ApprovePlanTool(Tool[ApprovePlanInput, None, StringToolOutput]):
 
         # Optional: Save a copy to file if output_path is provided (for audit/debug)
         if tool_input.output_path:
-            # ... (file saving logic as before, using modified_plan_for_saving.to_dict()) ...
             output_dir = os.path.dirname(tool_input.output_path)
             if output_dir and not os.path.exists(output_dir): os.makedirs(output_dir, exist_ok=True)
             try:
+                # Use safe_json_dumps for file output too, for consistency
                 with open(tool_input.output_path, 'w') as f:
-                    json.dump(modified_plan_for_saving.to_dict(), f, indent=2, default=str) # Use default=str for any lingering non-serializables
+                    f.write(safe_json_dumps(modified_plan_for_saving.to_dict()))
                 logger.info(f"Reviewed intent plan copy saved to {tool_input.output_path}")
             except Exception as e:
                  logger.error(f"Failed to save reviewed intent plan copy to {tool_input.output_path}: {e}")
@@ -242,7 +243,7 @@ class ApprovePlanTool(Tool[ApprovePlanInput, None, StringToolOutput]):
 
         IntentPlan Details:
         ```json
-        {json.dumps(plan_dict_for_prompt, indent=2)}
+        {safe_json_dumps(plan_dict_for_prompt)}
         ```
 
         Review Criteria:
@@ -300,7 +301,7 @@ class ApprovePlanTool(Tool[ApprovePlanInput, None, StringToolOutput]):
 
         for i, intent_obj in enumerate(intent_plan_obj.intents, 1):
             print(f"\n{i}. [{intent_obj.step_type}] {intent_obj.component_name}.{intent_obj.action}")
-            if intent_obj.params: print(f"   Parameters: {json.dumps(intent_obj.params, indent=6, default=str)}")
+            if intent_obj.params: print(f"   Parameters: {safe_json_dumps(intent_obj.params, indent=6)}") # Use safe_json_dumps
             print(f"   Justification: {intent_obj.justification}")
             if intent_obj.depends_on: print(f"   Depends on: {', '.join(intent_obj.depends_on)}")
 
