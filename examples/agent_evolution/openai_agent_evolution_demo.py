@@ -26,7 +26,7 @@ from evolving_agents.core.dependency_container import DependencyContainer
 from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.core.mongodb_client import MongoDBClient
 from evolving_agents import config as eat_config
-from evolving_agents.utils.json_utils import safe_json_dumps
+from evolving_agents.utils.json_utils import safe_json_dumps 
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -94,32 +94,50 @@ TERMINATION:
 Either party may terminate with 30 days written notice.
 """
 
-# --- extract_component_id (can be simplified if we don't rely on it for create/evolve) ---
-def extract_component_id_from_search(response_text: str) -> Optional[str]:
-    """Extracts a component ID primarily from SearchComponentTool's JSON output."""
+def extract_id_from_json_text(response_text: str, key_to_find: str = "id") -> Optional[str]:
     if not response_text: return None
     try:
-        json_match = re.search(r"(\{.*\})", response_text, re.DOTALL)
+        json_match = re.search(r"(\{.*\})", response_text, re.DOTALL) 
         if json_match:
             json_str = json_match.group(1)
             data = json.loads(json_str)
-            if isinstance(data, dict) and "results" in data and isinstance(data["results"], list) and data["results"]:
-                if isinstance(data["results"][0], dict) and "id" in data["results"][0]:
-                    return data["results"][0].get("id")
-    except Exception:
-        pass # Fallback to general regex if specific search structure fails
+            if isinstance(data, dict):
+                # Direct key checks
+                if key_to_find in data and isinstance(data[key_to_find], str): return data[key_to_find]
+                for k_var in ["record_id", "evolved_id", "plan_id", "id"]: 
+                    if k_var == key_to_find: continue 
+                    if k_var in data and isinstance(data[k_var], str): return data[k_var]
+                
+                # Nested key checks
+                for nested_key in ["record", "evolved_record", "saved_record", "component", "agent", "tool", "evolved_agent", "created_agent"]:
+                     if nested_key in data and isinstance(data[nested_key], dict):
+                        target_dict = data[nested_key]
+                        if key_to_find in target_dict and isinstance(target_dict[key_to_find], str): return target_dict[key_to_find]
+                        if "id" in target_dict and isinstance(target_dict["id"], str): return target_dict["id"]
+                
+                if "results" in data and isinstance(data["results"], list) and data["results"]:
+                    if isinstance(data["results"][0], dict):
+                        first_result = data["results"][0]
+                        if key_to_find in first_result: return first_result.get(key_to_find)
+                        if "id" in first_result: return first_result.get("id") 
+    except Exception: pass
     
-    # Fallback regex for general ID patterns if needed
-    patterns = [
+    patterns = [ rf'"{key_to_find}":\s*"([^"]+)"' ]
+    if key_to_find not in ["id", "record_id", "evolved_id"]: 
+        patterns.extend([rf'"record_id":\s*"([^"]+)"', rf'"evolved_id":\s*"([^"]+)"', rf'"id":\s*"([^"]+)"'])
+    
+    patterns.extend([
         r'ID:\s*([a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}|[a-fA-F0-9]{24}|[a-zA-Z0-9_.\-]+)',
         r'([a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12})',
-    ]
+    ])
     for pattern in patterns:
         match = re.search(pattern, response_text)
         if match and match.group(1):
             extracted_id = match.group(1).strip()
             if len(extracted_id) > 5 and not extracted_id.lower().startswith("http"):
+                logger.info(f"Regex extracted ID '{extracted_id}' for key '{key_to_find}' using pattern: {pattern}")
                 return extracted_id
+    logger.warning(f"Could not extract ID for key '{key_to_find}' from SystemAgent response: {response_text[:200]}...")
     return None
 
 
@@ -136,10 +154,8 @@ async def use_llm_for_analysis(llm_service: LLMService, text: str, analysis_type
     result = await llm_service.generate(prompt)
     return result
 
-async def text_analysis_demo(llm_service: LLMService, system_agent: Any, library: SmartLibrary): # Added library
-    print("\n" + "-"*80)
-    print("TEXT ANALYSIS DEMO: LLM SERVICE VS HARDCODED LOGIC")
-    print("-"*80)
+async def text_analysis_demo(llm_service: LLMService, system_agent: Any, library: SmartLibrary):
+    print("\n" + "-"*80 + "\nTEXT ANALYSIS DEMO: LLM SERVICE VS HARDCODED LOGIC\n" + "-"*80)
     
     print("\nAnalyzing invoice using LLM service...")
     start_time = time.time()
@@ -148,31 +164,30 @@ async def text_analysis_demo(llm_service: LLMService, system_agent: Any, library
     
     print("\nAnalyzing invoice using hardcoded regex logic...")
     start_time = time.time()
-    hardcoded_analysis = {} # ... (regex logic remains the same)
-    invoice_match = re.search(r'INVOICE #(\d+)', SAMPLE_INVOICE)
+    hardcoded_analysis = {} 
+    invoice_match = re.search(r'INVOICE #(\d+)', SAMPLE_INVOICE); 
     if invoice_match: hardcoded_analysis["invoice_number"] = invoice_match.group(1)
-    date_match = re.search(r'Date: ([\d-]+)', SAMPLE_INVOICE)
+    date_match = re.search(r'Date: ([\d-]+)', SAMPLE_INVOICE); 
     if date_match: hardcoded_analysis["date"] = date_match.group(1)
-    vendor_match = re.search(r'Vendor: ([^\n]+)', SAMPLE_INVOICE)
+    vendor_match = re.search(r'Vendor: ([^\n]+)', SAMPLE_INVOICE); 
     if vendor_match: hardcoded_analysis["vendor"] = vendor_match.group(1)
-    subtotal_match = re.search(r'Subtotal: \$([0-9,.]+)', SAMPLE_INVOICE)
+    subtotal_match = re.search(r'Subtotal: \$([0-9,.]+)', SAMPLE_INVOICE); 
     if subtotal_match: hardcoded_analysis["subtotal"] = subtotal_match.group(1)
-    tax_match = re.search(r'Tax [^:]+: \$([0-9,.]+)', SAMPLE_INVOICE)
+    tax_match = re.search(r'Tax [^:]+: \$([0-9,.]+)', SAMPLE_INVOICE); 
     if tax_match: hardcoded_analysis["tax"] = tax_match.group(1)
-    total_match = re.search(r'Total Due: \$([0-9,.]+)', SAMPLE_INVOICE)
+    total_match = re.search(r'Total Due: \$([0-9,.]+)', SAMPLE_INVOICE); 
     if total_match: hardcoded_analysis["total"] = total_match.group(1)
     hardcoded_time = time.time() - start_time
     
     print("\nAnalyzing invoice using System Agent with SmartLibrary tools...")
     start_time = time.time()
-    # Define the name of the tool we expect the SystemAgent to create if needed
     demo_invoice_tool_name = "DemoInvoiceProcessorTool_OpenAI_TextDemo" 
     system_prompt = f"""
     Your task is to analyze an invoice.
     1. Use the 'SearchComponentTool' with the query "invoice processing" to find components in the SmartLibrary.
     2. If suitable components are found, use the best one to process the invoice below.
     3. If no suitable component is found, use the 'CreateComponentTool' to create a new TOOL named "{demo_invoice_tool_name}" in the "finance" domain, framework "openai-agents". It should extract invoice number, date, vendor, items (name, price, quantity, total), subtotal, tax, and total_due. 
-       IMPORTANT: If CreateComponentTool is used, your final response for THAT STEP should be ONLY its raw JSON output.
+       After calling CreateComponentTool, your response MUST be the exact JSON output from that tool.
     4. After ensuring a tool exists (either found or created), use it to process the invoice.
     
     Invoice to process:
@@ -185,16 +200,19 @@ async def text_analysis_demo(llm_service: LLMService, system_agent: Any, library
     system_response_text = system_response_message.result.text if hasattr(system_response_message, 'result') and hasattr(system_response_message.result, 'text') else str(system_response_message)
     system_time = time.time() - start_time
     
-    # Check if the demo tool was created by the SystemAgent
+    await asyncio.sleep(1) 
     created_tool_record = await library.find_record_by_name(demo_invoice_tool_name, "TOOL")
     if created_tool_record:
-        print(f"✓ SystemAgent created '{demo_invoice_tool_name}' with ID: {created_tool_record['id']}")
+        print(f"✓ SystemAgent created or confirmed existence of '{demo_invoice_tool_name}' with ID: {created_tool_record['id']}")
+    else:
+        print(f"✗ Could not verify creation of '{demo_invoice_tool_name}' in library by name after SystemAgent run. SystemAgent response: {system_response_text[:200]}...")
+
     
     print("\n" + "-"*30 + "\nANALYSIS COMPARISON\n" + "-"*30)
     print(f"\n1. LLM Analysis (took {llm_time:.2f}s):\n{llm_invoice_analysis[:500] + '...' if len(llm_invoice_analysis) > 500 else llm_invoice_analysis}")
     print(f"\n2. Hardcoded Regex Analysis (took {hardcoded_time:.2f}s):\n{json.dumps(hardcoded_analysis, indent=2)}")
     print(f"\n3. System Agent Analysis (took {system_time:.2f}s):\n{system_response_text[:500] + '...' if len(system_response_text) > 500 else system_response_text}")
-    print("\n" + "-"*30 + "\nCOMPARISON INSIGHTS\n" + "-"*30) # ... (insights remain the same)
+    print("\n" + "-"*30 + "\nCOMPARISON INSIGHTS\n" + "-"*30)
     print(f"""
     PERFORMANCE COMPARISON:
     - Hardcoded Regex: {hardcoded_time:.2f}s (fastest, but most limited)
@@ -219,32 +237,32 @@ async def demonstrate_system_agent_tools(system_agent: Any, library: SmartLibrar
     The query should be "invoice processing".
     Return all matching components with their similarity scores.
     If no components are found, indicate that clearly.
-    IMPORTANT: Your final response should be ONLY the raw JSON output from the SearchComponentTool.
+    Your final response for this step should be ONLY the raw JSON output from the SearchComponentTool.
     """
     print("\nSearching for invoice processing components...")
     search_response_message = await system_agent.run(search_prompt)
     search_response_text = search_response_message.result.text if hasattr(search_response_message, 'result') and hasattr(search_response_message.result, 'text') else str(search_response_message)
     print("\nSearch results from SystemAgent:")
     print(search_response_text) 
-    # The demo doesn't need to extract an ID from this search result, just observe.
     
     print("\n2. DEMONSTRATING CREATE COMPONENT TOOL")
     created_component_name = "AdvancedInvoiceExtractor_OpenAI_Demo"
+    # Make this prompt extremely focused on JUST the creation task.
     create_prompt = f"""
-    Use your CreateComponentTool to create a new component called "{created_component_name}" 
-    in the SmartLibrary.
-    Component details:
-    - record_type: TOOL
-    - domain: finance
-    - framework: openai-agents
-    - description: OpenAI Tool to extract detailed invoice info, including line items, and validate calculations.
-    - requirements: Must extract invoice number, date, vendor, line items (name, price, quantity, total for each), subtotal, tax, and total_due. Must validate subtotal + tax = total_due. Output should be clean JSON. Code should be suitable for OpenAI Agents SDK.
-    IMPORTANT: Your final response for this creation step MUST be ONLY the raw JSON output from the CreateComponentTool.
+    Your SOLE task is to use your CreateComponentTool to create a new component with the following exact specifications:
+    Name: "{created_component_name}"
+    Record Type: TOOL
+    Domain: finance
+    Framework: openai-agents
+    Description: OpenAI Tool to extract detailed invoice info, including line items, and validate calculations.
+    Requirements: Must extract invoice number, date, vendor, line items (name, price, quantity, total for each), subtotal, tax, and total_due. Must validate subtotal + tax = total_due. Output should be clean JSON. Code should be suitable for OpenAI Agents SDK.
+    
+    Your final response for this entire interaction MUST be ONLY the raw JSON output that the CreateComponentTool itself returns. This JSON will contain the 'record_id'. Do not add any surrounding text, explanation, or summary.
     """
     print(f"\nCreating a new component: {created_component_name}...")
     create_response_message = await system_agent.run(create_prompt)
     create_response_text = create_response_message.result.text if hasattr(create_response_message, 'result') and hasattr(create_response_message.result, 'text') else str(create_response_message)
-    print("\nComponent creation response from SystemAgent:")
+    print("\nComponent creation response from SystemAgent (should be direct JSON from CreateComponentTool):")
     print(create_response_text)
     
     await asyncio.sleep(2) 
@@ -252,68 +270,81 @@ async def demonstrate_system_agent_tools(system_agent: Any, library: SmartLibrar
     advanced_invoice_extractor_id = None
     if created_record:
         advanced_invoice_extractor_id = created_record["id"]
-        print(f"✓ Verified: {created_component_name} created in library with ID: {advanced_invoice_extractor_id}")
+        print(f"✓ Verified: {created_component_name} found in library with ID: {advanced_invoice_extractor_id}")
     else:
-        # Try extracting from text as a fallback, though less reliable
-        extracted_id = extract_component_id_from_search(create_response_text) # Using the search-specific extractor for its JSON focus
-        if extracted_id:
-            advanced_invoice_extractor_id = extracted_id
-            print(f"✓ Note: Extracted created ID from SystemAgent's text response: {advanced_invoice_extractor_id} (direct library verification preferred).")
+        # Try to extract from the SystemAgent's text if direct find failed
+        extracted_id_from_text = extract_id_from_json_text(create_response_text, "record_id")
+        if extracted_id_from_text:
+            advanced_invoice_extractor_id = extracted_id_from_text
+            # Optionally, try to verify this extracted ID against the library
+            record_by_extracted_id = await library.find_record_by_id(extracted_id_from_text)
+            if record_by_extracted_id and record_by_extracted_id.get("name") == created_component_name:
+                 print(f"✓ Verified: {created_component_name} found in library using ID extracted from SystemAgent's response: {advanced_invoice_extractor_id}")
+            else:
+                print(f"✓ Note: Extracted ID '{advanced_invoice_extractor_id}' from SystemAgent response for '{created_component_name}', but could not definitively match it in library by this ID and name.")
         else:
-            print(f"✗ Verification failed: Could not find {created_component_name} in library or extract ID from SystemAgent response.")
+            print(f"✗ Verification failed: Could not find '{created_component_name}' in library by name, and could not extract its ID from SystemAgent's response.")
 
 
-    component_name_to_evolve = "InvoiceProcessor_V1" # This is an AGENT
+    component_name_to_evolve = "InvoiceProcessor_V1" 
     initial_invoice_processor_record = await library.find_record_by_name(component_name_to_evolve, "AGENT")
     
     if initial_invoice_processor_record:
         initial_invoice_processor_id = initial_invoice_processor_record["id"]
         evolved_component_name = f"{component_name_to_evolve}_Evolved_OpenAI_Demo"
         print(f"\n3. DEMONSTRATING EVOLVE COMPONENT TOOL (evolving AGENT {component_name_to_evolve} ID: {initial_invoice_processor_id})")
+        # Make this prompt extremely focused on JUST the evolution task.
         evolve_prompt = f"""
-        Use your EvolveComponentTool to evolve the AGENT component with ID "{initial_invoice_processor_id}"
-        into a new version named "{evolved_component_name}".
+        Your SOLE task is to use your EvolveComponentTool to evolve the AGENT component with ID "{initial_invoice_processor_id}"
+        into a new version specifically named "{evolved_component_name}".
         Changes needed:
         - Better structured JSON output for its processing results.
         - Validation of calculations (subtotal + tax = total) within its logic.
         - Detection of due dates and payment terms.
         - Improved error handling.
         - Ensure it remains compatible with OpenAI Agents SDK.
-        IMPORTANT: Your final response for this evolution step MUST be ONLY the raw JSON output from the EvolveComponentTool.
+        
+        Your final response for this entire interaction MUST be ONLY the raw JSON output that the EvolveComponentTool itself returns. This JSON will contain the 'evolved_id'. Do not add any surrounding text, explanation, or summary.
         """
         print(f"\nEvolving {component_name_to_evolve}...")
         evolve_response_message = await system_agent.run(evolve_prompt)
         evolve_response_text = evolve_response_message.result.text if hasattr(evolve_response_message, 'result') and hasattr(evolve_response_message.result, 'text') else str(evolve_response_message)
-        print("\nComponent evolution response from SystemAgent:")
+        print("\nComponent evolution response from SystemAgent (should be direct JSON from EvolveComponentTool):")
         print(evolve_response_text)
 
         await asyncio.sleep(2) 
-        evolved_records = await library.components_collection.find({"parent_id": initial_invoice_processor_id, "name": evolved_component_name}).sort("created_at", -1).to_list(length=1)
-        evolved_invoice_processor_id = None
-        if evolved_records:
-            evolved_invoice_processor_id = evolved_records[0]["id"]
-            print(f"✓ Verified: {component_name_to_evolve} evolved in library. New component ID: {evolved_invoice_processor_id}, Name: {evolved_records[0]['name']}")
+        # Primary verification: find by new name and parent_id
+        evolved_records_by_parent_and_name = await library.components_collection.find({"parent_id": initial_invoice_processor_id, "name": evolved_component_name}).sort("created_at", -1).to_list(length=1)
+        evolved_invoice_processor_id = None 
+        if evolved_records_by_parent_and_name:
+            evolved_invoice_processor_id = evolved_records_by_parent_and_name[0]["id"]
+            print(f"✓ Verified: {component_name_to_evolve} evolved in library. New component ID: {evolved_invoice_processor_id}, Name: {evolved_records_by_parent_and_name[0]['name']}")
         else:
-            extracted_evolved_id = extract_component_id_from_search(evolve_response_text) # Using the search-specific extractor for its JSON focus
-            if extracted_evolved_id:
-                 evolved_invoice_processor_id = extracted_evolved_id
-                 print(f"✓ Note: Extracted evolved ID from SystemAgent's text response: {evolved_invoice_processor_id} (direct library verification preferred).")
+            # Fallback: Try finding by just the new name
+            evolved_record_by_name = await library.find_record_by_name(evolved_component_name, "AGENT")
+            if evolved_record_by_name and evolved_record_by_name.get("parent_id") == initial_invoice_processor_id :
+                evolved_invoice_processor_id = evolved_record_by_name["id"]
+                print(f"✓ Verified (by name): {component_name_to_evolve} evolved. New component ID: {evolved_invoice_processor_id}, Name: {evolved_record_by_name['name']}")
             else:
-                print(f"✗ Verification failed: Could not find evolved version of {component_name_to_evolve} in library or extract ID.")
+                print(f"✗ Verification failed: Could not find evolved version of '{component_name_to_evolve}' named '{evolved_component_name}' in library. SystemAgent might not have completed the EvolveComponentTool call successfully or named it differently.")
     else:
-        print(f"\n3. SKIPPING EVOLVE COMPONENT TOOL (component {component_name_to_evolve} not found)")
+        print(f"\n3. SKIPPING EVOLVE COMPONENT TOOL (initial component {component_name_to_evolve} not found)")
     
     print("\n4. USING SYSTEM AGENT WITH LIBRARY COMPONENTS")
+    # Use names that should exist based on successful prior steps or setup
+    created_tool_name_for_process = created_component_name # Name from create step
+    evolved_agent_name_for_process = evolved_component_name if initial_invoice_processor_record else "InvoiceProcessor_V1"
+
     process_prompt = f"""
     Use the best available component in the SmartLibrary to process this invoice:
     ```
     {SAMPLE_INVOICE}
     ```
-    First, use SearchComponentTool to find appropriate invoice processing components (prefer OpenAI agents if available).
-    Then, use the most suitable one. Consider "{evolved_component_name if initial_invoice_processor_record else 'InvoiceProcessor_V1'}" or "{created_component_name if advanced_invoice_extractor_id else 'AdvancedInvoiceExtractor_OpenAI_Demo'}".
+    First, use SearchComponentTool to find appropriate invoice processing components (prefer OpenAI agents like "InvoiceProcessor_V1" or its evolution "{evolved_agent_name_for_process}").
+    Then, use the most suitable one. If a tool like "{created_tool_name_for_process}" was created and is suitable, consider it.
     Extract all information.
-    If no suitable component exists, use CreateComponentTool to create one (prefer OpenAI framework), then use it.
-    IMPORTANT: If you use CreateComponentTool or EvolveComponentTool, your final response is ONLY its raw JSON output. For execution, provide a summary.
+    If no suitable component is found after searching, use CreateComponentTool to create one (prefer OpenAI framework for an AGENT named "FallbackInvoiceAgent_OpenAI_Demo"), then use it.
+    If you use CreateComponentTool or EvolveComponentTool as the primary action of your response, your final response for that step is ONLY its raw JSON output. For execution of a processing component, provide a summary of the extracted invoice data.
     """
     print("\nProcessing invoice using SmartLibrary components...")
     process_response_message = await system_agent.run(process_prompt)
@@ -328,7 +359,8 @@ async def setup_evolution_demo_library(library: SmartLibrary):
         "InvoiceProcessor_V1", "InvoiceProcessor_V1_Evolved_OpenAI_Demo", 
         "AdvancedInvoiceExtractor_OpenAI_Demo", "BasicInvoiceParser", 
         "SimpleContractAnalyzer", "MedicalRecordProcessor_OpenAI_Demo",
-        "DemoInvoiceProcessorTool_OpenAI_TextDemo" # from text_analysis_demo
+        "DemoInvoiceProcessorTool_OpenAI_TextDemo", 
+        "FallbackInvoiceAgent_OpenAI_Demo" 
     ]
     delete_count = 0
     if library.components_collection is not None:
@@ -343,7 +375,7 @@ async def setup_evolution_demo_library(library: SmartLibrary):
     await library.create_record(
         name="InvoiceProcessor_V1", record_type="AGENT", domain="finance",
         description="OpenAI agent for processing invoice documents",
-        code_snippet="""from agents import Agent, Runner, ModelSettings\nagent = Agent(name="InvoiceProcessor", instructions='Extract key invoice details from the provided text. Focus on invoice number, date, vendor, items with quantities and prices, subtotal, tax, and total due. Format as structured JSON.', model="gpt-4o-mini")\nasync def p(t): return await Runner.run(agent, input=t)""",
+        code_snippet="""from agents import Agent, Runner, ModelSettings\nagent = Agent(name="InvoiceProcessor", instructions='Extract key invoice details from the provided text. Focus on invoice number, date, vendor, items with quantities and prices, subtotal, tax, and total due. Format as structured JSON.', model="gpt-4o-mini")\nasync def p(t): result = await Runner.run(agent, input=t); return result.final_output""",
         metadata={"framework": "openai-agents", "model": "gpt-4o-mini"}, tags=["openai", "invoice", "finance"]
     )
     print("✓ Created initial InvoiceProcessor_V1 agent")
@@ -367,7 +399,7 @@ async def setup_evolution_demo_library(library: SmartLibrary):
 
 
 class AgentExperienceTracker:
-    def __init__(self, storage_path="openai_agent_experiences.json"):
+    def __init__(self, storage_path="openai_agent_experiences.json"): 
         self.storage_path = storage_path
         self.experiences: Dict[str, Dict[str, Any]] = {}
         self._load_experiences()
@@ -375,18 +407,16 @@ class AgentExperienceTracker:
     def _load_experiences(self):
         try:
             if os.path.exists(self.storage_path):
-                with open(self.storage_path, 'r') as f:
-                    self.experiences = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError): self.experiences = {}
-        except Exception as e: logger.error(f"Error loading experiences: {e}"); self.experiences = {}
+                with open(self.storage_path, 'r') as f: self.experiences = json.load(f)
+        except Exception: self.experiences = {}
 
     def _save_experiences(self):
         try:
             with open(self.storage_path, 'w') as f: json.dump(self.experiences, f, indent=2)
         except Exception as e: logger.error(f"Error saving experiences: {e}")
 
-    def record_invocation(self, agent_id: str, agent_name: str, domain: str, input_text: str, success: bool, response_time: float):
-        if not agent_id: return
+    def record_invocation(self, agent_id: Optional[str], agent_name: str, domain: str, input_text: str, success: bool, response_time: float):
+        if not agent_id: logger.warning(f"Cannot record invocation for agent '{agent_name}' without an ID."); return
         if agent_id not in self.experiences:
             self.experiences[agent_id] = {"name": agent_name, "total_invocations": 0, "successful_invocations": 0, "domains": {}, "inputs": [], "evolutions": []}
         exp = self.experiences[agent_id]
@@ -399,14 +429,17 @@ class AgentExperienceTracker:
         exp["inputs"] = exp["inputs"][-10:]
         self._save_experiences()
     
-    def record_evolution(self, agent_id: str, new_agent_id: str, evolution_type: str, changes: Dict[str, Any]):
-        if not agent_id or not new_agent_id: return
-        if agent_id not in self.experiences: self.record_invocation(agent_id, f"Original_of_{new_agent_id}", "unknown", "evolution_placeholder", True, 0)
-        if "evolutions" not in self.experiences[agent_id]: self.experiences[agent_id]["evolutions"] = []
+    def record_evolution(self, agent_id: Optional[str], new_agent_id: Optional[str], evolution_type: str, changes: Dict[str, Any]):
+        if not agent_id or not new_agent_id: logger.warning(f"Cannot record evolution without original and new agent IDs. Orig: {agent_id}, New: {new_agent_id}"); return
+        if agent_id not in self.experiences: 
+             self.experiences[agent_id] = {"name": f"Original_of_{new_agent_id}", "total_invocations": 0, "successful_invocations": 0, "domains": {}, "inputs": [], "evolutions": []}
+        elif "evolutions" not in self.experiences[agent_id]: 
+            self.experiences[agent_id]["evolutions"] = []
+            
         self.experiences[agent_id]["evolutions"].append({"new_agent_id": new_agent_id, "evolution_type": evolution_type, "changes": changes, "timestamp": time.time()})
         self._save_experiences()
     
-    def get_agent_experience(self, agent_id: str) -> Dict[str, Any]:
+    def get_agent_experience(self, agent_id: Optional[str]) -> Dict[str, Any]:
         if not agent_id: return {}
         return self.experiences.get(agent_id, {})
 
@@ -463,97 +496,82 @@ async def main():
         if initial_agent_id: print(f"✓ Found InvoiceProcessor_V1 ID: {initial_agent_id}")
         else: logger.error("CRITICAL: InvoiceProcessor_V1 not found. Demo aborted."); return
 
-        await text_analysis_demo(llm_service, system_agent, library) # Pass library
+        await text_analysis_demo(llm_service, system_agent, library)
         await demonstrate_system_agent_tools(system_agent, library, llm_service)
         
-        print("\n" + "-"*80 + "\nAGENT EVOLUTION VIA SYSTEM AGENT\n" + "="*80)
-        evolved_agent_name = "InvoiceProcessor_V2_OpenAI_Demo"
+        # --- AGENT EVOLUTION ---
+        print("\n" + "="*80 + "\nAGENT EVOLUTION VIA SYSTEM AGENT\n" + "="*80)
+        evolved_agent_name = "InvoiceProcessor_V2_OpenAI_Demo" 
         evolution_prompt = f"""
-        Your task is to evolve the "InvoiceProcessor_V1" agent (ID: {initial_agent_id}).
-        1. Use SearchComponentTool to find the agent with ID "{initial_agent_id}". (Summarize this step's findings).
-        2. Then, use EvolveComponentTool to create "{evolved_agent_name}" with these improvements:
-           - Better structured JSON output
-           - Validation of calculations (subtotal + tax = total)
-           - Detection of due dates and payment terms
-           - Improved error handling
+        Your task is to evolve the "InvoiceProcessor_V1" AGENT (ID: {initial_agent_id}).
+        1. Use SearchComponentTool to find the agent with ID "{initial_agent_id}". (You can summarize this search step briefly if found, or state if not found).
+        2. Then, use EvolveComponentTool to create a new AGENT version specifically named "{evolved_agent_name}" with these improvements:
+           - Better structured JSON output for its processing results.
+           - Validation of calculations (subtotal + tax = total) within its logic.
+           - Detection of due dates and payment terms.
+           - Improved error handling.
            - Ensure it remains compatible with OpenAI Agents SDK.
-        IMPORTANT: Your final response for the evolution step (using EvolveComponentTool) MUST be ONLY the raw JSON output from that tool.
+        After successfully calling EvolveComponentTool, your final response for this entire task MUST be ONLY the raw JSON output that EvolveComponentTool itself returns. This JSON output will contain the 'evolved_id'. Do not add any other text or summary to this final JSON output.
         """
         print("\nPrompting System Agent for evolution...")
         evolution_response_message = await system_agent.run(evolution_prompt)
         evolution_response_text = evolution_response_message.result.text if hasattr(evolution_response_message, 'result') and hasattr(evolution_response_message.result, 'text') else str(evolution_response_message)
-        print("\nEvolution demonstration response from SystemAgent:")
+        print("\nEvolution demonstration response from SystemAgent (for debugging):")
         print(evolution_response_text)
         
-        evolved_record = None
+        evolved_record = None; evolved_id = None
         await asyncio.sleep(2) 
-        evolved_records_by_parent = await library.components_collection.find({"parent_id": initial_agent_id, "name": evolved_agent_name}).sort("created_at", -1).to_list(length=1)
-        if evolved_records_by_parent:
-            evolved_record = evolved_records_by_parent[0]
-        if not evolved_record: 
-            evolved_record = await library.find_record_by_name(evolved_agent_name, "AGENT")
-
-        evolved_id = evolved_record["id"] if evolved_record else None
-        
-        if initial_agent_id and evolved_id and initial_agent_id != evolved_id:
-            experience_tracker.record_evolution(
-                initial_agent_id, evolved_id, "standard_evolution_openai", 
-                {"changes": "Improved JSON, validation, due dates, error handling for OpenAI agent"}
-            )
-            print(f"✓ Verified and recorded evolution: {initial_agent_id} -> {evolved_id} ({evolved_record.get('name') if evolved_record else 'N/A'})")
+        evolved_record = await library.find_record_by_name(evolved_agent_name, "AGENT")
+        if evolved_record and evolved_record.get("parent_id") == initial_agent_id:
+            evolved_id = evolved_record["id"]
+            print(f"✓ Verified evolution in SmartLibrary: Original ID {initial_agent_id} -> New ID {evolved_id} (Name: {evolved_record['name']})")
+            if initial_agent_id and evolved_id and initial_agent_id != evolved_id:
+                 experience_tracker.record_evolution(initial_agent_id, evolved_id, "standard_evolution_openai", {"changes": "Improved JSON, validation, etc."})
         else: 
-            extracted_evolved_id = extract_component_id_from_search(evolution_response_text)
-            if extracted_evolved_id and extracted_evolved_id != initial_agent_id:
-                 evolved_id = extracted_evolved_id
-                 print(f"✓ Note: Extracted evolved ID from SystemAgent's text response: {evolved_id} (direct library verification preferred).")
-                 experience_tracker.record_evolution( initial_agent_id, evolved_id, "standard_evolution_openai", {"changes": "Extracted from text"})
+            if evolved_record:
+                 print(f"✓ Found component named '{evolved_agent_name}' (ID: {evolved_record['id']}), but its parent_id does not match {initial_agent_id} or was not set.")
             else:
-                print(f"✗ Could not verify or extract distinct evolved agent ID from library or SystemAgent response for tracking. Extracted from text: {extracted_evolved_id}")
+                print(f"✗ Could not verify distinct evolved agent '{evolved_agent_name}' in SmartLibrary by querying name and parent_id. SystemAgent might not have completed the evolution correctly.")
 
 
-        print("\n" + "-"*80 + "\nCROSS-DOMAIN ADAPTATION DEMONSTRATION\n" + "="*80)
+        # --- CROSS-DOMAIN ADAPTATION ---
+        print("\n" + "="*80 + "\nCROSS-DOMAIN ADAPTATION DEMONSTRATION\n" + "="*80)
         adapted_agent_name = "MedicalRecordProcessor_OpenAI_Demo"
-        source_agent_id_for_adaptation = evolved_id if evolved_id and evolved_id != initial_agent_id else initial_agent_id
-
-        adaptation_prompt = f"""
-        Adapt an existing document processing agent for medical records.
-        1. Use SearchComponentTool to find agent with ID "{source_agent_id_for_adaptation}". (Summarize findings).
-        2. Use EvolveComponentTool with a 'domain_adaptation' strategy to create a new AGENT named "{adapted_agent_name}".
-           Target domain: "medical".
-           Framework: "openai-agents".
-           Changes: Adapt to extract patient ID, name, DOB, visit date, chief complaint, vitals, assessment, and plan from medical records.
-           It should process text like: "{SAMPLE_MEDICAL_RECORD[:150]}..."
-        IMPORTANT: Your final response for the EvolveComponentTool step MUST be ONLY its raw JSON output.
-        """
-        print("\nPrompting System Agent for cross-domain adaptation...")
-        adaptation_response_message = await system_agent.run(adaptation_prompt)
-        adaptation_response_text = adaptation_response_message.result.text if hasattr(adaptation_response_message, 'result') and hasattr(adaptation_response_message.result, 'text') else str(adaptation_response_message)
-        print("\nCross-domain adaptation response from SystemAgent:")
-        print(adaptation_response_text)
-
-        await asyncio.sleep(2)
-        adapted_record = await library.find_record_by_name(adapted_agent_name, "AGENT")
-        medical_processor_id = adapted_record["id"] if adapted_record else None
+        source_agent_id_for_adaptation = evolved_id if evolved_id and evolved_id != initial_agent_id else initial_agent_id 
         
-        if medical_processor_id:
-            print(f"✓ Verified: {adapted_agent_name} adapted/created in library with ID: {medical_processor_id}")
-            experience_tracker.record_evolution(
-                source_agent_id_for_adaptation, medical_processor_id, "domain_adaptation_openai",
-                {"target_domain": "medical", "original_framework": "openai-agents"}
-            )
-            # Test it 
-            test_medical_prompt = f"Use the agent with ID '{medical_processor_id}' (which should be {adapted_agent_name}) to process: {SAMPLE_MEDICAL_RECORD}"
-            test_med_res_msg = await system_agent.run(test_medical_prompt)
-            print(f"\nTest of {adapted_agent_name}:\n{test_med_res_msg.result.text if hasattr(test_med_res_msg, 'result') else str(test_med_res_msg)}")
+        if not source_agent_id_for_adaptation:
+             logger.error("Cannot proceed with adaptation, source agent ID for adaptation is missing.")
         else:
-            extracted_medical_id = extract_component_id_from_search(adaptation_response_text)
-            if extracted_medical_id:
-                medical_processor_id = extracted_medical_id
-                print(f"✓ Note: Extracted medical processor ID from SystemAgent's text response: {medical_processor_id} (direct library verification preferred).")
-                experience_tracker.record_evolution(source_agent_id_for_adaptation, medical_processor_id, "domain_adaptation_openai", {"target_domain": "medical", "extracted_from_text": True})
+            adaptation_prompt = f"""
+            Adapt an existing document processing agent for medical records.
+            1. Use SearchComponentTool to find agent with ID "{source_agent_id_for_adaptation}". (Summarize this search step briefly).
+            2. Use EvolveComponentTool with a 'domain_adaptation' strategy to create a new AGENT specifically named "{adapted_agent_name}".
+               Target domain: "medical".
+               Framework: "openai-agents".
+               Changes: Adapt to extract patient ID, name, DOB, visit date, chief complaint, vitals, assessment, and plan from medical records.
+               It should process text like: "{SAMPLE_MEDICAL_RECORD[:150]}..."
+            After successfully calling EvolveComponentTool for this adaptation, your final response for this entire task MUST be ONLY its raw JSON output, which includes the 'evolved_id'. Do not add any other text or summary.
+            """
+            print("\nPrompting System Agent for cross-domain adaptation...")
+            adaptation_response_message = await system_agent.run(adaptation_prompt)
+            adaptation_response_text = adaptation_response_message.result.text if hasattr(adaptation_response_message, 'result') and hasattr(adaptation_response_message.result, 'text') else str(adaptation_response_message)
+            print("\nCross-domain adaptation response from SystemAgent (for debugging):")
+            print(adaptation_response_text)
 
+            await asyncio.sleep(2)
+            adapted_record = await library.find_record_by_name(adapted_agent_name, "AGENT")
+            medical_processor_id = adapted_record["id"] if adapted_record else None
+            
+            if medical_processor_id:
+                print(f"✓ Verified: {adapted_agent_name} adapted/created in library with ID: {medical_processor_id}")
+                if source_agent_id_for_adaptation: 
+                    experience_tracker.record_evolution(source_agent_id_for_adaptation, medical_processor_id, "domain_adaptation_openai", {"target_domain": "medical"})
+                
+                test_medical_prompt = f"Use the agent with ID '{medical_processor_id}' (which should be {adapted_agent_name}) to process: {SAMPLE_MEDICAL_RECORD}"
+                test_med_res_msg = await system_agent.run(test_medical_prompt)
+                print(f"\nTest of {adapted_agent_name}:\n{test_med_res_msg.result.text if hasattr(test_med_res_msg, 'result') else str(test_med_res_msg)}")
             else:
-                print(f"✗ Could not verify or extract {adapted_agent_name} ID.")
+                print(f"✗ Could not verify {adapted_agent_name} ID in library after adaptation attempt by SystemAgent.")
             
         print("\nDemonstration completed successfully!")
         
@@ -563,7 +581,6 @@ async def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    # ... (dotenv loading remains the same) ...
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(os.path.dirname(script_dir))
     dotenv_path = os.path.join(project_root, '.env') 
