@@ -9,12 +9,24 @@ from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.dependency_container import DependencyContainer
+from evolving_agents.core.mongodb_client import MongoDBClient
+from evolving_agents import config as eat_config
 
 import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Check for essential environment variables
+if not os.getenv("MONGODB_URI"):
+    print("ERROR: MONGODB_URI not set in environment variables or .env file.")
+    # Depending on the application's needs, you might exit or raise an error here
+if not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"): # Or other LLM provider keys
+    print("WARNING: Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY (or other LLM provider key) is set.")
+    print("The system may not function correctly without an LLM API key.")
+# Add checks for other critical variables like MONGODB_DATABASE_NAME if they are sourced from os.getenv directly
+# For this example, we assume MONGODB_DATABASE_NAME is managed via eat_config
 
 
 async def run_smart_autocomplete(
@@ -32,12 +44,28 @@ async def run_smart_autocomplete(
     """
     # Create dependency container to manage component dependencies
     container = DependencyContainer()
+
+    # Initialize MongoDBClient
+    mongo_uri = eat_config.MONGODB_URI
+    mongo_db_name = eat_config.MONGODB_DATABASE_NAME
+    if not mongo_uri or not mongo_db_name:
+        print("ERROR: MONGODB_URI or MONGODB_DATABASE_NAME not set in .env or eat_config. Please configure them.")
+        # Consider raising an error or exiting if essential
+        return # Or raise ConfigurationError
+
+    mongodb_client = MongoDBClient(uri=mongo_uri, db_name=mongo_db_name)
+    if not await mongodb_client.ping_server():
+        print(f"ERROR: Failed to connect to MongoDB at {mongo_uri} / {mongo_db_name}. Please check your settings and ensure MongoDB is running.")
+        # Consider raising an error or exiting
+        return # Or raise ConnectionError
+    container.register('mongodb_client', mongodb_client)
+    print(f"MongoDBClient initialized and registered for DB: {mongo_db_name}")
     
     # Step 1: Set up core services
-    llm_service = LLMService(provider="openai", model="gpt-4o")
+    llm_service = LLMService(provider=eat_config.LLM_PROVIDER, model=eat_config.LLM_MODEL, embedding_model=eat_config.LLM_EMBEDDING_MODEL, use_cache=eat_config.LLM_USE_CACHE, mongodb_client=mongodb_client, container=container)
     container.register('llm_service', llm_service)
     
-    smart_library = SmartLibrary("smart_autocomplete_library.json", container=container)
+    smart_library = SmartLibrary(llm_service=llm_service, container=container)
     container.register('smart_library', smart_library)
     
     # Create firmware for component creation
@@ -46,11 +74,7 @@ async def run_smart_autocomplete(
     container.register('firmware', firmware)
     
     # Step 2: Create agent bus with null system agent
-    agent_bus = SmartAgentBus(
-        storage_path="smart_agent_bus.json",
-        log_path="agent_bus_logs.json",
-        container=container
-    )
+    agent_bus = SmartAgentBus(smart_library=smart_library, llm_service=llm_service, container=container)
     container.register('agent_bus', agent_bus)
     
     # Step 3: Create the system agent
