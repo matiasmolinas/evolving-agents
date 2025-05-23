@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG, # Changed to DEBUG for more detailed output
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.firmware.firmware import Firmware
+from evolving_agents.core.mongodb_client import MongoDBClient
 
 # Additional imports for creating agent instances
 from beeai_framework.agents.react import ReActAgent
@@ -43,29 +44,25 @@ def create_mock_agent(llm, name, description):
     return agent
 
 # Custom function to format the agent bus logs for display
-def format_bus_logs(log_path: str) -> Dict[str, List[Dict[str, Any]]]:
+async def format_bus_logs(agent_bus: SmartAgentBus) -> Dict[str, List[Dict[str, Any]]]:
     """Format agent bus logs to display System Bus vs Data Bus operations."""
-    try:
-        with open(log_path, 'r') as f:
-            logs = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"system_bus": [], "data_bus": []}
+    logs = await agent_bus.get_logs(limit=200)
     
     # Split logs by bus type
     system_bus_logs = []
     data_bus_logs = []
     
-    for log in logs:
+    for log_entry in logs: # Renamed 'log' to 'log_entry' to avoid conflict
         # Create a simplified log entry
         simplified_log = {
-            "timestamp": log.get("timestamp", ""),
-            "agent_name": log.get("agent_name", ""),
-            "task_description": log.get("task_description", ""),
-            "success": "error" not in log
+            "timestamp": log_entry.get("timestamp", ""), # Assuming timestamp is already a string or datetime object
+            "agent_name": log_entry.get("agent_name", ""),
+            "task_description": log_entry.get("task_description", ""),
+            "success": log_entry.get("error") is None # Check if 'error' field is None or not present
         }
         
         # Add to the appropriate bus list
-        if log.get("bus_type") == "system":
+        if log_entry.get("bus_type") == "system":
             system_bus_logs.append(simplified_log)
         else:
             data_bus_logs.append(simplified_log)
@@ -123,34 +120,46 @@ async def mock_translation_response(translation_request):
 async def agent_bus_demo():
     """Demonstrate the dual bus architecture with System Bus and Data Bus operations."""
     
-    # Start with clean state
-    files_to_clean = ["agent_bus_demo.json", "agent_bus_logs_demo.json", "agent_library_demo.json"]
-    for file in files_to_clean:
-        if os.path.exists(file):
-            os.remove(file)
-    
-    # Setup the environment
-    container = DependencyContainer()
-    
-    # Create dependencies
-    llm_service = LLMService(provider="openai", model="gpt-4o")
-    container.register('llm_service', llm_service)
-    
-    smart_library = SmartLibrary("agent_library_demo.json", llm_service=llm_service, container=container)
-    container.register('smart_library', smart_library)
-    
-    firmware = Firmware()
-    container.register('firmware', firmware)
-    
-    # Create the Agent Bus - core component for this demo
-    agent_bus = SmartAgentBus(
-        storage_path="agent_bus_demo.json",
-        log_path="agent_bus_logs_demo.json",
-        container=container
-    )
-    container.register('agent_bus', agent_bus)
-    
-    # Create system agent
+    mongodb_client = None # Initialize for the finally block
+    try:
+        # MongoDB Configuration
+        mongodb_uri = os.environ.get("EAT_MONGODB_URI", "mongodb://localhost:27017")
+        mongodb_db_name = os.environ.get("EAT_MONGODB_DB_NAME", "evolving_agents_db_demo")
+
+        # Start with clean state for circuit breaker file
+        files_to_clean = ["agent_bus_circuit_breakers_demo.json"]
+        for file_path in files_to_clean: # Renamed 'file' to 'file_path'
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        
+        # Setup the environment
+        container = DependencyContainer()
+        
+        # Create dependencies
+        llm_service = LLMService(provider="openai", model="gpt-4o") # Ensure you have OPENAI_API_KEY set
+        container.register('llm_service', llm_service)
+
+        # MongoDB Client Setup
+        logger.info(f"Connecting to MongoDB: URI={mongodb_uri}, DB={mongodb_db_name}")
+        mongodb_client = MongoDBClient(uri=mongodb_uri, db_name=mongodb_db_name)
+        # No async initialize method in MongoDBClient, connection is attempted in __init__
+        # await mongodb_client.ping_server() # Optionally ping to confirm connection early
+        container.register('mongodb_client', mongodb_client)
+        
+        smart_library = SmartLibrary(llm_service=llm_service, container=container)
+        container.register('smart_library', smart_library)
+        
+        firmware = Firmware()
+        container.register('firmware', firmware)
+        
+        # Create the Agent Bus - core component for this demo
+        agent_bus = SmartAgentBus(
+            container=container,
+            circuit_breaker_path="agent_bus_circuit_breakers_demo.json" # New path
+        )
+        container.register('agent_bus', agent_bus)
+        
+        # Create system agent
     system_agent = await SystemAgentFactory.create_agent(container=container)
     container.register('system_agent', system_agent)
     
@@ -390,7 +399,8 @@ async def agent_bus_demo():
     logger.info("\n--- Smart Agent Bus Activity Summary ---")
     
     # Display the bus logs categorized by bus type
-    formatted_logs = format_bus_logs("agent_bus_logs_demo.json")
+    # Call the updated async function
+    formatted_logs = await format_bus_logs(agent_bus)
     
     logger.info("\nSystem Bus Operations:")
     for log in formatted_logs["system_bus"]:
@@ -425,6 +435,16 @@ async def agent_bus_demo():
         },
         "bus_activity": formatted_logs
     }
+    finally:
+        if mongodb_client:
+            logger.info("Closing MongoDB client connection...")
+            mongodb_client.close() # Use the correct close method
 
 if __name__ == "__main__":
+    # Ensure environment variables are set for OpenAI API Key for LLMService
+    # and optionally EAT_MONGODB_URI, EAT_MONGODB_DB_NAME
+    # Example:
+    # export OPENAI_API_KEY="your_key_here"
+    # export EAT_MONGODB_URI="mongodb://user:pass@host:port" 
+    # export EAT_MONGODB_DB_NAME="your_db_name"
     asyncio.run(agent_bus_demo())

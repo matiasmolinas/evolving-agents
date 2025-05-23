@@ -810,3 +810,48 @@ class SmartAgentBus:
              "description_snippet": (a.get("description","No description")[:70]+"...") if a.get("description") else "No description",
              "capabilities_count": len(a.get("capabilities", []))
          } for a in agents_list]
+
+    async def get_logs(
+        self,
+        limit: int = 100,
+        bus_type: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        task_description: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves logs from the logs_collection based on provided filters.
+
+        Args:
+            limit: The maximum number of logs to return. Defaults to 100.
+            bus_type: Filter logs by the 'bus_type' field.
+            agent_id: Filter logs by the 'agent_id' field.
+            task_description: Filter logs by the 'task_description' field (exact match).
+
+        Returns:
+            A list of log documents, sorted by timestamp in descending order.
+        """
+        if self.logs_collection is None:
+            logger.warning("SmartAgentBus.get_logs: logs_collection is not available. Returning empty list.")
+            return []
+
+        query_filter: Dict[str, Any] = {}
+        if bus_type:
+            query_filter["bus_type"] = bus_type
+        if agent_id:
+            query_filter["agent_id"] = agent_id
+        if task_description:
+            query_filter["task_description"] = task_description # Exact match
+
+        projection = {"_id": 0}
+        
+        try:
+            cursor = self.logs_collection.find(
+                query_filter,
+                projection
+            ).sort("timestamp", pymongo.DESCENDING).limit(limit)
+            
+            logs = await cursor.to_list(length=limit)
+            return logs
+        except Exception as e:
+            logger.error(f"SmartAgentBus.get_logs: Error querying logs: {e}", exc_info=True)
+            return []
