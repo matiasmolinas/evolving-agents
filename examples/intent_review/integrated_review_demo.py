@@ -12,17 +12,23 @@ import re
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# MongoDB connection parameters
+# Fetch from environment variables with defaults
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DB_NAME = os.environ.get("MONGODB_DB_NAME", "evolving_agents_demo")
+
 # Import toolkit components
 from evolving_agents.core.dependency_container import DependencyContainer
 from evolving_agents.core.llm_service import LLMService
+from evolving_agents.core.mongodb_client import MongoDBClient
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.agents.intent_review_agent import IntentReviewAgentInitializer
 from evolving_agents.agents.architect_zero import create_architect_zero
-# --- MODIFIED IMPORT: Import RunContextInput as well ---
-from beeai_framework.context import RunContext, RunContextInput
+# --- MODIFIED IMPORT: RunContextInput removed as it's not in beeai_framework.context ---
+from beeai_framework.context import RunContext
 
 # Import the input model for WorkflowDesignReviewTool
 from evolving_agents.tools.intent_review.workflow_design_review_tool import WorkflowDesignInput
@@ -128,17 +134,16 @@ async def setup_environment():
     llm_service = LLMService(provider="openai", model="gpt-4o")
     container.register('llm_service', llm_service)
 
-    smart_library = SmartLibrary("integrated_demo_library.json", llm_service=llm_service, container=container)
+    mongodb_client = MongoDBClient(uri=MONGODB_URI, db_name=MONGODB_DB_NAME)
+    container.register('mongodb_client', mongodb_client)
+
+    smart_library = SmartLibrary(container=container)
     container.register('smart_library', smart_library)
 
     firmware = Firmware()
     container.register('firmware', firmware)
 
-    agent_bus = SmartAgentBus(
-        storage_path="integrated_demo_bus.json",
-        log_path="integrated_demo_logs.json",
-        container=container
-    )
+    agent_bus = SmartAgentBus(container=container)
     container.register('agent_bus', agent_bus)
 
     # Create system agent
@@ -567,16 +572,15 @@ async def run_integrated_review_demo():
                 )
 
                 # --- CORRECTED CONTEXT CREATION ---
-                # Create RunContextInput (can be empty)
-                initial_context_input = RunContextInput(params={})
-
+                # RunContextInput is removed. Parameters are passed directly to RunContext.
                 # Create RunContext with required args
                 # Use the plan_approval_tool instance as the 'owner' of this context
-                # The tool instance has an emitter attribute
-                run_context = RunContext(instance=plan_approval_tool, context_input=initial_context_input)
+                # The tool instance has an emitter attribute.
+                # Pass run_params directly, and signal as None for now.
+                run_context = RunContext(instance=plan_approval_tool, signal=None, run_params={})
 
                 # Set the intent plan value DIRECTLY in the context dictionary
-                run_context.context["intent_plan"] = intent_plan_json # Corrected way to set value
+                run_context.context["intent_plan"] = intent_plan_json
                 # --- END CORRECTION ---
 
                 # Run the review with progress
