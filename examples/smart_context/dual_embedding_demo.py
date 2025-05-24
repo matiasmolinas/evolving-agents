@@ -216,19 +216,13 @@ APPLICABILITY_TEXTS = {
 async def setup_test_environment():
     """Set up a test environment with components for dual embedding."""
     # Clean up previous test files
-    test_files = ["dual_embedding_demo.json", "dual_embedding_vector.json", "dual_embedding_agent_bus.json", "dual_embedding_logs.json"]
-    vector_dir = Path("dual_embedding_db")
+    test_files = ["dual_embedding_agent_bus.json", "dual_embedding_logs.json"]
     
     for file_path in test_files:
         if os.path.exists(file_path):
             os.remove(file_path)
             logger.info(f"Removed existing file: {file_path}")
             
-    if vector_dir.exists():
-        import shutil
-        shutil.rmtree(vector_dir)
-        logger.info(f"Removed existing directory: {vector_dir}")
-    
     # Initialize container
     container = DependencyContainer()
     
@@ -238,8 +232,6 @@ async def setup_test_environment():
     
     # This is our key component for testing - the SmartLibrary
     smart_library = SmartLibrary(
-        storage_path="dual_embedding_demo.json", 
-        vector_db_path=str(vector_dir), 
         llm_service=llm_service,
         container=container
     )
@@ -666,6 +658,9 @@ async def analyze_results(comparisons):
 
 async def main():
     """Run the dual embedding demonstration."""
+    logger.info("This demo requires the MONGODB_URI environment variable to be set,")
+    logger.info("and MONGODB_DATABASE_NAME to be configured in evolving_agents.config")
+    logger.info("for proper execution with MongoDB.")
     try:
         logger.info("Starting dual embedding demonstration...")
         
