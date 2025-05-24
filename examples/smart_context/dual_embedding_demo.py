@@ -216,7 +216,7 @@ APPLICABILITY_TEXTS = {
 async def setup_test_environment():
     """Set up a test environment with components for dual embedding."""
     # Clean up previous test files
-    test_files = ["dual_embedding_agent_bus.json", "dual_embedding_logs.json"]
+    test_files = ["agent_bus_circuit_breakers.json"]  # Updated list
     
     for file_path in test_files:
         if os.path.exists(file_path):
@@ -243,9 +243,7 @@ async def setup_test_environment():
     
     # Create agent bus
     agent_bus = SmartAgentBus(
-        storage_path="dual_embedding_agent_bus.json",
-        log_path="dual_embedding_logs.json",
-        container=container
+        container=container  # storage_path and log_path removed
     )
     container.register('agent_bus', agent_bus)
     
