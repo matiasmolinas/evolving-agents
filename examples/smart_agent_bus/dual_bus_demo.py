@@ -379,7 +379,7 @@ async def agent_bus_demo():
         all_agents = await agent_bus.list_all_agents()
         logger.info(f"Total registered agents: {len(all_agents)}")
         for agent in all_agents:
-            logger.info(f"  - {agent['name']} ({agent['type']}): {agent['description'][:50]}...")
+            logger.info(f"  - {agent['name']} ({agent['type']}): {agent['description_snippet']}")
         
         # 4b. Get status of specific agent (System Bus operation)
         try:
@@ -438,7 +438,7 @@ async def agent_bus_demo():
     finally:
         if mongodb_client:
             logger.info("Closing MongoDB client connection...")
-            await mongodb_client.close_client() # Changed to async close_client
+            mongodb_client.close() # Reverted to synchronous close method
 
 if __name__ == "__main__":
     # Ensure environment variables are set for OpenAI API Key for LLMService
