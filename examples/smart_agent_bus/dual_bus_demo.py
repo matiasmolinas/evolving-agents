@@ -277,7 +277,7 @@ async def agent_bus_demo():
         
         logger.info(f"Found {len(weather_capable_agents)} agents with weather capabilities:")
         for agent in weather_capable_agents:
-            logger.info(f"  - {agent['name']} (Confidence: {agent.get('similarity', 0):.2f})")
+            logger.info(f"  - {agent['name']} (Confidence: {agent.get('similarity_score', 0):.2f})")
         
         # 2b. Discover agents by task description (System Bus operation)
         logger.info("\nDiscovering agents for language translation tasks...")
@@ -289,7 +289,7 @@ async def agent_bus_demo():
         
         logger.info(f"Found {len(translation_agents)} agents for translation tasks:")
         for agent in translation_agents:
-            logger.info(f"  - {agent['name']} (Similarity: {agent.get('similarity', 0):.2f})")
+            logger.info(f"  - {agent['name']} (Similarity: {agent.get('similarity_score', 0):.2f})")
         
         #########################################
         # PHASE 3: DATA BUS - CAPABILITY REQUESTS
