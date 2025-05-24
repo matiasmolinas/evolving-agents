@@ -276,6 +276,31 @@ async def setup_test_environment():
             record["metadata"]["applicability_text"] = APPLICABILITY_TEXTS[record["name"]]
             await smart_library.save_record(record)
             logger.info(f"Added applicability text for {record['name']}")
+
+    # === Add diagnostic logging for OAuth2Client ===
+    retrieved_record = await smart_library.find_record_by_name("OAuth2Client", record_type="TOOL")
+    if retrieved_record:
+        logger.info(f"Retrieved OAuth2Client for diagnosis: {retrieved_record}")
+        logger.info(f"OAuth2Client applicability_text: {retrieved_record.get('metadata', {}).get('applicability_text')}")
+
+        # Log content_embedding
+        content_embedding = retrieved_record.get('content_embedding')
+        if content_embedding and isinstance(content_embedding, list):
+            logger.info(f"OAuth2Client content_embedding dimension: {len(content_embedding)}")
+            logger.info(f"OAuth2Client content_embedding sample: {content_embedding[:5]}")
+        else:
+            logger.info(f"OAuth2Client content_embedding is missing or not a list. Value: {content_embedding}")
+
+        # Log applicability_embedding
+        applicability_embedding = retrieved_record.get('applicability_embedding')
+        if applicability_embedding and isinstance(applicability_embedding, list):
+            logger.info(f"OAuth2Client applicability_embedding dimension: {len(applicability_embedding)}")
+            logger.info(f"OAuth2Client applicability_embedding sample: {applicability_embedding[:5]}")
+        else:
+            logger.info(f"OAuth2Client applicability_embedding is missing or not a list. Value: {applicability_embedding}")
+    else:
+        logger.warning("Could not retrieve OAuth2Client record for diagnosis.")
+    # === End diagnostic logging ===
     
     # Wait for indexing to complete
     logger.info("Waiting for initial indexing to complete...")
