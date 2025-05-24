@@ -275,12 +275,33 @@ class SmartLibrary:
             return []
         if query is None: raise ValueError("Query string cannot be None")
 
+        # --- Start Diagnostic Logging ---
+        logger.info(f"[DIAGNOSTIC-LIB] semantic_search called with query: '{query}', task_context: '{task_context}'")
+        # --- End Diagnostic Logging ---
+
         effective_task_weight = task_weight if task_context and task_weight is not None else (0.7 if task_context else 0.0)
         query_embedding_orig = await self.llm_service.embed(query)
+        
+        # --- Start Diagnostic Logging ---
+        if query_embedding_orig:
+            logger.info(f"[DIAGNOSTIC-LIB] query_embedding_orig dimension: {len(query_embedding_orig)}, sample: {query_embedding_orig[:5]}")
+        else:
+            logger.info("[DIAGNOSTIC-LIB] query_embedding_orig is None or empty.")
+        # --- End Diagnostic Logging ---
         
         task_embedding_for_fallback: Optional[List[float]] = None
         if task_context:
             task_embedding_for_fallback = await self.llm_service.embed(task_context)
+            # --- Start Diagnostic Logging ---
+            if task_embedding_for_fallback: # Check if embedding was successful
+                logger.info(f"[DIAGNOSTIC-LIB] task_embedding_for_fallback dimension: {len(task_embedding_for_fallback)}, sample: {task_embedding_for_fallback[:5]}")
+            else: # task_context was present, but embedding failed
+                logger.info("[DIAGNOSTIC-LIB] task_embedding_for_fallback is None or empty despite task_context.")
+            # --- End Diagnostic Logging ---
+        else: # No task_context provided
+            # --- Start Diagnostic Logging ---
+            logger.info("[DIAGNOSTIC-LIB] No task_context provided.")
+            # --- End Diagnostic Logging ---
 
         vector_search_enabled = os.environ.get("VECTOR_SEARCH_ENABLED", "true").lower() != "false"
         if not vector_search_enabled:
@@ -336,7 +357,11 @@ class SmartLibrary:
             # {"$limit": limit * 3 } # Redundant if $vectorSearch limit is well-tuned
         ]
         
-        logger.debug(f"MongoDB $vectorSearch Pipeline for semantic search (SmartLibrary): {json.dumps(search_pipeline, indent=2)}")
+        # --- Start Diagnostic Logging ---
+        logger.info(f"[DIAGNOSTIC-LIB] MongoDB $vectorSearch Pipeline: {json.dumps(search_pipeline, indent=2)}")
+        # --- End Diagnostic Logging ---
+        
+        # logger.debug(f"MongoDB $vectorSearch Pipeline for semantic search (SmartLibrary): {json.dumps(search_pipeline, indent=2)}") # Original debug log
         
         candidate_docs = []
         try:
