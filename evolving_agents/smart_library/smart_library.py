@@ -37,11 +37,12 @@ class SmartLibrary:
         container: Optional["DependencyContainer"] = None,
         mongodb_uri: Optional[str] = None,
         mongodb_db_name: Optional[str] = None,
-        components_collection_name: str = "eat_components"
+        components_collection_name: str = "eat_components",
+        mongodb_client: Optional[MongoDBClient] = None  # Added parameter
     ):
         self.container = container
         self._initialized = False
-        self.mongodb_client: Optional[MongoDBClient] = None 
+        self.mongodb_client: Optional[MongoDBClient] = None
         self.components_collection: Optional[motor.motor_asyncio.AsyncIOMotorCollection] = None
         self.components_collection_name = components_collection_name
 
@@ -59,17 +60,17 @@ class SmartLibrary:
 
         if container and container.has('mongodb_client'):
             self.mongodb_client = container.get('mongodb_client')
-        elif isinstance(llm_service, MongoDBClient) and mongodb_client is None: # Defensive check
+        elif mongodb_client:  # Check if an instance was passed via the new parameter
+            self.mongodb_client = mongodb_client
+        elif isinstance(llm_service, MongoDBClient): # Defensive check (was and mongodb_client is None)
             logger.warning("MongoDBClient instance might have been passed as llm_service to SmartLibrary. Correcting.")
             self.mongodb_client = llm_service
-            self.llm_service = LLMService(container=container)
+            self.llm_service = LLMService(container=container) # Reset llm_service if it was misused
             if container: container.register('llm_service', self.llm_service)
-        elif isinstance(mongodb_uri, MongoDBClient) and mongodb_client is None: # Defensive check
+        elif isinstance(mongodb_uri, MongoDBClient): # Defensive check (was and mongodb_client is None)
             logger.warning("MongoDBClient instance might have been passed as mongodb_uri to SmartLibrary. Correcting.")
-            self.mongodb_client = mongodb_uri
-        elif mongodb_client: # If an actual MongoDBClient instance was passed
-            self.mongodb_client = mongodb_client
-        else: # Default creation
+            self.mongodb_client = mongodb_uri # mongodb_uri was misused for the client instance
+        else:  # Default creation using URI and db_name
             try:
                 self.mongodb_client = MongoDBClient(uri=mongodb_uri, db_name=mongodb_db_name)
             except ValueError as e:
