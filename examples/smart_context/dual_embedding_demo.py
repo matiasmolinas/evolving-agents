@@ -166,15 +166,10 @@ class AuthTestSuite:
 # Applicability texts (T_raz) for each component
 APPLICABILITY_TEXTS = {
     "OAuth2Client": (
-        "RELEVANT TASKS: Implementing secure API authentication flows; integrating OAuth2 providers; "
-        "building secure client-side authentication; handling token lifecycle management; implementing "
-        "authorization flows like authorization code, client credentials, and password grant types. "
-        "USER PERSONAS: Back-end developers; API integration specialists; security engineers. "
-        "IDEAL SCENARIOS: Web applications requiring third-party API access; microservices requiring "
-        "delegated authentication; single sign-on implementations. "
-        "TECHNICAL REQUIREMENTS: Requires secure TLS connections; access to token endpoints; proper "
-        "credential storage. NOT SUITABLE FOR: Basic authentication needs; internal-only systems with "
-        "simpler security requirements; IoT devices with limited computational resources."
+        "This component is ideal for implementing OAuth2 client authentication in Python applications, "
+        "especially for web apps, microservices, or SSO that require secure API access using various "
+        "grant types like authorization code or client credentials. It helps developers and API "
+        "integrators handle token lifecycle and secure credential storage."
     ),
     
     "DatabaseConnector": (
@@ -190,26 +185,16 @@ APPLICABILITY_TEXTS = {
     ),
     
     "APIDocGenerator": (
-        "RELEVANT TASKS: Generating comprehensive API documentation; creating developer portals; documenting "
-        "RESTful services; maintaining OpenAPI specifications; creating API reference material; generating "
-        "client SDK documentation. "
-        "USER PERSONAS: Technical writers; API designers; developer relations specialists; documentation engineers. "
-        "IDEAL SCENARIOS: Public API offerings; developer ecosystem documentation; API versioning documentation; "
-        "generating docs from code annotations. "
-        "TECHNICAL REQUIREMENTS: Access to OpenAPI/Swagger specs or annotated code; templates for documentation "
-        "generation. NOT SUITABLE FOR: Internal-only APIs with minimal documentation needs; generating end-user "
-        "documentation; documenting non-API software components."
+        "This tool is used for creating developer documentation for APIs, especially authentication APIs. "
+        "It helps technical writers and API designers generate comprehensive API docs from OpenAPI specs "
+        "or code annotations, suitable for developer portals and public API offerings."
     ),
     
     "AuthTestSuite": (
-        "RELEVANT TASKS: Validating authentication flows; testing token validation; automating API security testing; "
-        "regression testing authentication services; implementing security compliance validation; testing JWT validation; "
-        "simulating authentication failure scenarios. "
-        "USER PERSONAS: QA engineers; security testers; DevOps engineers implementing CI/CD pipelines for auth services. "
-        "IDEAL SCENARIOS: Pre-release validation of auth services; continuous integration of authentication systems; "
-        "security compliance verification. "
-        "TECHNICAL REQUIREMENTS: Access to test authentication endpoints; test credentials; isolated testing environment. "
-        "NOT SUITABLE FOR: Performance testing; testing non-auth API functionality; production environment testing."
+        "This component provides a comprehensive test suite for validating OAuth2 authentication services, "
+        "including integration tests, token validation, and security testing. It is designed for QA "
+        "engineers, security testers, and DevOps pipelines focused on pre-release validation and CI of "
+        "authentication systems."
     ),
 }
 
@@ -276,31 +261,6 @@ async def setup_test_environment():
             record["metadata"]["applicability_text"] = APPLICABILITY_TEXTS[record["name"]]
             await smart_library.save_record(record)
             logger.info(f"Added applicability text for {record['name']}")
-
-    # === Add diagnostic logging for OAuth2Client ===
-    retrieved_record = await smart_library.find_record_by_name("OAuth2Client", record_type="TOOL")
-    if retrieved_record:
-        logger.info(f"Retrieved OAuth2Client for diagnosis: {retrieved_record}")
-        logger.info(f"OAuth2Client applicability_text: {retrieved_record.get('metadata', {}).get('applicability_text')}")
-
-        # Log content_embedding
-        content_embedding = retrieved_record.get('content_embedding')
-        if content_embedding and isinstance(content_embedding, list):
-            logger.info(f"OAuth2Client content_embedding dimension: {len(content_embedding)}")
-            logger.info(f"OAuth2Client content_embedding sample: {content_embedding[:5]}")
-        else:
-            logger.info(f"OAuth2Client content_embedding is missing or not a list. Value: {content_embedding}")
-
-        # Log applicability_embedding
-        applicability_embedding = retrieved_record.get('applicability_embedding')
-        if applicability_embedding and isinstance(applicability_embedding, list):
-            logger.info(f"OAuth2Client applicability_embedding dimension: {len(applicability_embedding)}")
-            logger.info(f"OAuth2Client applicability_embedding sample: {applicability_embedding[:5]}")
-        else:
-            logger.info(f"OAuth2Client applicability_embedding is missing or not a list. Value: {applicability_embedding}")
-    else:
-        logger.warning("Could not retrieve OAuth2Client record for diagnosis.")
-    # === End diagnostic logging ===
     
     # Wait for indexing to complete
     logger.info("Waiting for initial indexing to complete...")
