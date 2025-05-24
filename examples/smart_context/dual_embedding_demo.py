@@ -166,15 +166,10 @@ class AuthTestSuite:
 # Applicability texts (T_raz) for each component
 APPLICABILITY_TEXTS = {
     "OAuth2Client": (
-        "RELEVANT TASKS: Implementing secure API authentication flows; integrating OAuth2 providers; "
-        "building secure client-side authentication; handling token lifecycle management; implementing "
-        "authorization flows like authorization code, client credentials, and password grant types. "
-        "USER PERSONAS: Back-end developers; API integration specialists; security engineers. "
-        "IDEAL SCENARIOS: Web applications requiring third-party API access; microservices requiring "
-        "delegated authentication; single sign-on implementations. "
-        "TECHNICAL REQUIREMENTS: Requires secure TLS connections; access to token endpoints; proper "
-        "credential storage. NOT SUITABLE FOR: Basic authentication needs; internal-only systems with "
-        "simpler security requirements; IoT devices with limited computational resources."
+        "This component is ideal for implementing OAuth2 client authentication in Python applications, "
+        "especially for web apps, microservices, or SSO that require secure API access using various "
+        "grant types like authorization code or client credentials. It helps developers and API "
+        "integrators handle token lifecycle and secure credential storage."
     ),
     
     "DatabaseConnector": (
@@ -190,45 +185,29 @@ APPLICABILITY_TEXTS = {
     ),
     
     "APIDocGenerator": (
-        "RELEVANT TASKS: Generating comprehensive API documentation; creating developer portals; documenting "
-        "RESTful services; maintaining OpenAPI specifications; creating API reference material; generating "
-        "client SDK documentation. "
-        "USER PERSONAS: Technical writers; API designers; developer relations specialists; documentation engineers. "
-        "IDEAL SCENARIOS: Public API offerings; developer ecosystem documentation; API versioning documentation; "
-        "generating docs from code annotations. "
-        "TECHNICAL REQUIREMENTS: Access to OpenAPI/Swagger specs or annotated code; templates for documentation "
-        "generation. NOT SUITABLE FOR: Internal-only APIs with minimal documentation needs; generating end-user "
-        "documentation; documenting non-API software components."
+        "This tool is used for creating developer documentation for APIs, especially authentication APIs. "
+        "It helps technical writers and API designers generate comprehensive API docs from OpenAPI specs "
+        "or code annotations, suitable for developer portals and public API offerings."
     ),
     
     "AuthTestSuite": (
-        "RELEVANT TASKS: Validating authentication flows; testing token validation; automating API security testing; "
-        "regression testing authentication services; implementing security compliance validation; testing JWT validation; "
-        "simulating authentication failure scenarios. "
-        "USER PERSONAS: QA engineers; security testers; DevOps engineers implementing CI/CD pipelines for auth services. "
-        "IDEAL SCENARIOS: Pre-release validation of auth services; continuous integration of authentication systems; "
-        "security compliance verification. "
-        "TECHNICAL REQUIREMENTS: Access to test authentication endpoints; test credentials; isolated testing environment. "
-        "NOT SUITABLE FOR: Performance testing; testing non-auth API functionality; production environment testing."
+        "This component provides a comprehensive test suite for validating OAuth2 authentication services, "
+        "including integration tests, token validation, and security testing. It is designed for QA "
+        "engineers, security testers, and DevOps pipelines focused on pre-release validation and CI of "
+        "authentication systems."
     ),
 }
 
 async def setup_test_environment():
     """Set up a test environment with components for dual embedding."""
     # Clean up previous test files
-    test_files = ["dual_embedding_demo.json", "dual_embedding_vector.json", "dual_embedding_agent_bus.json", "dual_embedding_logs.json"]
-    vector_dir = Path("dual_embedding_db")
+    test_files = ["agent_bus_circuit_breakers.json"]  # Updated list
     
     for file_path in test_files:
         if os.path.exists(file_path):
             os.remove(file_path)
             logger.info(f"Removed existing file: {file_path}")
             
-    if vector_dir.exists():
-        import shutil
-        shutil.rmtree(vector_dir)
-        logger.info(f"Removed existing directory: {vector_dir}")
-    
     # Initialize container
     container = DependencyContainer()
     
@@ -238,8 +217,6 @@ async def setup_test_environment():
     
     # This is our key component for testing - the SmartLibrary
     smart_library = SmartLibrary(
-        storage_path="dual_embedding_demo.json", 
-        vector_db_path=str(vector_dir), 
         llm_service=llm_service,
         container=container
     )
@@ -251,9 +228,7 @@ async def setup_test_environment():
     
     # Create agent bus
     agent_bus = SmartAgentBus(
-        storage_path="dual_embedding_agent_bus.json",
-        log_path="dual_embedding_logs.json",
-        container=container
+        container=container  # storage_path and log_path removed
     )
     container.register('agent_bus', agent_bus)
     
@@ -666,6 +641,9 @@ async def analyze_results(comparisons):
 
 async def main():
     """Run the dual embedding demonstration."""
+    logger.info("This demo requires the MONGODB_URI environment variable to be set,")
+    logger.info("and MONGODB_DATABASE_NAME to be configured in evolving_agents.config")
+    logger.info("for proper execution with MongoDB.")
     try:
         logger.info("Starting dual embedding demonstration...")
         
