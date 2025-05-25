@@ -19,10 +19,9 @@ EAT is a Python toolkit for constructing advanced, multi-agent applications wher
 The Evolving Agents Toolkit has successfully completed its initial migration to **MongoDB** as its unified backend! This replaces previous file-based storage and ChromaDB, bringing enhanced scalability and robustness.
 
 *   The core framework (`SmartLibrary`, `SmartAgentBus`, `LLMCache`, `IntentPlan` persistence) now fully utilizes MongoDB.
-*   The primary comprehensive demo, **`examples/invoice_processing/architect_zero_comprehensive_demo.py`**, has been updated and is working with the new MongoDB backend.
-*   Other examples in the `examples/` directory are currently being updated to reflect these changes and will be available soon. Please refer to `architect_zero_comprehensive_demo.py` as the most up-to-date example of usage.
+*   All examples in the `examples/` directory, including the comprehensive demo **`examples/invoice_processing/architect_zero_comprehensive_demo.py`**, have been updated and are working with the new MongoDB backend.
 
-We appreciate your patience as we finalize the migration across all examples and tests!
+The migration of all examples to MongoDB is now complete. We are now focusing on updating the test suite.
 
 ---
 
@@ -209,19 +208,18 @@ After the demo runs:
     *   You can inspect these collections using MongoDB Compass, `mongosh`, or your MongoDB Atlas Data Explorer.
 *   `intent_plan_demo.json` (If review enabled for 'intents' level and `output_path` in `ApprovePlanTool` is set): An optional file copy of the generated intent plan that was reviewed.
 
-*(**Note:** While `architect_zero_comprehensive_demo.py` is updated, other scripts in `examples/` are pending full migration to the MongoDB backend. We are working on these updates.)*
+*(**Note:** All examples in the `examples/` directory have been updated to use the MongoDB backend. The test suite is currently being updated.)*
 
 ## Dive Deeper
 
 *   **Architecture Overview:** Understand the core components and their interactions in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) (updated for MongoDB).
 *   **MongoDB Setup:** Detailed guide for setting up MongoDB and Atlas Vector Search: [docs/MONGO-SETUP.md](./docs/MONGO-SETUP.md).
 *   **Key Concepts:** Learn about the `SystemAgent`, `SmartLibrary` (MongoDB), `SmartAgentBus` (MongoDB), `SmartContext`, `Evolution`, `Workflows`, and `Intent Review / Human-in-the-Loop` (IntentPlans in MongoDB).
-*   **Examples:** Explore the `examples/` directory (Note: `architect_zero_comprehensive_demo.py` is the most current example reflecting MongoDB integration. Other examples are being updated).
+*   **Examples:** Explore the `examples/` directory. All examples have been updated to reflect MongoDB integration.
 *   **Contributing:** We welcome contributions!
 
 ## Roadmap / Future Work
 
-*   **Full Example Script Migration to MongoDB:** Ensure all examples in `examples/` are updated to correctly initialize and interact with the MongoDB-backed services.
 *   **Test Suite Migration:** Update all tests in `tests/` to work with MongoDB, potentially using `mongomock` for unit tests.
 *   **Circuit Breaker to MongoDB:** Migrate `SmartAgentBus` circuit breaker state from JSON file to MongoDB for unified persistence.
 *   **Enhanced Vector Search Strategies:** Explore more advanced MongoDB `$vectorSearch` options, such as hybrid search (combining vector and keyword search) within `SmartLibrary`.
