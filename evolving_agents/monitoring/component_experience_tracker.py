@@ -81,15 +81,14 @@ class ComponentExperienceTracker:
             "name": name,
             "record_type": record_type,
             "first_invocation_timestamp": current_time,
-            "total_invocations": 0, # Will be incremented to 1 by $inc
-            "successful_invocations": 0,
-            "failed_invocations": 0,
-            "total_execution_time_ms": 0.0, # Will be incremented by $inc
-            "average_response_time_ms": 0.0,
-            "error_types_summary": {},
-            "evolution_history_summary": [],
-            "input_params_summary": {},
-            "output_summary_tracking": {}
+            "average_response_time_ms": 0.0, # Initial value, will be calculated and updated
+            "error_types_summary": {},       # Initial empty dict
+            "evolution_history_summary": [], # Initial empty list
+            "input_params_summary": {},      # Initial empty dict
+            "output_summary_tracking": {}    # Initial empty dict
+            # DO NOT include: total_invocations, successful_invocations, 
+            # failed_invocations, total_execution_time_ms here.
+            # These will be correctly initialized by the $inc operator.
         }
 
         if success:
