@@ -210,11 +210,20 @@ class SmartAgentBus:
         initialized_count = 0
 
         for record in library_records:
+            # We still only want to initialize *from* active records in the library.
+            # If a record was active and is now archived in the library, 
+            # `update_agent_from_library` should be used for that specific agent.
+            # `initialize_from_library` is more for a bulk sync of active, usable components.
             if record.get("status") != "active":
-                continue
-            if record["id"] in self.agents: 
+                logger.debug(f"Skipping record {record['id']} from SmartLibrary during init as it's not 'active' (status: {record.get('status')}).")
                 continue
 
+            # If agent already in bus, re-register to update its definition from library
+            # This ensures the bus reflects the latest "active" version from the library.
+            # `register_agent` will handle the upsert logic.
+            if record["id"] in self.agents:
+                logger.info(f"Agent {record['id']} already in bus registry. Re-registering to sync with SmartLibrary.")
+            
             capabilities = record.get("metadata", {}).get("capabilities", [])
             if not capabilities and record.get("name"):
                 cap_id = f"{record['name'].lower().replace(' ', '_')}_default_capability"
@@ -238,15 +247,120 @@ class SmartAgentBus:
                     capabilities=capabilities, agent_type=record.get("record_type", "GENERIC"),
                     metadata={"source": "SmartLibrary", **record.get("metadata", {})},
                     agent_instance=agent_instance,
-                    embed_capabilities=True 
+                    embed_capabilities=True # Assuming we want fresh embeddings on library sync
                 )
                 initialized_count += 1
-            except RuntimeError as reg_err:
-                 logger.error(f"Failed to register agent {record['name']} during library sync: {reg_err}")
+            except RuntimeError as reg_err: # Catch specific error from register_agent
+                 logger.error(f"Failed to register/update agent {record['name']} during library sync: {reg_err}")
+            except Exception as e: # Catch other potential errors during processing
+                 logger.error(f"Unexpected error processing record {record['name']} ({record['id']}) during library sync: {e}", exc_info=True)
 
 
-        self._initialized = True
-        logger.info(f"AgentBus synced {initialized_count} new components from SmartLibrary into MongoDB registry.")
+        self._initialized = True # Mark as initialized even if some errors occurred.
+        logger.info(f"AgentBus initialization/sync from SmartLibrary processed. Updated/Registered {initialized_count} active components.")
+
+
+    async def update_agent_from_library(self, agent_id: str) -> bool:
+        """
+        Updates a single agent's definition and status in the AgentBus
+        based on its state in the SmartLibrary.
+        """
+        if not self.smart_library:
+            logger.error(f"SmartLibrary not available. Cannot update agent {agent_id}.")
+            return False
+        if self.registry_collection is None:
+            logger.error(f"AgentBus registry collection not available. Cannot update agent {agent_id}.")
+            return False
+
+        logger.info(f"Attempting to update agent {agent_id} in AgentBus from SmartLibrary.")
+        
+        try:
+            library_record = await self.smart_library.find_record_by_id(agent_id)
+        except Exception as e:
+            logger.error(f"Error fetching record {agent_id} from SmartLibrary: {e}", exc_info=True)
+            return False
+
+        if not library_record:
+            logger.warning(f"Agent {agent_id} not found in SmartLibrary. Considering removal from AgentBus.")
+            # Future: Implement removal logic if desired. For now, just log.
+            # Example removal:
+            # if agent_id in self.agents: del self.agents[agent_id]
+            # if agent_id in self._agent_instances: del self._agent_instances[agent_id]
+            # await self.registry_collection.delete_one({"id": agent_id})
+            # logger.info(f"Agent {agent_id} removed from AgentBus as it's no longer in SmartLibrary.")
+            return False # Indicate agent not found in library
+
+        library_status = library_record.get("status")
+        agent_name = library_record.get("name", agent_id)
+
+        if library_status == "active" or library_status == "deployed": # Assuming "deployed" is also an active state
+            logger.info(f"Agent {agent_id} ({agent_name}) is '{library_status}' in SmartLibrary. Registering/updating in AgentBus.")
+            try:
+                # Prepare capabilities as register_agent expects them
+                capabilities = library_record.get("metadata", {}).get("capabilities", [])
+                if not capabilities and library_record.get("name"): # Fallback for default capability
+                     cap_id = f"{library_record['name'].lower().replace(' ', '_')}_default_capability"
+                     capabilities = [{"id": cap_id, "name": library_record["name"], "description": library_record.get("description", f"Default capability for {library_record['name']}"), "confidence": 0.7}]
+
+                # Attempt to create instance if possible (e.g., if factories are available)
+                agent_instance = None
+                if self.container:
+                    agent_factory = self.container.get('agent_factory', None)
+                    tool_factory = self.container.get('tool_factory', None)
+                    try:
+                        if library_record.get("record_type") == "AGENT" and agent_factory:
+                            agent_instance = await agent_factory.create_agent(library_record)
+                        elif library_record.get("record_type") == "TOOL" and tool_factory:
+                            agent_instance = await tool_factory.create_tool(library_record)
+                    except Exception as e_inst:
+                        logger.warning(f"Instance creation failed for {agent_id} during update_agent_from_library: {e_inst}", exc_info=False)
+
+
+                await self.register_agent(
+                    agent_id=library_record["id"],
+                    name=library_record["name"],
+                    description=library_record.get("description", ""),
+                    capabilities=capabilities,
+                    agent_type=library_record.get("record_type", "GENERIC"),
+                    metadata={"source": "SmartLibrary_update", **library_record.get("metadata", {})},
+                    agent_instance=agent_instance, # Pass instance if created
+                    embed_capabilities=True # Re-embed on update
+                )
+                logger.info(f"Successfully registered/updated agent {agent_id} ({agent_name}) in AgentBus from SmartLibrary.")
+                return True
+            except Exception as e_reg:
+                logger.error(f"Failed to register/update agent {agent_id} ({agent_name}) in AgentBus: {e_reg}", exc_info=True)
+                return False
+        
+        elif library_status == "archived" or library_status == "inactive":
+            logger.info(f"Agent {agent_id} ({agent_name}) is '{library_status}' in SmartLibrary. Updating status in AgentBus and removing instance.")
+            
+            # Update status in MongoDB registry
+            update_result = await self.registry_collection.update_one(
+                {"id": agent_id},
+                {"$set": {"status": library_status, "last_updated": datetime.now(timezone.utc)}}
+            )
+            
+            # Update status in in-memory cache
+            if agent_id in self.agents:
+                self.agents[agent_id]["status"] = library_status
+                self.agents[agent_id]["last_updated"] = datetime.now(timezone.utc).isoformat()
+            
+            # Remove live instance if it exists
+            if agent_id in self._agent_instances:
+                del self._agent_instances[agent_id]
+                logger.debug(f"Removed live instance of archived agent {agent_id} ({agent_name}) from AgentBus cache.")
+            
+            if update_result.modified_count > 0 or update_result.matched_count > 0 : # matched_count for case where status was already set
+                logger.info(f"Successfully updated status of agent {agent_id} ({agent_name}) to '{library_status}' in AgentBus registry.")
+                return True
+            else:
+                logger.warning(f"Agent {agent_id} ({agent_name}) was not found in AgentBus registry for status update to '{library_status}', but was '{library_status}' in library.")
+                # If it wasn't in the bus registry, but is archived in library, it's effectively not active.
+                return True # Consider this a success in terms of reflecting library state.
+        else:
+            logger.warning(f"Agent {agent_id} ({agent_name}) has an unhandled status '{library_status}' in SmartLibrary. No action taken in AgentBus.")
+            return False
 
     # Log Schema for 'eat_agent_bus_logs' collection:
     # Each log entry is a dictionary with the following fields:

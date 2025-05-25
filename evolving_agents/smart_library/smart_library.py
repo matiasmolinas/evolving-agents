@@ -641,6 +641,70 @@ class SmartLibrary:
         logger.info(f"Evolved record {parent['name']} to {evolved_version_str} (ID: {evolved_record['id']}).")
         return evolved_record
 
+    async def _update_record_status(self, record_id: str, new_status: str) -> bool:
+        """
+        Helper method to update the status of a record and its last_updated timestamp.
+        """
+        if self.components_collection is None:
+            logger.error(f"Cannot update status for {record_id}: components_collection is None.")
+            return False
+        
+        record = await self.find_record_by_id(record_id)
+        if not record:
+            logger.warning(f"Record {record_id} not found for status update to '{new_status}'.")
+            return False
+        
+        record["status"] = new_status
+        record["last_updated"] = datetime.now(timezone.utc) # Explicitly update timestamp
+        
+        try:
+            await self.save_record(record)
+            logger.info(f"Updated status of record {record_id} to '{new_status}'.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save record {record_id} after status update to '{new_status}': {e}", exc_info=True)
+            return False
+
+    async def deploy_component_version(
+        self, 
+        component_id: str, 
+        deployed_status: str = "active", 
+        parent_archived_status: str = "archived"
+    ) -> bool:
+        """
+        Deploys a new component version by setting its status and archiving its parent.
+        """
+        self.logger.info(f"Attempting to deploy component version {component_id} with status '{deployed_status}'.")
+
+        # Deploy the specified component version
+        deployed_successfully = await self._update_record_status(component_id, deployed_status)
+        if not deployed_successfully:
+            self.logger.error(f"Failed to deploy component {component_id} (could not update status to '{deployed_status}').")
+            return False
+        
+        self.logger.info(f"Successfully set status of component {component_id} to '{deployed_status}'.")
+
+        # Check for parent and archive it
+        component_record = await self.find_record_by_id(component_id)
+        if not component_record: # Should not happen if previous step succeeded, but good to check
+            self.logger.error(f"Component {component_id} not found after status update. Cannot process parent.")
+            return True # Deployed component, but parent issue
+
+        parent_id = component_record.get("parent_id") or component_record.get("metadata", {}).get("evolved_from")
+
+        if parent_id:
+            self.logger.info(f"Component {component_id} has parent_id: {parent_id}. Attempting to archive parent with status '{parent_archived_status}'.")
+            parent_archived_successfully = await self._update_record_status(parent_id, parent_archived_status)
+            if parent_archived_successfully:
+                self.logger.info(f"Successfully archived parent component {parent_id} with status '{parent_archived_status}'.")
+            else:
+                self.logger.warning(f"Failed to archive parent component {parent_id}. The new version {component_id} is deployed, but parent status update failed.")
+                # Still return True as the primary component was deployed.
+        else:
+            self.logger.info(f"Component {component_id} has no parent_id. No parent to archive.")
+            
+        return True # Primary component deployed successfully
+
     def _increment_version(self, version: str) -> str:
         parts = version.split("."); parts.extend(["0"] * (3 - len(parts)))
         try: parts[2] = str(int(parts[2]) + 1); return ".".join(parts[:3])

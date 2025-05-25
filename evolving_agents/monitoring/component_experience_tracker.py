@@ -1,14 +1,39 @@
 # evolving_agents/monitoring/component_experience_tracker.py
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List # Added List for evolution_history_summary
+from typing import Optional, Dict, Any, List 
 
 import motor.motor_asyncio
-from pymongo import ReturnDocument # Import ReturnDocument
+from pymongo import ReturnDocument 
+from pydantic import BaseModel, Field # Added for A/B Test Schema
+from datetime import datetime, timezone # Ensure datetime and timezone are imported
 
 from evolving_agents.core.mongodb_client import MongoDBClient
 
 logger = logging.getLogger(__name__)
+
+
+# Pydantic Schemas for A/B Test Data
+class AgentABTestResultDetails(BaseModel):
+    """Detailed results for a single agent in an A/B test."""
+    aggregated_scores: Dict[str, float] = Field(default_factory=dict)
+    average_response_time_ms: Optional[float] = None
+    # raw_outputs: Optional[List[Dict[str, Any]]] = None # Consider if storing all raw outputs is feasible
+
+class ABTestRecordSchema(BaseModel):
+    """Schema for storing A/B test results."""
+    agent_a_id: str
+    agent_b_id: str
+    test_inputs_summary: List[Dict[str, Any]] # Could be list of input hashes or summaries
+    evaluation_criteria: List[str]
+    agent_a_results: AgentABTestResultDetails
+    agent_b_results: AgentABTestResultDetails
+    detailed_comparison: Optional[List[Dict[str, Any]]] = None # Per-input scores or full comparison data
+    overall_winner: str # "Agent A", "Agent B", "Tie"
+    percentage_difference: Optional[float] = None
+    test_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Optional: Link to evolution event if applicable
+    # evolution_event_id: Optional[str] = None 
 
 class ComponentExperienceTracker:
     """
@@ -33,25 +58,43 @@ class ComponentExperienceTracker:
     - output_summary_tracking: dict. (Optional, for tracking common output patterns, can be empty for now)
     """
 
-    def __init__(self, mongodb_client: MongoDBClient, collection_name: str = "eat_component_experiences"):
+    def __init__(self, mongodb_client: MongoDBClient, experience_collection_name: str = "eat_component_experiences", ab_test_collection_name: str = "eat_ab_test_results"):
         self.mongodb_client = mongodb_client
+        self.logger = logging.getLogger(__name__) # Moved logger initialization up
+
         if not isinstance(self.mongodb_client.client, motor.motor_asyncio.AsyncIOMotorClient):
             logger.critical("ComponentExperienceTracker: MongoDBClient is NOT using an AsyncIOMotorClient (Motor). Async DB ops will fail.")
             self.experience_collection = None
+            self.ab_test_collection = None # Initialize ab_test_collection to None as well
         else:
-            self.experience_collection = self.mongodb_client.get_collection(collection_name)
-        self.logger = logging.getLogger(__name__)
-        asyncio.create_task(self._ensure_indexes())
+            self.experience_collection = self.mongodb_client.get_collection(experience_collection_name)
+            self.ab_test_collection = self.mongodb_client.get_collection(ab_test_collection_name) # Initialize ab_test_collection
+        
+        # Ensure asyncio tasks are created only if event loop is running
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._ensure_indexes())
+        except RuntimeError: # No running event loop
+            self.logger.warning("No running asyncio event loop. Index creation will be skipped. Ensure init is called within an async context or manage indexes externally.")
 
 
     async def _ensure_indexes(self):
-        """Ensure necessary indexes exist on the collection."""
+        """Ensure necessary indexes exist on the collections."""
         if self.experience_collection is not None:
             try:
                 await self.experience_collection.create_index([("component_id", 1)], unique=True, background=True)
                 self.logger.info(f"Ensured 'component_id' index on '{self.experience_collection.name}'.")
             except Exception as e:
                 self.logger.error(f"Error creating MongoDB indexes for {self.experience_collection.name}: {e}", exc_info=True)
+        
+        if self.ab_test_collection is not None: # Add index creation for the new collection
+            try:
+                await self.ab_test_collection.create_index([("agent_a_id", 1)], background=True)
+                await self.ab_test_collection.create_index([("agent_b_id", 1)], background=True)
+                await self.ab_test_collection.create_index([("test_timestamp", -1)], background=True) # -1 for descending sort
+                self.logger.info(f"Ensured indexes on '{self.ab_test_collection.name}' for agent_a_id, agent_b_id, and test_timestamp.")
+            except Exception as e:
+                self.logger.error(f"Error creating MongoDB indexes for {self.ab_test_collection.name}: {e}", exc_info=True)
 
 
     async def record_event(
@@ -259,6 +302,85 @@ class ComponentExperienceTracker:
 # Example of how to ensure asyncio tasks are handled if the class is instantiated globally or in a non-async context
 # This is more relevant if the class is used in a way that its __init__ might not be awaited directly in an async loop.
 # For this specific project structure, it's likely managed by an outer async framework.
+
+    async def record_ab_test_summary(self, test_data: Dict[str, Any]) -> Optional[str]:
+        """
+        Records the summary of an A/B test into the 'eat_ab_test_results' collection.
+        Validates the input data against ABTestRecordSchema.
+        Returns the ID of the inserted record if successful, None otherwise.
+        """
+        if self.ab_test_collection is None:
+            self.logger.error("A/B test result collection is not initialized. Cannot record A/B test summary.")
+            return None
+
+        try:
+            # Validate data using the Pydantic model
+            validated_data = ABTestRecordSchema(**test_data)
+            # Convert Pydantic model to dict for MongoDB insertion, ensuring datetime is handled
+            data_to_insert = validated_data.model_dump(mode="python") # mode="python" converts datetime to Python datetime
+
+            self.logger.debug(f"Attempting to record A/B test summary: {data_to_insert}")
+            
+            result = await self.ab_test_collection.insert_one(data_to_insert)
+            inserted_id = str(result.inserted_id)
+            
+            self.logger.info(f"A/B test summary recorded successfully for agents {validated_data.agent_a_id} vs {validated_data.agent_b_id}. Record ID: {inserted_id}")
+            return inserted_id
+        except Exception as e: # Catch Pydantic validation errors and MongoDB errors
+            self.logger.error(f"Error recording A/B test summary: {e}", exc_info=True)
+            return None
+
+    async def get_ab_test_results_for_component(self, component_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Retrieves A/B test results for a specific component, sorted by recency.
+        Args:
+            component_id: The ID of the component to fetch results for.
+            limit: The maximum number of test results to return.
+        Returns:
+            A list of A/B test result documents.
+        """
+        if self.ab_test_collection is None:
+            self.logger.error("A/B test result collection is not initialized. Cannot get A/B test results.")
+            return []
+
+        self.logger.info(f"Fetching latest {limit} A/B test results for component_id: {component_id}")
+        try:
+            query = {
+                "$or": [
+                    {"agent_a_id": component_id},
+                    {"agent_b_id": component_id}
+                ]
+            }
+            cursor = self.ab_test_collection.find(query).sort("test_timestamp", -1).limit(limit)
+            results = await cursor.to_list(length=limit)
+            self.logger.debug(f"Found {len(results)} A/B test results for component_id: {component_id}.")
+            return results
+        except Exception as e:
+            self.logger.error(f"Error retrieving A/B test results for component '{component_id}': {e}", exc_info=True)
+            return []
+
+    async def get_latest_ab_test_results(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Retrieves the latest A/B test results, sorted by recency.
+        Args:
+            limit: The maximum number of test results to return.
+        Returns:
+            A list of A/B test result documents.
+        """
+        if self.ab_test_collection is None:
+            self.logger.error("A/B test result collection is not initialized. Cannot get latest A/B test results.")
+            return []
+
+        self.logger.info(f"Fetching latest {limit} A/B test results.")
+        try:
+            cursor = self.ab_test_collection.find({}).sort("test_timestamp", -1).limit(limit)
+            results = await cursor.to_list(length=limit)
+            self.logger.debug(f"Found {len(results)} latest A/B test results.")
+            return results
+        except Exception as e:
+            self.logger.error(f"Error retrieving latest A/B test results: {e}", exc_info=True)
+            return []
+
 import asyncio
 
 async def main(): # Example usage
