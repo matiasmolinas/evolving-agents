@@ -205,25 +205,25 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         6.  **DEFINE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string), `description` (string), `code_snippet` (string, use `|` for literal block scalar style for multiline Python code. Ensure correct indentation for the Python code *within* the YAML block scalar). Optional: `from_existing_snippet` (string).
         7.  **CREATE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string). Optional: `config` (mapping).
         8.  **EXECUTE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string).
-            *   Optional: `input` (mapping). **IF `input` is present, its value MUST be a mapping (dictionary).** Keys are parameter names, values are parameter values (strings, numbers, bools, or `{{{{...}}}}` placeholders). For multi-line string inputs (like an invoice document), use the YAML literal block scalar style (`|`) and ensure the string content is correctly indented relative to the `|`. Example:
+            *   Optional: `input` (mapping). **IF `input` is present, its value MUST be a mapping (dictionary).** Keys are parameter names, values are parameter values (strings, numbers, bools, or `{{variable_name}}` placeholders). For multi-line string inputs (like an invoice document), use the YAML literal block scalar style (`|`) and ensure the string content is correctly indented relative to the `|`. Example:
                 ```yaml
                 input:
                   invoice_document: |
                     INVOICE #123
                     Date: ...
                     Total: ...
-                  another_param: value
+                  another_param: '{{some_value}}'
                 ```
             *   Optional: `output_var` (string).
             *   Optional: `condition` (string).
         9.  **RETURN steps:** Mapping MUST include key: `value`.
-            *   **CRITICAL: The `value` key MUST be followed by a SINGLE string**, typically a placeholder like `{{{{variable_name}}}}` referencing the output variable of a previous `EXECUTE` step.
-            *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. Example of correct RETURN: `value: {{{{final_result}}}}`. Example of INCORRECT RETURN: `value: {{ field: {{{{var}}}} }}`. If you need to return a dictionary, create it in a previous `EXECUTE` step and return the variable holding that dictionary.
+            *   **CRITICAL: The `value` key MUST be followed by a SINGLE YAML string. This string will typically be a placeholder referencing an output variable from a previous `EXECUTE` step. This placeholder string MUST be quoted.** For example: `value: '{{final_result}}'` or `value: '{{step_output_var}}'`.
+            *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. Example of INCORRECT RETURN: `value: { field: '{{var}}' }`. If you need to return a dictionary, create it in a previous `EXECUTE` step and return the variable holding that dictionary.
 
         **CRITICAL YAML FORMATTING:**
         *   Use 2 spaces for indentation.
         *   Ensure correct list (`- `) and mapping (`key: value`) syntax.
-        *   Placeholders MUST be enclosed in double curly braces: `{{{{params.var}}}}` or `{{{{step_output_var}}}}`.
+        *   Placeholders for values that will be templated later MUST be formatted as `{{variable_name}}` (double curly braces). When these placeholders are used as YAML string values, they **MUST be quoted**, especially in the `value` field of `RETURN` steps. For example: `input_param: '{{some_input}}'`, or for return steps: `value: '{{output_to_return}}'`.
 
         Generate the complete YAML based on the design and logic. Ensure every step mapping and the overall structure is valid YAML. Pay meticulous attention to indentation, the structure of the `input` field in EXECUTE steps, and the SINGLE string value required for the `RETURN` step's `value` key.
         Return *only* the raw YAML content, starting with `scenario_name:` and ending after the last step. Do NOT include ```yaml ``` markers or any other explanatory text.
@@ -281,25 +281,25 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         6.  **DEFINE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string), `description` (string), `code_snippet` (string, use `|` for literal block scalar style for multiline Python code. Ensure correct indentation for the Python code *within* the YAML block scalar). Optional: `from_existing_snippet` (string). Generate plausible code snippets if defining new components.
         7.  **CREATE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string). Optional: `config` (mapping).
         8.  **EXECUTE steps:** Mapping MUST include keys: `item_type` (string: "AGENT" or "TOOL"), `name` (string).
-            *   Optional: `input` (mapping). **IF `input` is present, its value MUST be a mapping (dictionary).** Keys are parameter names, values are parameter values (strings, numbers, bools, or `{{{{...}}}}` placeholders). For multi-line string inputs (like an invoice document), use the YAML literal block scalar style (`|`) and ensure the string content is correctly indented relative to the `|`. Example:
+            *   Optional: `input` (mapping). **IF `input` is present, its value MUST be a mapping (dictionary).** Keys are parameter names, values are parameter values (strings, numbers, bools, or `{{variable_name}}` placeholders). For multi-line string inputs (like an invoice document), use the YAML literal block scalar style (`|`) and ensure the string content is correctly indented relative to the `|`. Example:
                 ```yaml
                 input:
                   invoice_document: |
                     INVOICE #123
                     Date: ...
                     Total: ...
-                  another_param: value
+                  another_param: '{{some_value}}'
                 ```
             *   Optional: `output_var` (string).
             *   Optional: `condition` (string).
         9.  **RETURN steps:** Mapping MUST include key: `value`.
-            *   **CRITICAL: The `value` key MUST be followed by a SINGLE string**, typically a placeholder like `{{{{variable_name}}}}` referencing the output variable of a previous `EXECUTE` step.
-            *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. Example of correct RETURN: `value: {{{{final_result}}}}`. Example of INCORRECT RETURN: `value: {{ field: {{{{var}}}} }}`. If you need to return a dictionary, create it in a previous `EXECUTE` step and return the variable holding that dictionary.
+            *   **CRITICAL: The `value` key MUST be followed by a SINGLE YAML string. This string will typically be a placeholder referencing an output variable from a previous `EXECUTE` step. This placeholder string MUST be quoted.** For example: `value: '{{final_result}}'` or `value: '{{step_output_var}}'`.
+            *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. Example of INCORRECT RETURN: `value: { field: '{{var}}' }`. If you need to return a dictionary, create it in a previous `EXECUTE` step and return the variable holding that dictionary.
 
         **CRITICAL YAML FORMATTING:**
         *   Use 2 spaces for indentation.
         *   Ensure correct list (`- `) and mapping (`key: value`) syntax.
-        *   Placeholders MUST be enclosed in double curly braces: `{{{{params.var}}}}` or `{{{{step_output_var}}}}`.
+        *   Placeholders for values that will be templated later MUST be formatted as `{{variable_name}}` (double curly braces). When these placeholders are used as YAML string values, they **MUST be quoted**, especially in the `value` field of `RETURN` steps. For example: `input_param: '{{some_input}}'`, or for return steps: `value: '{{output_to_return}}'`.
 
         Generate the complete YAML. Ensure every step mapping and the overall structure is valid YAML. Pay meticulous attention to indentation, the structure of the `input` field in EXECUTE steps, and the SINGLE string value required for the `RETURN` step's `value` key.
         Return *only* the raw YAML content, starting with `scenario_name:` (or the first top-level key) and ending after the last step. Do NOT include ```yaml ``` markers or any other explanatory text.
