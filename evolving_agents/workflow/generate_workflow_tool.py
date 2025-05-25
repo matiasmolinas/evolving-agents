@@ -220,6 +220,12 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
             *   **CRITICAL: The `value` key MUST be followed by a SINGLE YAML string. This string will typically be a placeholder referencing an output variable from a previous `EXECUTE` step. This placeholder string MUST be quoted.** For example: `value: '{{final_result}}'` or `value: '{{step_output_var}}'`.
             *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. Example of INCORRECT RETURN: `value: { field: '{{var}}' }`. If you need to return a dictionary, create it in a previous `EXECUTE` step and return the variable holding that dictionary.
 
+        **Tool Usage Guidelines & Restrictions:**
+        *   The `ProcessWorkflowTool` is a system-level tool primarily used by the orchestrator to load and parse the main workflow definition YAML itself. 
+        *   **Crucially, do NOT generate `EXECUTE` steps within this workflow that call `ProcessWorkflowTool` to parse intermediate data (e.g., extracted text from a document, raw file content) as if it were a new workflow definition.**
+        *   If you need to process or parse structured data (like extracted invoice details, which might be JSON or text), use or define appropriate data handling tools or agents (e.g., a JSON parsing tool, a data extraction agent, etc.). Data should be passed to such tools via their `input` parameters.
+        *   Only generate a call to `ProcessWorkflowTool` if the intention is to process an actual, complete YAML string that defines a sub-workflow (this is an advanced and rare case). For typical data processing, use other tools.
+
         **CRITICAL YAML FORMATTING:**
         *   Use 2 spaces for indentation.
         *   Ensure correct list (`- `) and mapping (`key: value`) syntax.
@@ -295,6 +301,12 @@ class GenerateWorkflowTool(Tool[GenerateWorkflowInput, None, StringToolOutput]):
         9.  **RETURN steps:** Mapping MUST include key: `value`.
             *   **CRITICAL: The `value` key MUST be followed by a SINGLE YAML string. This string will typically be a placeholder referencing an output variable from a previous `EXECUTE` step. This placeholder string MUST be quoted.** For example: `value: '{{final_result}}'` or `value: '{{step_output_var}}'`.
             *   **DO NOT** put a nested mapping (dictionary) directly under the `value:` key. Example of INCORRECT RETURN: `value: { field: '{{var}}' }`. If you need to return a dictionary, create it in a previous `EXECUTE` step and return the variable holding that dictionary.
+
+        **Tool Usage Guidelines & Restrictions:**
+        *   The `ProcessWorkflowTool` is a system-level tool primarily used by the orchestrator to load and parse the main workflow definition YAML itself. 
+        *   **Crucially, do NOT generate `EXECUTE` steps within this workflow that call `ProcessWorkflowTool` to parse intermediate data (e.g., extracted text from a document, raw file content) as if it were a new workflow definition.**
+        *   If you need to process or parse structured data (like extracted invoice details, which might be JSON or text), use or define appropriate data handling tools or agents (e.g., a JSON parsing tool, a data extraction agent, etc.). Data should be passed to such tools via their `input` parameters.
+        *   Only generate a call to `ProcessWorkflowTool` if the intention is to process an actual, complete YAML string that defines a sub-workflow (this is an advanced and rare case). For typical data processing, use other tools.
 
         **CRITICAL YAML FORMATTING:**
         *   Use 2 spaces for indentation.
