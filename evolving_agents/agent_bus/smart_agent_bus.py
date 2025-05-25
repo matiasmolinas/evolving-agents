@@ -17,6 +17,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.dependency_container import DependencyContainer
 from evolving_agents.core.base import IAgent
 from evolving_agents.core.mongodb_client import MongoDBClient
+from evolving_agents.monitoring.component_experience_tracker import ComponentExperienceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ class SmartAgentBus:
         mongodb_db_name: Optional[str] = None,
         registry_collection_name: str = "eat_agent_registry",
         logs_collection_name: str = "eat_agent_bus_logs",
-        circuit_breaker_path: str = "agent_bus_circuit_breakers.json"
+        circuit_breaker_path: str = "agent_bus_circuit_breakers.json",
+        component_experience_tracker: Optional[ComponentExperienceTracker] = None
     ):
         self.container = container
         self._system_agent_instance = system_agent
@@ -93,6 +95,24 @@ class SmartAgentBus:
             self.registry_collection = None
             self.logs_collection = None
 
+        # Initialize ComponentExperienceTracker
+        self.experience_tracker = None
+        if component_experience_tracker:
+            self.experience_tracker = component_experience_tracker
+            logger.debug("SmartAgentBus: Using directly passed ComponentExperienceTracker.")
+        elif self.container and self.container.has('component_experience_tracker'):
+            self.experience_tracker = self.container.get('component_experience_tracker')
+            logger.debug("SmartAgentBus: Using ComponentExperienceTracker from container.")
+        elif self.mongodb_client:
+            try:
+                self.experience_tracker = ComponentExperienceTracker(mongodb_client=self.mongodb_client)
+                logger.info("SmartAgentBus: Initialized new ComponentExperienceTracker instance.")
+                if self.container and not self.container.has('component_experience_tracker'):
+                    self.container.register('component_experience_tracker', self.experience_tracker)
+            except Exception as e:
+                logger.error(f"SmartAgentBus: Failed to initialize ComponentExperienceTracker: {e}", exc_info=True)
+        else:
+            logger.warning("SmartAgentBus: ComponentExperienceTracker not provided and MongoDBClient unavailable for its auto-init.")
 
         self.agents: Dict[str, Dict[str, Any]] = {} # In-memory cache
         self._load_circuit_breakers()
@@ -228,6 +248,28 @@ class SmartAgentBus:
         self._initialized = True
         logger.info(f"AgentBus synced {initialized_count} new components from SmartLibrary into MongoDB registry.")
 
+    # Log Schema for 'eat_agent_bus_logs' collection:
+    # Each log entry is a dictionary with the following fields:
+    # - log_id (str): Unique identifier for this log record (e.g., "log_xxxxxxxxxxxx").
+    # - timestamp (datetime): Timestamp of when the log was created (UTC).
+    # - bus_type (str): Indicates the type of bus operation, e.g., 'data' for capability requests,
+    #                   'system' for direct agent executions or internal bus operations like 'register'.
+    # - agent_id (str): The ID of the agent or tool that was invoked. Can be 'N/A' if not applicable.
+    # - agent_name (str): The name of the invoked agent or tool. Can be 'N/A'.
+    # - task_description (str): A high-level description of the task, capability, or operation performed.
+    #                           (e.g., "summarize_text", "execute_code_tool", "register_agent").
+    # - task_details (dict): Contains the detailed parameters and inputs provided for the task.
+    #                        FOR THIS LOG TO BE EFFECTIVELY QUERYABLE AND ANALYZABLE BY STRATEGIC
+    #                        AGENTS (LIKE EVOLUTIONSTRATEGISTAGENT), THIS FIELD SHOULD COMPREHENSIVELY
+    #                        CAPTURE ALL RELEVANT INPUTS, ARGUMENTS, AND CONFIGURATIONS USED FOR
+    #                        THE INVOCATION. This field is directly populated from the `task` argument
+    #                        passed to this logging method. For example, if a capability takes 'text' and 'style'
+    #                        as inputs, task_details should be like: {'text': '...', 'style': 'formal'}.
+    # - result (dict, optional): The result returned by the agent/tool. May be summarized for brevity.
+    #                            Example: {'content_summary': 'Summary of the text...'}
+    # - error (str, optional): If an error occurred during execution, this field contains the error
+    #                          message or a summary of the error.
+    # - duration_ms (int, optional): The duration of the agent/tool execution in milliseconds.
     async def _log_agent_execution(
         self, bus_type: str, agent_id: str, task: Dict[str, Any],
         result: Optional[Dict[str, Any]] = None, error: Optional[str] = None,
@@ -256,6 +298,44 @@ class SmartAgentBus:
             await self.logs_collection.insert_one(log_entry)
         except Exception as e:
             logger.error(f"Failed to write execution log to MongoDB: {e}", exc_info=True)
+
+        if self.experience_tracker:
+            try:
+                # Prepare parameters for record_event
+                # 'task' dict is available in this method's scope as 'task'
+                # 'result' is available as 'result'
+                # 'error' is available as 'error'
+                # 'duration' is available as 'duration' (in seconds)
+                # 'agent_id' is available as 'agent_id'
+                # 'agent_name' is available (already resolved in log_entry preparation)
+
+                # Extract input_params from the 'task' dictionary.
+                input_params_for_experience = task.get("content", task) if isinstance(task.get("content"), dict) else task
+
+                # Determine record_type (AGENT/TOOL)
+                component_type = "UNKNOWN"
+                if agent_id != "N/A" and agent_id in self.agents:
+                    component_type = self.agents[agent_id].get("type", "UNKNOWN")
+                
+                output_summary_for_experience = None
+                if result and isinstance(result, dict):
+                    output_summary_for_experience = str(result.get("content_summary", result))[:500] # Summarize
+                elif result:
+                    output_summary_for_experience = str(result)[:500]
+
+
+                await self.experience_tracker.record_event(
+                    component_id=agent_id,
+                    name=agent_name, # agent_name resolved for log_entry
+                    record_type=component_type,
+                    duration_ms=duration * 1000 if duration is not None else 0.0,
+                    success=error is None,
+                    error=error,
+                    input_params=input_params_for_experience,
+                    output_summary=output_summary_for_experience
+                )
+            except Exception as e:
+                logger.error(f"SmartAgentBus: Failed to record event with ComponentExperienceTracker for agent {agent_id}: {e}", exc_info=True)
 
     def _check_circuit_breaker(self, agent_id: str) -> bool:
         if agent_id not in self.circuit_breakers: return False
