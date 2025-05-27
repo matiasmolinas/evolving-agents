@@ -15,60 +15,76 @@ from evolving_agents.tools.context_builder_tool import ContextBuilderTool
 from evolving_agents.tools.experience_recorder_tool import ExperienceRecorderTool
 from evolving_agents.tools.internal.mongo_experience_store_tool import MongoExperienceStoreTool
 from evolving_agents.core.dependency_container import DependencyContainer # For SmartAgentBus if it uses one
+from evolving_agents.smart_library.smart_library import SmartLibrary # Import real SmartLibrary
 
-# --- Mocking SmartLibrary and SearchComponentTool ---
-class MockSearchComponentTool:
+
+async def preload_sample_component(smart_lib_instance: SmartLibrary):
     """
-    A mock implementation of SearchComponentTool for the demo.
+    Pre-loads a sample tool component into the SmartLibrary if it doesn't already exist.
     """
-    name = "search_component_tool"
-    description = "Mocked component search tool. Returns predefined components for relevant queries."
+    logger = logging.getLogger(__name__)
+    component_name = "GenericResearchTool"
+    component_type = "TOOL"
+    try:
+        # SmartLibrary's find_record_by_name might need more specific parameters or might not exist.
+        # Let's assume find_record_by_id is more common, or we try to create and handle potential errors.
+        # For this demo, we'll attempt to find it by name and type, assuming such a method or similar logic exists.
+        # A more robust way would be to assign a fixed UUID and check by ID.
+        # For simplicity, we'll rely on name and type for this check.
+        # SmartLibrary.find_record_by_name may not exist; using a more generic check or try-catch on create.
+        # A simple approach: try to get it, if not found, create it.
+        # The `SmartLibrary.create_record` should internally handle embedding generation.
 
-    def __init__(self, smart_library: Optional[Any] = None): # smart_library arg to match real tool
-        self.logger = logging.getLogger(__name__)
+        # Check if component exists (simplified check, real check might need version too)
+        # As `find_record_by_name` is not a standard method in the provided SmartLibrary snippets,
+        # we'll attempt creation and rely on potential unique constraints or just overwrite for demo simplicity if needed.
+        # A better check for "already exists" would use a specific ID.
+        # For now, we'll just log an attempt. A real app might query first.
+        logger.info(f"Attempting to preload {component_name} into SmartLibrary...")
+        
+        # To truly check existence, one might need a method like:
+        # existing_component = await smart_lib_instance.get_component_by_name_and_type(name=component_name, record_type=component_type)
+        # This demo will proceed to create, assuming `create_record` is idempotent or it's okay for a demo.
+        # For a more robust check, a dedicated `find_record_by_name_and_type` would be ideal in SmartLibrary.
+        # Let's assume we try to create it and if it fails due to a unique constraint (e.g. name+type+version), it's fine.
+        # Or, for the demo, we just create it. If it's run multiple times, it might create duplicates without a proper check.
+        # The prompt example uses `find_record_by_name` - let's assume it exists for the purpose of the demo structure.
 
-    async def run(self, query: str, limit: int = 5, search_type: str = "semantic", **kwargs) -> List[Dict[str, Any]]:
-        """
-        Simulates searching for components.
-        """
-        self.logger.info(f"MockSearchComponentTool.run called with query: '{query}', limit: {limit}, search_type: '{search_type}'")
-        # In a real SearchComponentTool, this would return a list of component dicts directly
-        # For this demo, make it simple:
-        relevant_components = []
-        if "hyperdimensional computing" in query.lower() or "ai technique" in query.lower() or "research" in query.lower():
-            relevant_components = [
-                {"id": "comp_vector_search_001", "name": "VectorDBSearchTool", "description": "Tool for advanced searching in vector databases, useful for literature reviews.", "version": "1.2", "type": "TOOL"},
-                {"id": "comp_summarizer_002", "name": "AdvancedTextSummarizer", "description": "Tool to summarize long research papers.", "version": "2.0", "type": "TOOL"}
-            ]
-        elif "data analysis" in query.lower():
-             relevant_components = [
-                {"id": "comp_data_analyzer_003", "name": "PandasDataAnalyzer", "description": "Tool for data analysis using pandas.", "version": "1.0", "type": "TOOL"}
-            ]
-        self.logger.info(f"MockSearchComponentTool returning {len(relevant_components)} components.")
-        return relevant_components # Direct list of dicts
-
-
-class MockSmartLibrary:
-    """
-    A mock implementation of SmartLibrary for the demo, primarily to provide
-    the MockSearchComponentTool.
-    """
-    def __init__(self, llm_service: Optional[LLMService] = None, mongodb_client: Optional[MongoDBClient] = None, container: Optional[DependencyContainer] = None):
-        self.logger = logging.getLogger(__name__)
-        self.search_component_tool = MockSearchComponentTool(smart_library=self) # Instantiate the mock tool
-        self.llm_service = llm_service
-        self.mongodb_client = mongodb_client
-        self.container = container
-        self.logger.info("MockSmartLibrary initialized with MockSearchComponentTool.")
-
-    # Add other methods that might be called by SearchComponentTool's real constructor if any,
-    # or by ContextBuilderTool if it tries to access more from SmartLibrary.
-    # For this demo, keeping it minimal.
-    async def get_component(self, component_id: str, version: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        self.logger.warning(f"MockSmartLibrary.get_component called for {component_id}, returning None. Not implemented for demo.")
-        return None
-
-# --- End Mocking ---
+        existing_components = await smart_lib_instance.search_components(query=component_name, limit=5, filters={"name": component_name, "record_type": component_type})
+        
+        found_existing = False
+        if existing_components:
+            for comp in existing_components:
+                if comp.get("name") == component_name and comp.get("record_type") == component_type:
+                    logger.info(f"{component_name} already exists in SmartLibrary with ID: {comp.get('id')}.")
+                    found_existing = True
+                    break
+        
+        if not found_existing:
+            logger.info(f"Preloading {component_name} into SmartLibrary...")
+            tool_record_data = {
+                "name": component_name,
+                "record_type": component_type,
+                "domain": "Research",
+                "description": "A generic tool for performing research tasks, capable of searching and summarizing information.",
+                # Functional text that SmartLibrary will use for E_orig embedding
+                "code_snippet": "class GenericResearchTool:\n    def __init__(self, api_key: str):\n        self.api_key = api_key\n\n    def run(self, query: str, sources: list = ['web', 'arxiv']):\n        # Simulates searching various sources\n        print(f'GenericResearchTool: Researching query \"{query}\" across sources: {sources}')\n        results = f'Comprehensive research results for \"{query}\" from {sources}. Key findings include A, B, C.'\n        # In a real tool, this would involve API calls, data processing, etc.\n        return results\n\n    def summarize(self, text: str):\n        print(f'GenericResearchTool: Summarizing text of length {len(text)}')\n        return f'Summary of the provided text: First sentence. Last sentence.'",
+                "version": "1.0.0",
+                "status": "active", # Assuming 'status' is a relevant field for SmartLibrary records
+                "tags": ["research", "utility", "generic_tool"],
+                # Applicability text (T_raz) will be generated by SmartLibrary.create_record
+                # if its internal logic includes call to _generate_applicability_text
+                "metadata": { 
+                    "dependencies": ["requests", "beautifulsoup4"],
+                    "example_usage": "tool.run(query='latest advancements in AI')"
+                }
+            }
+            # `create_record` in SmartLibrary is responsible for generating embeddings.
+            created_component_doc = await smart_lib_instance.create_record(tool_record_data)
+            logger.info(f"{component_name} preloaded with ID: {created_component_doc['id']}")
+        
+    except Exception as e:
+        logger.error(f"Error preloading {component_name}: {e}", exc_info=True)
 
 
 async def preload_dummy_experiences(
@@ -148,22 +164,26 @@ async def main():
         mongodb_client = MongoDBClient() # Assumes MONGODB_URI and MONGODB_DATABASE_NAME are set
         llm_service = LLMService() # Assumes OPENAI_API_KEY (or other) is set
 
-        # SmartAgentBus can use a container, but for this demo, explicit passing is fine if its constructor allows it
-        # If SmartAgentBus strictly requires a container with all its deps, this part needs adjustment.
-        # For now, let's assume a simpler SmartAgentBus or one that can operate standalone for basic registration.
+        # SmartAgentBus can use a container.
         container = DependencyContainer()
         container.register("llm_service", llm_service)
         container.register("mongodb_client", mongodb_client)
-        # SmartLibrary is mocked, so bus won't use a real one for agent component discovery for this demo
-        mock_smart_library_for_bus = MockSmartLibrary(llm_service=llm_service, mongodb_client=mongodb_client)
-        container.register("smart_library", mock_smart_library_for_bus)
+        
+        # Instantiate real SmartLibrary
+        logger.info("Initializing SmartLibrary...")
+        smart_library = SmartLibrary(
+            llm_service=llm_service,
+            mongodb_client=mongodb_client
+            # SmartLibrary's constructor might also accept/prefer `container=container`
+            # For this demo, direct llm_service and mongodb_client passing is clear.
+            # await smart_library.initialize() # If SmartLibrary has an async init method
+        )
+        container.register("smart_library", smart_library) # Register real SmartLibrary for AgentBus
+        logger.info("SmartLibrary initialized.")
 
-
-        # SmartAgentBus might need SmartLibrary for some operations (e.g. agent component discovery)
-        # For this demo, we mostly need it for agent registration and request dispatching.
-        smart_agent_bus = SmartAgentBus(container=container) # Pass container
+        # SmartAgentBus needs SmartLibrary for some operations (e.g. agent component discovery)
+        smart_agent_bus = SmartAgentBus(container=container)
         container.register("smart_agent_bus", smart_agent_bus)
-
 
         # Instantiate MemoryManagerAgent
         memory_manager_agent = MemoryManagerAgent(
@@ -185,12 +205,10 @@ async def main():
         )
         logger.info(f"MemoryManagerAgent '{memory_manager_agent.agent_meta.name}' instantiated and registered with SmartAgentBus.")
 
-        # Instantiate tools (ContextBuilderTool needs MockSmartLibrary)
-        mock_smart_library_instance = MockSmartLibrary(llm_service=llm_service, mongodb_client=mongodb_client)
-
+        # Instantiate tools with real SmartLibrary
         context_builder_tool = ContextBuilderTool(
             smart_agent_bus=smart_agent_bus,
-            smart_library=mock_smart_library_instance, # Pass the mock library
+            smart_library=smart_library,    # Pass the real smart_library instance
             llm_service=llm_service
         )
         experience_recorder_tool = ExperienceRecorderTool(smart_agent_bus=smart_agent_bus)
@@ -201,12 +219,17 @@ async def main():
         logger.error("This demo may not function correctly. Please check your environment variables and service availability (MongoDB, LLM).")
         return
 
-    # --- 2. Pre-load Dummy Data ---
-    logger.info("\nSTEP 2: Pre-loading dummy experiences...")
-    # Get MongoExperienceStoreTool, can be from MMA or instantiated directly for setup
-    # For simplicity, instantiate one directly here as MMA's tools are internal.
-    direct_mongo_tool = MongoExperienceStoreTool(mongodb_client, llm_service)
+    # --- 2. Pre-load Data (Experiences & Components) ---
+    logger.info("\nSTEP 2: Pre-loading data (dummy experiences and sample component)...")
+    
+    # Pre-load dummy experiences
+    direct_mongo_tool = MongoExperienceStoreTool(mongodb_client, llm_service) # For direct preloading
     await preload_dummy_experiences(direct_mongo_tool)
+
+    # Pre-load sample component into SmartLibrary
+    await preload_sample_component(smart_library)
+    
+    logger.info("Pre-loading complete.")
 
     # --- 3. Simulate SystemAgent Starting a New Task ---
     logger.info("\nSTEP 3: Simulating SystemAgent starting a new research task...")
@@ -254,9 +277,9 @@ async def main():
 
             components_entry = built_context.get_data_entry("relevant_library_components")
             if components_entry and components_entry.value:
-                logger.info(f"  Relevant Library Components (Mocked) ({len(components_entry.value)}):")
+                logger.info(f"  Relevant Library Components (from SmartLibrary) ({len(components_entry.value)}):")
                 for i, comp in enumerate(components_entry.value):
-                    logger.info(f"    Comp {i+1}: Name='{comp.get('name')}', Desc='{comp.get('description')}'")
+                    logger.info(f"    Comp {i+1}: Name='{comp.get('name')}', ID='{comp.get('id')}', Desc='{comp.get('description')[:60]}...'")
             else: logger.info("  Relevant Library Components: Not found or empty.")
             logger.info("--- End of Built Context ---")
 
@@ -267,7 +290,8 @@ async def main():
     logger.info("\nSTEP 5: Simulating task execution results for Hyperdimensional Computing research...")
     key_decisions_made_during_task = [
         {"decision_summary": "Focused on papers by Kanerva and Plate.", "decision_reasoning": "Identified as key figures from initial context.", "timestamp": datetime.now(timezone.utc).isoformat()},
-        {"decision_summary": "Utilized VectorDBSearchTool for semantic search of related work.", "decision_reasoning": "Tool suggested by ContextBuilderTool."}
+        {"decision_summary": "Focused on papers by Kanerva and Plate.", "decision_reasoning": "Identified as key figures from initial context.", "timestamp": datetime.now(timezone.utc).isoformat()},
+        {"decision_summary": "Selected GenericResearchTool for initial information gathering.", "decision_reasoning": "Tool identified as relevant by ContextBuilderTool via SmartLibrary."}
     ]
     output_of_research = (
         "Hyperdimensional Computing (HDC) represents data as high-dimensional vectors (hypervectors) "
@@ -278,8 +302,8 @@ async def main():
     final_task_outcome = "success" # Could be "failure", "partial_success"
     final_task_outcome_reason = "Successfully gathered and summarized core concepts of HDC."
     involved_components_in_task = [
-        {"component_id": "comp_vector_search_001", "component_name": "VectorDBSearchTool", "component_type": "TOOL", "usage_description": "Used for finding related research papers."},
-        {"component_id": "HumanResearcher_001", "component_name": "AIResearcher", "component_type": "AGENT_PERSONA", "usage_description": "Performed analysis and synthesis of information."}
+        {"component_id": "GenericResearchTool_1.0.0", "component_name": "GenericResearchTool", "component_type": "TOOL", "usage_description": "Used for initial research query on HDC."}, # Assuming ID might include version or is auto-generated
+        {"component_id": "SimulatedSystemAgent", "component_name": "SimulatedSystemAgent", "component_type": "AGENT", "usage_description": "Orchestrated the research task."}
     ]
     logger.info("Simulated task execution results defined.")
 
