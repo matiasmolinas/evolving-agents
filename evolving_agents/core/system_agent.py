@@ -28,6 +28,10 @@ from evolving_agents.tools.intent_review.workflow_design_review_tool import Work
 from evolving_agents.tools.intent_review.component_selection_review_tool import ComponentSelectionReviewTool
 from evolving_agents.tools.intent_review.approve_plan_tool import ApprovePlanTool
 
+# Newly Integrated Tools for Context and Experience Management
+from evolving_agents.tools.context_builder_tool import ContextBuilderTool
+from evolving_agents.tools.experience_recorder_tool import ExperienceRecorderTool
+
 # Core Components
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.firmware.firmware import Firmware
@@ -135,11 +139,25 @@ class SystemAgentFactory:
         # **MODIFIED: Pass mongodb_client or container to ApprovePlanTool**
         approve_plan_tool = ApprovePlanTool(llm_service=resolved_llm_service, mongodb_client=resolved_mongodb_client, container=container)
 
+        # Instantiate ContextBuilderTool and ExperienceRecorderTool
+        context_builder_tool = ContextBuilderTool(
+            smart_agent_bus=resolved_agent_bus,
+            smart_library=resolved_smart_library,
+            llm_service=resolved_llm_service  # Pass LLM service, even if for future use by the tool
+        )
+        experience_recorder_tool = ExperienceRecorderTool(
+            smart_agent_bus=resolved_agent_bus
+        )
+        logger.debug("SystemAgentFactory: ContextBuilderTool and ExperienceRecorderTool instantiated.")
+
         tools = [
             contextual_search_tool, task_context_tool, search_tool, create_tool, evolve_tool,
             register_tool, request_tool, discover_tool,
             generate_workflow_tool, process_workflow_tool,
             workflow_design_review_tool, component_selection_review_tool, approve_plan_tool,
+            # Add new tools
+            context_builder_tool,
+            experience_recorder_tool,
         ]
         logger.debug(f"SystemAgentFactory: {len(tools)} tools instantiated.")
 
@@ -177,6 +195,88 @@ class SystemAgentFactory:
         # Log the actual mapped tools for verification
         logger.debug(f"SystemAgent tools_map contains: {list(system_agent.tools_map.keys())}")
 
+        # --- Conceptual Usage Comments for SystemAgent (ReActAgent instance) ---
+        # The SystemAgent, being a ReActAgent, will use its tools based on its reasoning loop.
+        # The following comments outline where the new tools would conceptually fit into its operations.
+        # Actual implementation depends on the ReAct prompt engineering and internal logic.
+
+        # TODO: Integrate ContextBuilderTool before detailed planning by SystemAgent
+        # Location: Within SystemAgent's ReAct logic when it receives a new complex goal and is about
+        #           to generate a detailed plan (e.g., before calling GenerateWorkflowTool).
+        # Action:
+        #   current_smart_context = self.memory.get_current_context() # Or however SystemAgent accesses its context
+        #   planning_context = await self.tools_map['context_builder_tool'].build_context(
+        #       target_agent_id=self.meta.id, # SystemAgent's own ID
+        #       assigned_sub_task_goal_description=complex_goal_description,
+        #       workflow_context=current_smart_context
+        #   )
+        #   # Use planning_context.data (e.g., relevant_past_experiences, summarized_message_history)
+        #   # to inform GenerateWorkflowTool or other planning steps, potentially by adding
+        #   # this context to the prompt for the planning tool.
+        # Benefit: The insights from past experiences and message history in the returned SmartContext
+        #          should inform a more robust and contextually aware planning process.
+
+        # TODO: Use ContextBuilderTool before SystemAgent delegates a sub-task
+        # Location: When SystemAgent is about to delegate a sub-task to another agent using
+        #           RequestAgentTool or a similar mechanism.
+        # Action:
+        #   current_smart_context = self.memory.get_current_context()
+        #   sub_task_context = await self.tools_map['context_builder_tool'].build_context(
+        #       target_agent_id=worker_agent_id, # ID of the agent receiving the sub-task
+        #       assigned_sub_task_goal_description=sub_task_description,
+        #       workflow_context=current_smart_context
+        #   )
+        #   # Pass sub_task_context (e.g., sub_task_context.to_json_string()) to the worker agent
+        #   # as part of the 'prompt' or 'content' for the RequestAgentTool call.
+        #   # Example:
+        #   # request_prompt = json.dumps({
+        #   #     "capability": "target_capability_of_worker_agent",
+        #   #     "args": {
+        #   #         "task_description": sub_task_description,
+        #   #         "task_specific_context": sub_task_context.to_dict() # Serialize SmartContext
+        #   #     }
+        #   # })
+        #   # result = await self.tools_map['request_agent_tool'].run(
+        #   #     agent_id=worker_agent_id,
+        #   #     prompt=request_prompt
+        #   # )
+        # Benefit: The worker agent receives a richer, pre-processed context, enabling it to
+        #          perform its sub-task more effectively and with less redundant information gathering.
+
+        # TODO: Use ExperienceRecorderTool after SystemAgent completes a significant task/workflow
+        # Location: After a significant workflow or task orchestrated by SystemAgent has concluded.
+        #           SystemAgent needs criteria to determine "significance".
+        # Action:
+        #   # if task_is_significant and (workflow_succeeded or workflow_failed):
+        #   #     # SystemAgent gathers information from its memory, workflow logs, tool outputs.
+        #   #     experience_details = {
+        #   #         "primary_goal_description": "The overall goal SystemAgent was trying to achieve.",
+        #   #         "sub_task_description": "Specific sub-task if applicable, or main task again.",
+        #   #         "involved_components": [ # List of dicts: {"component_id": ..., "component_name": ..., "component_type": ..., "usage_description": ...}
+        #   #             {"component_id": "GenerateWorkflowTool_v1", "component_name": "GenerateWorkflowTool", "component_type": "TOOL", "usage_description": "Used for initial plan creation."},
+        #   #             {"component_id": "worker_agent_alpha", "component_name": "AlphaWorker", "component_type": "AGENT", "usage_description": "Executed data processing sub-task."}
+        #   #         ],
+        #   #         "input_context_summary": "Summary of the initial context/prompt SystemAgent received.",
+        #   #         "key_decisions_made": [ # List of dicts: {"decision_summary": ..., "decision_reasoning": ..., "timestamp": ...}
+        #   #             {"decision_summary": "Chose AlphaWorker over BetaWorker for data processing.", "decision_reasoning": "AlphaWorker had higher success rate on similar tasks from experience context."}
+        #   #         ],
+        #   #         "final_outcome": "success" if workflow_succeeded else "failure",
+        #   #         "final_outcome_reason": "Detailed reason for success or failure.",
+        #   #         "output_summary": "Summary of the final output or result of the workflow.",
+        #   #         "feedback_signals": [ # Optional: from user feedback or system metrics
+        #   #             {"feedback_source": "user_rating", "feedback_content": "Excellent work!", "feedback_rating": 5.0}
+        #   #         ],
+        #   #         "tags": ["complex_workflow", "data_processing", "user_initiated"],
+        #   #         "agent_version": self.meta.version if hasattr(self.meta, 'version') else "N/A", # Assuming AgentMeta might have version
+        #   #         "initiating_agent_id": self.meta.id # Or the agent that called SystemAgent
+        #   #     }
+        #   #     record_result = await self.tools_map['experience_recorder_tool'].record_experience(**experience_details)
+        #   #     if record_result.get("status") == "success":
+        #   #         logger.info(f"SystemAgent successfully recorded experience: {record_result.get('experience_id')}")
+        #   #     else:
+        #   #         logger.error(f"SystemAgent failed to record experience: {record_result.get('message')}")
+        # Benefit: Captures valuable knowledge about workflow execution, component performance, and decision effectiveness,
+        #          making this information available for future planning and task execution via ContextBuilderTool.
 
         # --- Container Registration & AgentBus Update ---
         if container and not container.has('system_agent'):
