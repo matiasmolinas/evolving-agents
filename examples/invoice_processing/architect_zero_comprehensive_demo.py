@@ -24,6 +24,14 @@ from evolving_agents.agents.architect_zero import ArchitectZeroAgentInitializer
 from evolving_agents.core.mongodb_client import MongoDBClient
 from evolving_agents import config as eat_config
 
+# MemoryManagerAgent and its dependencies
+from evolving_agents.agents.memory_manager_agent import MemoryManagerAgent
+from evolving_agents.tools.internal.mongo_experience_store_tool import MongoExperienceStoreTool
+from evolving_agents.tools.internal.semantic_experience_search_tool import SemanticExperienceSearchTool
+from evolving_agents.tools.internal.message_summarization_tool import MessageSummarizationTool
+from beeai_framework.memory import UnconstrainedMemory
+
+
 # --- Configuration ---
 logging.basicConfig(
     level=logging.INFO,
@@ -155,6 +163,37 @@ async def setup_framework_environment(container: DependencyContainer) -> Depende
     )
     container.register('llm_service', llm_service)
 
+    # --- Instantiate Internal Tools for MemoryManagerAgent ---
+    console.print("  → Initializing Internal Tools for MemoryManagerAgent...")
+    experience_store_tool = MongoExperienceStoreTool(
+        mongodb_client=mongodb_client_instance,
+        llm_service=llm_service
+    )
+    semantic_search_tool = SemanticExperienceSearchTool(
+        mongodb_client=mongodb_client_instance,
+        llm_service=llm_service
+        # Consider passing default_search_fields or vector_index_name if defaults in tool are not sufficient
+    )
+    message_summarization_tool = MessageSummarizationTool(
+        llm_service=llm_service
+    )
+    console.print("  [green]✓[/] Internal Tools for MemoryManagerAgent initialized.")
+
+    # --- Instantiate MemoryManagerAgent ---
+    console.print("  → Initializing MemoryManagerAgent...")
+    memory_manager_agent_memory = UnconstrainedMemory()
+    memory_manager_agent = MemoryManagerAgent(
+        llm_service=llm_service,
+        mongo_experience_store_tool=experience_store_tool,
+        semantic_search_tool=semantic_search_tool,
+        message_summarization_tool=message_summarization_tool,
+        memory=memory_manager_agent_memory
+    )
+    # Optional: Register MemoryManagerAgent in the container if other components might need direct access
+    # container.register('memory_manager_agent', memory_manager_agent) # Not strictly needed if only accessed via bus
+    console.print("  [green]✓[/] MemoryManagerAgent initialized.")
+
+
     # 2. Smart Library
     console.print("  → Initializing Smart Library (MongoDB backend)...")
     smart_library = SmartLibrary(
@@ -176,6 +215,26 @@ async def setup_framework_environment(container: DependencyContainer) -> Depende
         container=container
     )
     container.register('agent_bus', agent_bus)
+
+    # --- Register MemoryManagerAgent with SmartAgentBus ---
+    console.print("  → Registering MemoryManagerAgent with SmartAgentBus...")
+    MEMORY_MANAGER_AGENT_ID = "memory_manager_agent_default_id" # Define the ID
+    await agent_bus.register_agent(
+        agent_id=MEMORY_MANAGER_AGENT_ID,
+        name="MemoryManagerAgent",
+        description="Manages persistent storage and retrieval of agent experiences and contextual facts. Call via 'process_task' capability with a natural language description of the memory operation needed.",
+        agent_type="MemoryManagement", # Or any other suitable type
+        capabilities=[{
+            "id": "process_task",
+            "name": "Process Task",
+            "description": "Processes a natural language task related to memory management (e.g., 'store experience: {...}', 'retrieve experiences for: ...', 'summarize messages: [...] for goal: ...').",
+            "confidence": 0.95 # High confidence as it's the main entry point
+        }],
+        agent_instance=memory_manager_agent, # Pass the created instance
+        embed_capabilities=True # Recommended
+    )
+    console.print(f"  [green]✓[/] MemoryManagerAgent registered on SmartAgentBus with ID: {MEMORY_MANAGER_AGENT_ID}.")
+
 
     # 5. System Agent
     console.print("  → Initializing System Agent...")

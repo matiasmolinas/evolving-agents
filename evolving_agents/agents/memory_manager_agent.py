@@ -1,364 +1,227 @@
 import logging
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Dict, Optional, Any
 
-# Assuming beeai_framework is in the PYTHONPATH
-# If not, this import will fail and needs to be adjusted based on actual project structure.
-# For now, we proceed with the assumption it's available.
-try:
-    from beeai_framework.agents.react.react_agent import ReActAgent # Adjusted path
-    from beeai_framework.agents.agent_meta import AgentMeta # Adjusted path
-except ImportError:
-    logging.warning(
-        "beeai_framework not found. Using placeholder for ReActAgent and AgentMeta. "
-        "Functionality will be limited. Ensure beeai_framework is installed and in PYTHONPATH."
-    )
-    # Define placeholder classes if beeai_framework is not available
-    # This allows the rest of the file to be syntactically correct for development purposes.
-    class AgentMeta:
-        def __init__(self, name: str, description: str, capabilities: List[Dict[str, Any]], tools: Optional[List[Any]] = None):
-            self.name = name
-            self.description = description
-            self.capabilities = capabilities
-            self.tools = tools or []
-
-    class ReActAgent:
-        def __init__(self, llm_service: Any, agent_meta: AgentMeta, tools: List[Any]):
-            self.llm_service = llm_service
-            self.agent_meta = agent_meta
-            self.tools = tools
-            self.logger = logging.getLogger(agent_meta.name if agent_meta else __name__)
-            self.logger.info(f"{self.agent_meta.name if self.agent_meta else 'Agent'} initialized.")
-
-        async def run(self, prompt: str, **kwargs) -> Any:
-            # This is a placeholder run method.
-            # The actual ReActAgent would have a complex implementation.
-            self.logger.info(f"Placeholder run method called with prompt: {prompt}")
-            # In a real scenario, this would parse the prompt, identify a capability,
-            # and call the corresponding method.
-            # For now, it doesn't do anything functional.
-            if "store_agent_experience" in prompt:
-                # This is a simplistic check, real parsing would be needed
-                # Also, arguments would need to be extracted
-                return {"status": "error", "message": "Placeholder run: Cannot execute store_agent_experience without proper request parsing."}
-            elif "retrieve_relevant_experiences" in prompt:
-                return {"status": "error", "message": "Placeholder run: Cannot execute retrieve_relevant_experiences without proper request parsing."}
-            elif "summarize_message_history" in prompt:
-                return {"status": "error", "message": "Placeholder run: Cannot execute summarize_message_history without proper request parsing."}
-            return {"status": "error", "message": "Placeholder run: Unknown capability or prompt not parsable."}
-
+# Assuming these paths are correct based on the project structure
+from beeai_framework.agents.react import ReActAgent
+from beeai_framework.agents.types import AgentMeta
+from beeai_framework.memory import UnconstrainedMemory # Using UnconstrainedMemory as a default if TokenMemory is not specifically needed
 
 from evolving_agents.core.llm_service import LLMService
-from evolving_agents.core.mongodb_client import MongoDBClient
 from evolving_agents.tools.internal.mongo_experience_store_tool import MongoExperienceStoreTool
+from evolving_agents.tools.internal.semantic_experience_search_tool import SemanticExperienceSearchTool
 from evolving_agents.tools.internal.message_summarization_tool import MessageSummarizationTool
-# from evolving_agents.core.smart_context import Message # Using Dict as per latest instruction
 
+# Configure logging
+logger = logging.getLogger(__name__)
 
 class MemoryManagerAgent(ReActAgent):
     """
-    Manages persistent storage and retrieval of agent experiences and contextual facts,
-    and provides message summarization capabilities.
-    It uses internal tools to interact with MongoDB for experience storage/retrieval
-    and an LLM for message summarization.
+    Manages persistent storage and retrieval of agent experiences and contextual facts.
+    It provides capabilities to store new experiences, search for relevant past
+    experiences, and summarize message histories using its internal tools.
+    This agent is designed to be invoked via the SmartAgentBus.
     """
 
-    def __init__(self, llm_service: LLMService, mongodb_client: MongoDBClient):
+    def __init__(
+        self,
+        llm_service: LLMService,
+        mongo_experience_store_tool: MongoExperienceStoreTool,
+        semantic_search_tool: SemanticExperienceSearchTool,
+        message_summarization_tool: MessageSummarizationTool,
+        memory: Optional[Any] = None, # e.g., TokenMemory or UnconstrainedMemory
+        agent_meta: Optional[AgentMeta] = None,
+        # debug_enabled: bool = False, # ReActAgent might have this
+    ):
         """
         Initializes the MemoryManagerAgent.
 
         Args:
-            llm_service: LLMService for the agent's own ReAct thinking and summarization.
-            mongodb_client: MongoDBClient for database interactions via tools.
+            llm_service: The language model service for ReAct decision making.
+            mongo_experience_store_tool: Tool for storing and managing experiences in MongoDB.
+            semantic_search_tool: Tool for semantic search of experiences.
+            message_summarization_tool: Tool for summarizing message histories.
+            memory: Optional memory component for the ReActAgent. Defaults to UnconstrainedMemory.
+            agent_meta: Optional agent metadata. If None, it's created internally.
+            # debug_enabled: Whether to enable debug logging for the ReAct process.
         """
-        self.logger = logging.getLogger(__name__)
-        self.logger.info("Initializing MemoryManagerAgent...")
+        self.mongo_experience_store_tool = mongo_experience_store_tool
+        self.semantic_search_tool = semantic_search_tool
+        self.message_summarization_tool = message_summarization_tool
 
-        # Initialize internal tools
-        # Assuming the same llm_service can be used for embeddings and summarization.
-        # If specific models are needed, multiple LLMService instances might be required.
-        try:
-            self.mongo_experience_store_tool = MongoExperienceStoreTool(mongodb_client, llm_service)
-            self.logger.info("MongoExperienceStoreTool initialized successfully.")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize MongoExperienceStoreTool: {e}", exc_info=True)
-            raise
-
-        try:
-            self.message_summarization_tool = MessageSummarizationTool(llm_service)
-            self.logger.info("MessageSummarizationTool initialized successfully.")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize MessageSummarizationTool: {e}", exc_info=True)
-            raise
-
-        capabilities = [
-            {
-                "id": "store_agent_experience",
-                "name": "Store Agent Experience",
-                "description": "Stores a structured record of a completed agent task or workflow.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"experience_data": {"type": "object", "description": "The structured experience data to store."}},
-                    "required": ["experience_data"]
-                }
-            },
-            {
-                "id": "retrieve_relevant_experiences",
-                "name": "Retrieve Relevant Experiences",
-                "description": "Retrieves past agent experiences relevant to a given goal or sub-task description using semantic search.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "goal_description": {"type": "string", "description": "The primary goal to find relevant experiences for."},
-                        "sub_task_description": {"type": ["string", "null"], "description": "Optional: A more specific sub-task description."},
-                        "limit": {"type": "integer", "default": 5, "description": "Max number of experiences to return."}
-                    },
-                    "required": ["goal_description"]
-                }
-            },
-            {
-                "id": "summarize_message_history",
-                "name": "Summarize Message History",
-                "description": "Summarizes a list of messages, focusing on relevance to a target goal.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "messages": {"type": "array", "items": {"type": "object"}, "description": "List of message objects/dictionaries."},
-                        "target_goal": {"type": "string", "description": "The goal to focus the summary on."}
-                    },
-                    "required": ["messages", "target_goal"]
-                }
-            }
+        internal_tools = [
+            self.mongo_experience_store_tool,
+            self.semantic_search_tool,
+            self.message_summarization_tool,
         ]
 
-        agent_meta = AgentMeta(
-            name="MemoryManagerAgent",
-            description="Manages persistent storage and retrieval of agent experiences and contextual facts, and provides message summarization.",
-            capabilities=capabilities,
-            tools=[] # Internal tools are not exposed directly to ReAct prompt builder
-        )
-
-        # Initialize ReActAgent base class
-        # The llm_service passed here is for the ReAct thinking process itself.
-        super().__init__(llm_service=llm_service, agent_meta=agent_meta, tools=[])
-        self.logger.info("MemoryManagerAgent initialized successfully with ReActAgent as base.")
-
-    async def store_agent_experience(self, experience_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Capability: Stores a new agent experience.
-        Internally calls MongoExperienceStoreTool.store_experience.
-        """
-        self.logger.info(f"store_agent_experience called with data: {experience_data.get('experience_id', 'N/A')}")
-        if not isinstance(experience_data, dict) or not experience_data:
-            self.logger.warning("Invalid experience_data received: must be a non-empty dictionary.")
-            return {"status": "error", "message": "Invalid input: experience_data must be a non-empty dictionary."}
-
-        try:
-            experience_id = await self.mongo_experience_store_tool.store_experience(experience_data)
-            self.logger.info(f"Successfully stored experience: {experience_id}")
-            return {"status": "success", "experience_id": experience_id}
-        except Exception as e:
-            self.logger.error(f"Error storing agent experience: {e}", exc_info=True)
-            return {"status": "error", "message": f"Failed to store experience: {str(e)}"}
-
-    async def retrieve_relevant_experiences(
-        self,
-        goal_description: str,
-        sub_task_description: Optional[str] = None,
-        limit: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Capability: Retrieves past experiences relevant to a current goal or task.
-        Internally calls MongoExperienceStoreTool.find_similar_experiences.
-        """
-        self.logger.info(
-            f"retrieve_relevant_experiences called with goal: '{goal_description}', "
-            f"sub_task: '{sub_task_description}', limit: {limit}"
-        )
-
-        if not goal_description or not isinstance(goal_description, str):
-            self.logger.warning("Invalid goal_description: must be a non-empty string.")
-            return {"status": "error", "message": "Invalid input: goal_description must be a non-empty string."}
-        if sub_task_description and not isinstance(sub_task_description, str):
-            self.logger.warning("Invalid sub_task_description: must be a string if provided.")
-            return {"status": "error", "message": "Invalid input: sub_task_description must be a string if provided."}
-        if not isinstance(limit, int) or limit <= 0:
-            self.logger.warning(f"Invalid limit value: {limit}. Using default of 5.")
-            limit = 5
-
-
-        text_to_match = goal_description
-        text_field_to_search = "primary_goal_description"
-
-        if sub_task_description and sub_task_description.strip():
-            text_to_match = sub_task_description
-            text_field_to_search = "sub_task_description"
-        
-        self.logger.info(f"Searching on field '{text_field_to_search}' with text: '{text_to_match}'")
-
-        try:
-            experiences = await self.mongo_experience_store_tool.find_similar_experiences(
-                text_to_match=text_to_match,
-                text_field_to_search=text_field_to_search,
-                limit=limit
+        if agent_meta is None:
+            agent_meta = AgentMeta(
+                name="MemoryManagerAgent",
+                description=(
+                    "Manages persistent storage and retrieval of agent experiences and "
+                    "contextual facts. It provides capabilities to store new experiences, "
+                    "search for relevant past experiences, and summarize message histories."
+                ),
+                extra_description=(
+                    "This agent uses internal tools to interact with a MongoDB database "
+                    "for experience storage and a language model for summarization tasks. "
+                    "It is designed to be called by other agents (like SystemAgent) "
+                    "via the SmartAgentBus. The tasks provided to this agent should be "
+                    "phrased as clear natural language requests that specify the desired "
+                    "action (store, search, summarize) and any necessary parameters."
+                ),
+                tools=internal_tools,
+                # system_prompt_template can be customized if needed for ReAct
             )
-            self.logger.info(f"Retrieved {len(experiences)} relevant experiences.")
-            return {"status": "success", "experiences": experiences}
-        except Exception as e:
-            self.logger.error(f"Error retrieving relevant experiences: {e}", exc_info=True)
-            return {"status": "error", "message": f"Failed to retrieve experiences: {str(e)}"}
+        else:
+            # Ensure the provided agent_meta includes the internal tools
+            # This might involve creating a new AgentMeta if the tools list is immutable
+            # or if we want to preserve the original agent_meta for other purposes.
+            # For simplicity, we'll assume agent_meta.tools can be extended or is already set up.
+            # A more robust approach might be:
+            # current_tools = list(agent_meta.tools or [])
+            # current_tools.extend(internal_tools)
+            # agent_meta = agent_meta.copy(update={"tools": current_tools}) # If AgentMeta is a Pydantic model or similar
+            # For now, let's assume if agent_meta is provided, its tools list is what we want,
+            # but the requirement was to use these three tools.
+            agent_meta.tools = internal_tools
 
-    async def summarize_message_history(
-        self,
-        messages: List[Dict[str, Any]], # Conforms to List[Message] if Message is a Dict structure
-        target_goal: str,
-        max_summary_tokens: int = 250 # Added as per tool's signature
-    ) -> Dict[str, Any]:
-        """
-        Capability: Summarizes a list of messages.
-        Internally calls MessageSummarizationTool.summarize_messages.
-        """
-        self.logger.info(f"summarize_message_history called for goal: '{target_goal}' with {len(messages)} messages.")
-        if not messages or not isinstance(messages, list):
-            self.logger.warning("Invalid messages: must be a non-empty list of dictionaries.")
-            return {"status": "error", "message": "Invalid input: messages must be a non-empty list."}
-        if not target_goal or not isinstance(target_goal, str):
-            self.logger.warning("Invalid target_goal: must be a non-empty string.")
-            return {"status": "error", "message": "Invalid input: target_goal must be a non-empty string."}
 
+        if memory is None:
+            memory = UnconstrainedMemory()
+
+        super().__init__(
+            llm_service=llm_service,
+            agent_meta=agent_meta,
+            memory=memory,
+            # debug_enabled=debug_enabled,
+        )
+        # The ReActAgent's _handle_tool_call method will use the tools defined in agent_meta.
+        # The prompts for this agent should guide its LLM to select one of these tools.
+
+    async def run(self, task_description: str) -> Any:
+        """
+        Main entry point for the MemoryManagerAgent.
+        The ReActAgent's run method will process the task_description using its LLM
+        to decide which internal tool to use and what parameters to pass.
+
+        Args:
+            task_description: A natural language description of the task to perform.
+                              Examples:
+                              - "Store the following agent experience: {experience_data_json_string}"
+                              - "Find relevant experiences for the query: 'how to optimize database queries' and return top 3 results."
+                              - "Summarize this conversation: [{...}, {...}] with the goal of 'identifying action items'."
+
+        Returns:
+            The result of the ReAct execution, which typically is the output of
+            the last executed internal tool or a final thought from the agent.
+        """
+        logger.info(f"MemoryManagerAgent received task: {task_description}")
         try:
-            summary = await self.message_summarization_tool.summarize_messages(
-                messages=messages,
-                target_goal=target_goal,
-                max_summary_tokens=max_summary_tokens
-            )
-            self.logger.info("Successfully generated message summary.")
-            return {"status": "success", "summary": summary}
+            # The ReActAgent's run method handles the thought-action-observation loop.
+            # It will use the LLM to parse task_description, select one of its
+            # configured tools (mongo_experience_store_tool, semantic_search_tool,
+            # or message_summarization_tool), and execute it.
+            result = await super().run(task_description=task_description)
+            logger.info(f"MemoryManagerAgent completed task. Result: {type(result)}")
+            return result
         except Exception as e:
-            self.logger.error(f"Error summarizing message history: {e}", exc_info=True)
-            return {"status": "error", "message": f"Failed to summarize messages: {str(e)}"}
+            logger.error(f"Error during MemoryManagerAgent execution for task '{task_description}': {e}", exc_info=True)
+            # Depending on how SmartAgentBus expects errors, either re-raise or return an error structure.
+            # For now, re-raising to make it visible.
+            raise
 
-    # The ReActAgent.run(self, prompt: str) method is inherited.
-    # For this MemoryManagerAgent, the `prompt` is expected to be a structured request,
-    # potentially a JSON string, from the SmartAgentBus specifying which capability
-    # to invoke and its arguments.
+# Example usage (conceptual, would require setting up dependencies)
+# async def main_example():
+#     # --- Mock/Real Dependencies ---
+#     class MockLLMService(LLMService):
+#         async def generate(self, prompt: str, **kwargs) -> str:
+#             # Simplified ReAct LLM simulation
+#             print(f"\n--- MemoryManagerAgent LLM (ReAct) Prompt ---\n{prompt}\n--- End Prompt ---")
+#             if "Store the following agent experience" in prompt and "store_experience" in prompt:
+#                 # Simulate LLM deciding to use mongo_experience_store_tool
+#                 # Extracting params is complex; ReAct handles this.
+#                 # For this mock, assume it correctly identifies the tool and params.
+#                 # This is a very simplified mock of the ReAct LLM's output.
+#                 # In reality, ReAct would make multiple calls for thought, action, observation.
+#                 if "'primary_goal': 'test_goal'" in prompt:
+#                     return "Action: MongoExperienceStoreTool.store_experience\nAction Input: {'experience_data': {'primary_goal': 'test_goal', 'sub_task_description': 'testing storage'}}"
+#             elif "Find relevant experiences for the query" in prompt and "search_relevant_experiences" in prompt:
+#                 if "'how to optimize database queries'" in prompt:
+#                     return "Action: SemanticExperienceSearchTool.search_relevant_experiences\nAction Input: {'query_string': 'how to optimize database queries', 'top_k': 3}"
+#             elif "Summarize this conversation" in prompt and "summarize_messages" in prompt:
+#                  if "'identifying action items'" in prompt:
+#                     return "Action: MessageSummarizationTool.summarize_messages\nAction Input: {'messages': [{'sender': 'user', 'content': 'hello'}], 'target_goal': 'identifying action items'}"
+#             return "Final Answer: I was unable to determine the correct action for the request."
 
-    # The ReActAgent's `run` method (or a custom one overriding it) would need to:
-    # 1. Parse the `prompt` (e.g., JSON string) to determine the intended capability
-    #    (e.g., "store_agent_experience") and extract its arguments.
-    # 2. Validate these arguments.
-    # 3. Dispatch the call to the appropriate internal capability method:
-    #    - self.store_agent_experience(**parsed_args)
-    #    - self.retrieve_relevant_experiences(**parsed_args)
-    #    - self.summarize_message_history(**parsed_args)
-    # 4. The ReAct "thought" process here is less about complex tool chaining and more
-    #    about request parsing and dispatching to the correct internal function.
-    #    The "action" is calling one of its own methods.
-    # 5. The "observation" is the result from that method.
-    # 6. The final response is then formulated based on this observation.
+#         async def embed(self, text: str) -> List[float]:
+#             return [0.1] * 768 # Dummy embedding
 
-    # If the ReActAgent base class's `run` method is generic enough to allow
-    # defining tools that are actually agent's own methods, that would be one way.
-    # Alternatively, `run` might be overridden here to implement this specific
-    # capability dispatch logic if the base `run` is too restrictive or expects
-    # external-like tools.
+#     class MockMongoExperienceStoreTool(MongoExperienceStoreTool):
+#         def __init__(self): self.name = "MongoExperienceStoreTool"; self.description="Stores experiences"; super().__init__(None, None) # type: ignore
+#         async def store_experience(self, experience_data: Dict[str, Any]) -> str:
+#             print(f"MockMongoExperienceStoreTool: Storing {experience_data}")
+#             return f"exp_{uuid.uuid4().hex}"
+#         async def _execute(self, experience_data: Dict[str, Any]) -> str: # ReActAgent might call _execute
+#             return await self.store_experience(experience_data)
 
-    # For now, we assume the base ReActAgent's `run` can be configured or is
-    # flexible enough, or that the SmartAgentBus directly calls these capability
-    # methods after an initial routing phase. If using SmartAgentBus, the bus
-    # might directly call `agent.store_agent_experience(data)`, bypassing `run`
-    # for such direct capability calls. The ReAct part of the agent would be for
-    # more complex internal reasoning if ever needed, or if it's the standard
-    # interface for all agent interactions.
 
-# Example of how this agent might be used (conceptual):
-# async def main():
-#     # Setup (dummy MongoDBClient and LLMService for example)
-#     class DummyLLMService(LLMService):
-#         async def generate(self, prompt: str, **kwargs) -> str: return f"Summary for: {prompt[:50]}"
-#         async def embed(self, text: str) -> List[float]: return [0.1] * 10 # Dummy embedding
+#     class MockSemanticSearchTool(SemanticExperienceSearchTool):
+#         def __init__(self): self.name = "SemanticExperienceSearchTool"; self.description="Searches experiences"; super().__init__(None, None) # type: ignore
+#         async def search_relevant_experiences(self, query_string: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+#             print(f"MockSemanticSearchTool: Searching for '{query_string}', top_k={top_k}")
+#             return [{"experience_id": "exp_123", "primary_goal": query_string, "similarity_score": 0.9}]
+#         async def _execute(self, query_string: str, top_k: int = 5, **kwargs) -> List[Dict[str, Any]]:
+#             return await self.search_relevant_experiences(query_string, top_k, **kwargs)
+
+#     class MockMessageSummarizationTool(MessageSummarizationTool):
+#         def __init__(self): self.name = "MessageSummarizationTool"; self.description="Summarizes messages"; super().__init__(None) # type: ignore
+#         async def summarize_messages(self, messages: List[Dict[str, Any]], target_goal: str, **kwargs) -> str:
+#             print(f"MockMessageSummarizationTool: Summarizing messages for goal '{target_goal}'")
+#             return f"Summary of {len(messages)} messages for {target_goal}."
+#         async def _execute(self, messages: List[Dict[str, Any]], target_goal: str, **kwargs) -> str:
+#             return await self.summarize_messages(messages, target_goal, **kwargs)
     
-#     class DummyMongoDBClient(MongoDBClient):
-#         def __init__(self, connection_string: str, database_name: str):
-#             self.collections = {}
-#             self.logger = logging.getLogger(__name__)
+#     import uuid # for mock tool
 
-#         def get_collection(self, collection_name: str) -> Any: # Returns a dummy collection
-#             class DummyCollection:
-#                 async def insert_one(self, doc): self.logger.info(f"Dummy insert: {doc}"); return None
-#                 async def find_one(self, query, projection): self.logger.info(f"Dummy find_one: {query}"); return {"experience_id": query.get("experience_id"), **query}
-#                 async def update_one(self, query, update): self.logger.info(f"Dummy update: {query}"); return type('obj', (object,), {'modified_count':1, 'matched_count': 1})
-#                 async def delete_one(self, query): self.logger.info(f"Dummy delete: {query}"); return type('obj', (object,), {'deleted_count': 1})
-#                 async def aggregate(self, pipeline): self.logger.info(f"Dummy aggregate: {pipeline}"); return self # Make it awaitable
-#                 async def to_list(self, length): return [{"experience_id": "dummy_exp", "text": "some experience"}]
+#     # --- Instantiate ---
+#     mock_llm_service = MockLLMService()
+#     mock_store_tool = MockMongoExperienceStoreTool()
+#     mock_search_tool = MockSemanticSearchTool()
+#     mock_summary_tool = MockMessageSummarizationTool()
 
+#     memory_manager = MemoryManagerAgent(
+#         llm_service=mock_llm_service,
+#         mongo_experience_store_tool=mock_store_tool,
+#         semantic_search_tool=mock_search_tool,
+#         message_summarization_tool=mock_summary_tool,
+#         # debug_enabled=True # Enable ReAct debug logs
+#     )
 
-#             if collection_name not in self.collections:
-#                 self.collections[collection_name] = DummyCollection()
-#             return self.collections[collection_name]
+#     # --- Test Cases ---
+#     print("\n--- Test Case 1: Store Experience ---")
+#     task1_desc = "Store the following agent experience: {'primary_goal': 'test_goal', 'sub_task_description': 'testing storage'}"
+#     # In a real ReAct agent, the LLM would output "Action: MongoExperienceStoreTool.store_experience \n Action Input: {...}"
+#     # The ReActAgent base class would parse this, call the tool, get observation, and feed back to LLM.
+#     # For this example, we are simplifying as the internal ReAct loop is complex.
+#     # The `run` method of ReActAgent triggers this loop.
+#     # The mocked LLM above tries to simulate the *final* action choice part.
+#     result1 = await memory_manager.run(task_description=task1_desc)
+#     print(f"Result for Task 1: {result1}") # ReAct usually returns the final answer or observation
 
-#     logging.basicConfig(level=logging.INFO)
-#     logger = logging.getLogger(__name__)
-#     logger.info("Starting MemoryManagerAgent example.")
+#     print("\n--- Test Case 2: Search Experiences ---")
+#     task2_desc = "Find relevant experiences for the query: 'how to optimize database queries' and return top 3 results."
+#     result2 = await memory_manager.run(task_description=task2_desc)
+#     print(f"Result for Task 2: {result2}")
 
-#     try:
-#         llm_service = DummyLLMService(api_key="dummy", default_model="dummy")
-#         mongodb_client = DummyMongoDBClient(connection_string="dummy_string", database_name="dummy_db")
-#         logger.info("Dummy services initialized.")
-
-#         memory_manager = MemoryManagerAgent(llm_service=llm_service, mongodb_client=mongodb_client)
-#         logger.info("MemoryManagerAgent instantiated.")
-
-#         # 1. Store an experience
-#         experience_to_store = {
-#             "experience_id": "exp123", # In real tool, this is generated
-#             "primary_goal_description": "Develop a new login system.",
-#             "sub_task_description": "Implement OAuth 2.0.",
-#             "input_context_summary": "User needs secure login.",
-#             "output_summary": "OAuth 2.0 flow implemented.",
-#             "status": "success",
-#             "agent_version": "1.0"
-#         }
-#         store_result = await memory_manager.store_agent_experience(experience_data=experience_to_store)
-#         logger.info(f"Store result: {store_result}")
-
-#         # 2. Retrieve relevant experiences
-#         retrieve_result = await memory_manager.retrieve_relevant_experiences(
-#             goal_description="Develop a new login system.",
-#             sub_task_description="Implement OAuth 2.0."
-#         )
-#         logger.info(f"Retrieve result: {retrieve_result}")
-
-#         # 3. Summarize message history
-#         messages_to_summarize = [
-#             {"sender_id": "user1", "content": "We need a new login page."},
-#             {"sender_id": "dev1", "content": "Okay, what features should it have?"},
-#             {"sender_id": "user1", "content": "SSO with Google and password reset."},
-#         ]
-#         summary_result = await memory_manager.summarize_message_history(
-#             messages=messages_to_summarize,
-#             target_goal="Finalize login page requirements."
-#         )
-#         logger.info(f"Summary result: {summary_result}")
-        
-#         # Example of how ReAct 'run' might be invoked if it directly maps to capabilities
-#         # This is highly dependent on the actual ReActAgent base class implementation
-#         # and how SmartAgentBus interacts with it.
-#         # Typically, the prompt would be a more structured request (e.g., JSON)
-#         # if 'run' is the entry point for capability calls.
-        
-#         # react_prompt_store = '{"capability": "store_agent_experience", "args": {"experience_data": {"experience_id": "exp456", "primary_goal_description": "Test feature"}}}'
-#         # react_run_result_store = await memory_manager.run(react_prompt_store) # This is a placeholder call
-#         # logger.info(f"ReAct run (store) result: {react_run_result_store}")
-
-
-#     except Exception as e:
-#         logger.error(f"Error in example usage: {e}", exc_info=True)
+#     print("\n--- Test Case 3: Summarize Messages ---")
+#     task3_desc = "Summarize this conversation: [{'sender': 'user', 'content': 'hello'}] with the goal of 'identifying action items'."
+#     result3 = await memory_manager.run(task_description=task3_desc)
+#     print(f"Result for Task 3: {result3}")
 
 # if __name__ == "__main__":
 #     import asyncio
-#     # To run this example, you'd need to ensure the placeholder ReActAgent and AgentMeta
-#     # are sufficiently functional or replace them with the actual beeai_framework classes.
-#     # Also, the DummyLLMService and DummyMongoDBClient would need to be more robust
-#     # or replaced with actual instances for real testing.
-#     # asyncio.run(main())
+#     # This example requires a running event loop and proper async setup
+#     # For actual execution, ensure beeai_framework and other dependencies are installed and configured.
+#     # asyncio.run(main_example())
 #     pass

@@ -58,16 +58,14 @@ class Message:
 @dataclass
 class ContextEntry:
     """Holds the value and the embedding associated with a semantic key's description."""
-    # Reordered fields as per correction
     value: Any
+    key_embedding: Optional[List[float]] = None # Embedding of the *description* of the key
     semantic_key: str # The human-readable key itself
     source_key: Optional[str] = None # Optional: The original key from global context if different
-    key_embedding: Optional[List[float]] = None # Embedding of the *description* of the key
     
     # New fields for dual embedding
-    applicability_description: Optional[str] = None  # T_raz
     applicability_embedding: Optional[List[float]] = None  # E_raz
-
+    applicability_description: Optional[str] = None  # T_raz
 
 @dataclass
 class SmartContext:
@@ -77,22 +75,22 @@ class SmartContext:
     with dual embeddings for more sophisticated retrieval.
     """
     metadata: Dict[str, Any] = field(default_factory=dict)
-    # Docstring for metadata: """Info like task_id, source_agent_id, target_agent_id."""
+    """Info like task_id, source_agent_id, target_agent_id."""
 
     # Keys are human-readable strings (semantic_key). Values are ContextEntry objects.
     data: Dict[str, ContextEntry] = field(default_factory=dict)
-    # Docstring for data: """Semantically relevant data, including key embeddings."""
+    """Semantically relevant data, including key embeddings."""
 
     messages: List[Message] = field(default_factory=list)
-    # Docstring for messages: """Filtered list of relevant messages."""
+    """Filtered list of relevant messages."""
     
     # New field for storing content chunks with dual embeddings
     content_chunks: List[ContentChunk] = field(default_factory=list)
-    # Docstring for content_chunks: """Content chunks with dual embeddings for task-specific retrieval."""
+    """Content chunks with dual embeddings for task-specific retrieval."""
     
     # Current task context for relevance-based retrieval
     current_task: str = ""
-    # Docstring for current_task: """Description of the current task being performed."""
+    """Description of the current task being performed."""
     
     # Configurable weights for scoring
     task_weight: float = 0.6
@@ -120,17 +118,17 @@ class SmartContext:
                           content_embedding: List[float],
                           applicability_embedding: List[float],
                           metadata: Optional[Dict[str, Any]] = None) -> None:
-        # Internal docstring: """
-        # Add a content chunk with dual embeddings to the context.
-        # 
-        # Args:
-        #     chunk_id: Unique identifier for the chunk
-        #     content: Original text content (T_orig)
-        #     applicability: Task applicability description (T_raz)
-        #     content_embedding: Content embedding (E_orig)
-        #     applicability_embedding: Applicability embedding (E_raz)
-        #     metadata: Additional metadata for the chunk
-        # """
+        """
+        Add a content chunk with dual embeddings to the context.
+        
+        Args:
+            chunk_id: Unique identifier for the chunk
+            content: Original text content (T_orig)
+            applicability: Task applicability description (T_raz)
+            content_embedding: Content embedding (E_orig)
+            applicability_embedding: Applicability embedding (E_raz)
+            metadata: Additional metadata for the chunk
+        """
         embedding_pair = EmbeddingPair(
             content_embedding=content_embedding,
             relevance_embedding=applicability_embedding
@@ -152,19 +150,19 @@ class SmartContext:
                                 embed_fn: Optional[callable] = None,
                                 limit: int = 5,
                                 threshold: float = 0.0) -> List[Dict[str, Any]]:
-        # Internal docstring: """
-        # Retrieve the most relevant chunks using the dual embedding strategy.
-        # 
-        # Args:
-        #     content_query: The content query string
-        #     task_query: The task context query string (falls back to current_task if None)
-        #     embed_fn: Function to convert query strings to embeddings (must be provided)
-        #     limit: Maximum number of results to return
-        #     threshold: Minimum similarity threshold
-        #     
-        # Returns:
-        #     List of dictionaries containing chunk info and scores
-        # """
+        """
+        Retrieve the most relevant chunks using the dual embedding strategy.
+        
+        Args:
+            content_query: The content query string
+            task_query: The task context query string (falls back to current_task if None)
+            embed_fn: Function to convert query strings to embeddings (must be provided)
+            limit: Maximum number of results to return
+            threshold: Minimum similarity threshold
+            
+        Returns:
+            List of dictionaries containing chunk info and scores
+        """
         if not embed_fn:
             raise ValueError("embed_fn must be provided to embed queries")
             
@@ -203,7 +201,6 @@ class SmartContext:
         return scored_chunks[:limit]
 
     def __contains__(self, key: str) -> bool:
-        # Docstring for __contains__: """Check if a key exists in the data dictionary."""
         return key in self.data
 
     def __len__(self) -> int:

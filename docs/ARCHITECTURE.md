@@ -15,7 +15,10 @@ Key goals of the architecture include:
 *   **Governance & Safety:** Embed safety through `Firmware` and an optional human-in-the-loop review process (IntentPlans in MongoDB).
 *   **Task-Relevant Context:** Provide agents with task-specific context using the Dual Embedding Strategy in `SmartLibrary` (embeddings stored in MongoDB, search via Atlas Vector Search or equivalent).
 *   **Orchestration:** Enable complex goal achievement through `SystemAgent`-driven internal workflow generation and execution.
+*   **Cumulative Learning:** Enable agents to learn from past workflows, decisions, and outcomes through a persistent Smart Memory system.
 *   **Unified & Scalable Backend:** Utilize MongoDB for all persistent data, enhancing scalability, data consistency, and querying capabilities.
+
+A new Smart Memory ecosystem further enhances this by allowing agents to record and retrieve experiences, enriching their contextual understanding and decision-making capabilities over time.
 
 ## 2. Core Components
 
@@ -24,12 +27,13 @@ The toolkit is composed of several key interacting components, all leveraging Mo
 ### 2.1. SystemAgent
 
 The central orchestrator, a `beeai_framework.agents.react.ReActAgent`.
-*   **Role:** Manages component lifecycles (search, create, evolve via tools that interact with the MongoDB-backed `SmartLibrary`), facilitates communication (via `SmartAgentBus` tools), and handles complex task execution. Uses `SmartContext` and task-aware search (via `SmartLibrary`'s MongoDB vector search). When Intent Review is enabled, `ProcessWorkflowTool` generates an `IntentPlan` (stored in MongoDB) for review by `ApprovePlanTool` before execution.
+*   **Role:** Manages component lifecycles (search, create, evolve via tools that interact with the MongoDB-backed `SmartLibrary`), facilitates communication (via `SmartAgentBus` tools), and handles complex task execution. Uses `SmartContext` and task-aware search (via `SmartLibrary`'s MongoDB vector search). It actively utilizes the Smart Memory ecosystem via tools like ContextBuilderTool for enhanced planning and ExperienceRecorderTool to record significant outcomes, fostering continuous learning. When Intent Review is enabled, `ProcessWorkflowTool` generates an `IntentPlan` (stored in MongoDB) for review by `ApprovePlanTool` before execution.
 *   **Key Tools:**
     *   **SmartLibrary Tools:** `SearchComponentTool`, `CreateComponentTool`, `EvolveComponentTool`, `TaskContextTool`, `ContextualSearchTool`.
     *   **AgentBus Tools:** `RegisterAgentTool`, `RequestAgentTool`, `DiscoverAgentTool`.
     *   **Workflow Tools (Internal):** `GenerateWorkflowTool`, `ProcessWorkflowTool`.
     *   **Intent Review Tools (Optional):** `WorkflowDesignReviewTool`, `ComponentSelectionReviewTool`, `ApprovePlanTool`.
+    *   **Memory Tools:** `ContextBuilderTool`, `ExperienceRecorderTool`.
 
 ### 2.2. ArchitectZero Agent
 
@@ -37,7 +41,30 @@ A specialized `ReActAgent` for designing solutions, invoked by `SystemAgent` via
 *   **Role:** Analyzes requirements, queries the `SmartLibrary` (MongoDB), and designs multi-component solutions.
 *   **Output:** A structured solution design (JSON) for `SystemAgent`.
 
-### 2.3. Smart Library (MongoDB Backend)
+### 2.3 Smart Memory Ecosystem
+
+The Smart Memory ecosystem enables agents to learn from past interactions and build richer contexts. It revolves around the `MemoryManagerAgent` and specialized tools.
+
+*   **`MemoryManagerAgent`**:
+    *   **Role**: A `ReActAgent` acting as the central orchestrator for the storage and retrieval of long-term memories. It's registered on the `SmartAgentBus` (typically with ID `memory_manager_agent_default_id`) and exposes a general `process_task` capability. Other agents interact with it by sending natural language requests for memory operations (e.g., "store experience: {...}", "retrieve experiences related to: ...", "summarize messages: [...] for goal: ...").
+    *   **Internal Tools**:
+        *   `MongoExperienceStoreTool`: Handles CRUD operations for experiences in MongoDB, including embedding generation.
+        *   `SemanticExperienceSearchTool`: Performs semantic searches over stored experiences.
+        *   `MessageSummarizationTool`: Uses an LLM to summarize message histories relevant to a specific goal.
+
+*   **`ContextBuilderTool` (Tool for `SystemAgent`)**:
+    *   **Purpose**: Dynamically constructs an optimized `SmartContext` for a sub-task.
+    *   **Functionality**: Invoked by `SystemAgent`, it uses `RequestAgentTool` (via `SmartAgentBus`) to call `MemoryManagerAgent` (to retrieve relevant past experiences and summarize message history) and also queries `SmartLibrary` for relevant components. It then assembles a new, lean `SmartContext` instance.
+
+*   **`ExperienceRecorderTool` (Tool for `SystemAgent`)**:
+    *   **Purpose**: Facilitates the recording of completed tasks/workflows as structured experiences.
+    *   **Functionality**: Invoked by `SystemAgent`, it structures task details (goal, components, outcome, etc.) and uses `RequestAgentTool` (via `SmartAgentBus`) to call `MemoryManagerAgent` to persist the memory.
+
+*   **MongoDB Collection: `eat_agent_experiences`**:
+    *   **Purpose**: Stores structured records of completed tasks, workflows, and other notable agent experiences.
+    *   **Key Fields**: Includes `experience_id`, `primary_goal_description` (embedded), `sub_task_description` (embedded), `input_context_summary` (embedded), `key_decisions_made`, `final_outcome`, `output_summary` (embedded), `feedback_signals`, `involved_components`, `timestamp`, and generated `embeddings` for searchable fields. (A detailed schema is maintained separately).
+
+### 2.4. Smart Library (MongoDB Backend)
 
 Persistent storage and discovery for reusable components (agents, tools, firmware).
 *   **MongoDB Collection:** `eat_components` (or configurable name).
@@ -75,10 +102,10 @@ graph TD
 ```
 *Diagram Note: ChromaDB removed, MongoDB is the backend for both records and vector search.*
 
-### 2.4. Smart Agent Bus (MongoDB Backend)
+### 2.5. Smart Agent Bus (MongoDB Backend)
 
 Manages inter-agent communication and capability discovery.
-*   **Agent Registry (MongoDB Collection):** `eat_agent_registry`. Stores agent registration documents (id, name, capabilities, status, etc.).
+*   **Agent Registry (MongoDB Collection):** `eat_agent_registry`. Stores agent registration documents (id, name, capabilities, status, etc.). Key infrastructure agents like MemoryManagerAgent are registered here.
     *   Optionally, capability descriptions can be embedded (`capability_description_embedding`) and stored here for semantic discovery of capabilities using MongoDB Vector Search.
 *   **Execution Logs (MongoDB Collection):** `eat_agent_bus_logs`. Stores logs of System and Data Bus operations.
 *   **Role:** Central nervous system for capability-based requests.
@@ -110,127 +137,38 @@ graph TD
 ```
 *Diagram Note: Capability Index (ChromaDB) removed. Discovery uses MongoDB queries (metadata or vector).*
 
-### 2.5. Smart Context
+### 2.6. Smart Context
 
 Data structure for passing task-relevant information.
-*   **Role:** Carries task data, user input, intermediate results, and current task context description.
+*   **Role:** Carries task data, user input, intermediate results, and current task context description. It can be dynamically enriched by the ContextBuilderTool, which populates it with summaries of relevant past experiences and message histories retrieved via the MemoryManagerAgent, providing agents with deeper, historically-informed context for their current tasks.
 *   **Interaction with `SmartLibrary`:** The `current_task` description it holds is used by `SmartLibrary.semantic_search` to leverage the dual embeddings (E_raz) stored in MongoDB for task-aware retrieval.
 
-### 2.6. Providers & Agent Factory
+### 2.7. Providers & Agent Factory
 
 Abstracts interaction with different agent frameworks. (Functionality remains, dependencies updated).
 
-### 2.7. Dependency Container
+### 2.8. Dependency Container
 
 Manages instantiation and wiring of core components, including the `MongoDBClient`.
 
-### 2.8. LLM Service (MongoDB Cache)
+### 2.9. LLM Service (MongoDB Cache)
 
 Provides LLM interfaces for generation and embeddings.
 *   **Caching:** Now uses an `LLMCache` class that stores completions and embeddings in a MongoDB collection (`eat_llm_cache`) with TTL (Time-To-Live) indexes for automatic expiration.
 
-### 2.9. Firmware
+### 2.10. Firmware
 
 Provides governance rules. (No direct change in persistence mechanism).
 
-### 2.10. Adapters
+### 2.11. Adapters
 
 Bridge different interfaces. (No direct change in persistence mechanism).
 
-### 2.11. Intent Review System (MongoDB Backend)
+### 2.12. Intent Review System (MongoDB Backend)
 
 Optional human-in-the-loop review.
 *   **`IntentPlan` Storage (MongoDB Collection):** `eat_intent_plans`. `ProcessWorkflowTool` generates `IntentPlan` objects which are serialized and stored in this MongoDB collection. `ApprovePlanTool` loads them from MongoDB for review and updates their status in the database.
 *   `IntentReviewAgent` and review tools (`WorkflowDesignReviewTool`, `ComponentSelectionReviewTool`, `ApprovePlanTool`) interact with these persisted plans.
-
-## 2.12. Smart Memory Ecosystem
-
-The Smart Memory Ecosystem provides persistent, queryable long-term memory for agents, enabling them to learn from past workflows, decisions, and outcomes. This system enhances agent performance by allowing them to retrieve relevant past experiences to inform current task execution and to record new experiences for future learning. It adheres to the EAT philosophy where core functionalities are often managed by specialized agents and tools.
-
-### 2.12.1. Core Components
-
-*   **`MemoryManagerAgent`**:
-    *   **Role:** The central agent responsible for all memory operations. It is registered on the `SmartAgentBus` and acts as the single point of contact for storing and retrieving persistent agent experiences.
-    *   **Capabilities:**
-        *   `store_agent_experience`: Stores a structured record of a completed agent task or workflow.
-        *   `retrieve_relevant_experiences`: Retrieves past agent experiences relevant to a given goal or sub-task description using semantic search on stored embeddings.
-        *   `summarize_message_history`: Summarizes a list of messages, focusing on relevance to a target goal (though this capability might be more for direct use by other agents rather than just an internal function for context building).
-    *   **Internal Tools:**
-        *   `MongoExperienceStoreTool`: Handles the direct interaction with the `eat_agent_experiences` MongoDB collection, including storing data, generating embeddings for specified text fields (via `LLMService`), and performing vector searches.
-        *   `MessageSummarizationTool`: Uses `LLMService` to summarize message histories.
-
-*   **`ContextBuilderTool`**:
-    *   **Role:** A tool designed primarily for use by `SystemAgent` (or other orchestrator agents) to construct rich, task-specific `SmartContext` objects.
-    *   **Inputs:** Typically takes `target_agent_id`, `assigned_sub_task_goal_description`, the current `workflow_context` (a `SmartContext` object), and optional limits for data retrieval.
-    *   **Outputs:** A new `SmartContext` object populated with:
-        *   **Relevant Past Experiences:** Retrieved by querying the `MemoryManagerAgent.retrieve_relevant_experiences` capability.
-        *   **Summarized Message History:** Generated by querying `MemoryManagerAgent.summarize_message_history` (using recent messages from the input `workflow_context`).
-        *   **Relevant Library Components:** Retrieved by querying `SmartLibrary.semantic_search` (via its `SearchComponentTool`).
-    *   **Interaction:** Orchestrates calls to `MemoryManagerAgent` (for experiences and summaries) and `SmartLibrary` (for components).
-
-*   **`ExperienceRecorderTool`**:
-    *   **Role:** A tool designed for `SystemAgent` (or other agents managing task execution) to record the details and outcome of a completed task or workflow into the persistent memory.
-    *   **Functionality:** It structures the provided information (goals, components used, decisions, outcomes, feedback, etc.) into the schema expected by `MemoryManagerAgent` and then calls `MemoryManagerAgent.store_agent_experience` capability.
-
-### 2.12.2. MongoDB Collection: `eat_agent_experiences`
-
-*   **Purpose:** Stores detailed records of completed agent tasks, workflows, and significant interactions. This data serves as the long-term memory for agents, enabling learning and adaptation over time.
-*   **Schema:**
-    *   `experience_id` (String, UUID): Unique identifier for the experience record.
-    *   `timestamp` (ISODate): Timestamp of when the experience was recorded.
-    *   `primary_goal_description` (String): The main goal of the task/workflow.
-    *   `primary_goal_description_embedding` (Array[Float]): Embedding of the primary goal description.
-    *   `sub_task_description` (String, Optional): Specific sub-task description, if applicable.
-    *   `sub_task_description_embedding` (Array[Float], Optional): Embedding of the sub-task description.
-    *   `involved_components` (Array[Object], Optional): List of components used.
-        *   `component_id` (String)
-        *   `component_name` (String)
-        *   `component_type` (String, e.g., "AGENT", "TOOL", "SERVICE")
-        *   `usage_description` (String)
-    *   `input_context_summary` (String, Optional): Summary of the initial context/inputs.
-    *   `input_context_summary_embedding` (Array[Float], Optional): Embedding of the input context summary.
-    *   `key_decisions_made` (Array[Object], Optional): Significant decisions made during the task.
-        *   `decision_summary` (String)
-        *   `decision_reasoning` (String, Optional)
-        *   `timestamp` (ISODate, Optional)
-    *   `status` (String): Outcome of the task (e.g., "success", "failure", "partial_success").
-    *   `status_reason` (String, Optional): Explanation for the status.
-    *   `output_summary` (String, Optional): Summary of the final output or result.
-    *   `output_summary_embedding` (Array[Float], Optional): Embedding of the output summary.
-    *   `error_summary` (String, Optional): Summary of any errors encountered. Used if status is "failure".
-    *   `error_summary_embedding` (Array[Float], Optional): Embedding of the error summary.
-    *   `feedback` (Array[Object], Optional): Feedback received regarding the task/outcome.
-        *   `feedback_source` (String)
-        *   `feedback_content` (String)
-        *   `feedback_rating` (Float, Optional)
-        *   `timestamp` (ISODate, Optional)
-    *   `tags` (Array[String], Optional): Keywords for categorization and search.
-    *   `agent_version` (String, Optional): Version of the agent that performed/recorded the task.
-    *   `tool_versions` (Array[Object], Optional): Versions of tools used.
-        *   `tool_name` (String)
-        *   `version` (String)
-    *   `session_id` (String, Optional): Identifier for a user session or a related series of tasks.
-    *   `run_id` (String, Optional): Identifier for a specific execution run.
-    *   `initiating_agent_id` (String, Optional): ID of the agent that initiated or was primarily responsible for the task leading to this experience.
-
-*   **Vector Search Indexes (MongoDB Atlas Requirement):**
-    For `MemoryManagerAgent.retrieve_relevant_experiences` to function effectively using semantic search, vector search indexes must be configured in MongoDB Atlas on the `eat_agent_experiences` collection.
-    *   **Index Configuration:** Each embedding field that needs to be searched requires its own vector search index definition or to be part of a composite vector index strategy.
-    *   **Example Index Definitions:**
-        *   `idx_exp_primary_goal`: On field `primary_goal_description_embedding`.
-        *   `idx_exp_sub_task`: On field `sub_task_description_embedding`.
-        *   `idx_exp_input_context`: On field `input_context_summary_embedding`.
-        *   `idx_exp_output_summary`: On field `output_summary_embedding`.
-        *   `idx_exp_error_summary`: On field `error_summary_embedding`.
-    *   **Critical Settings:**
-        *   **Dimensions:** The number of dimensions must match the output dimensions of the embedding model used by `LLMService`.
-        *   **Similarity Metric:** The similarity metric (e.g., `cosine`, `euclidean`, `dotProduct`) must also align with the one appropriate for the embeddings generated by `LLMService`.
-    *   **Setup:** These indexes are typically created manually via the MongoDB Atlas UI or its API, as part of the deployment setup for the EAT environment.
-
-### 2.12.3. MongoDB Collection: `eat_contextual_facts` (Deferred)
-
-The concept of a separate collection for storing discrete, verifiable "contextual facts" was considered as part of the Smart Memory system. These facts would be smaller, atomic pieces of information that agents could assert or retrieve. However, its implementation and detailed schema definition have been deferred to simplify the initial rollout of the Smart Memory Ecosystem, which primarily focuses on experiential learning via `eat_agent_experiences`. Future iterations may revisit the need for this dedicated collection.
-
 
 ## 3. Key Architectural Patterns & Flows
 
@@ -277,19 +215,32 @@ sequenceDiagram
     SL-->>Agent: Return Relevant Component Documents & Scores
 ```
 
-### 3.3. Workflow Generation & Execution
+### 3.3. Agent Learning and Context Enrichment Flow (with Smart Memory)
+
+The Smart Memory system facilitates a learning loop for agents like `SystemAgent`:
+
+1.  **Context Building**: Before undertaking complex planning or delegating a sub-task, `SystemAgent` can use the `ContextBuilderTool`.
+2.  **Information Gathering**: `ContextBuilderTool` interacts with:
+    *   `MemoryManagerAgent` (via `SmartAgentBus`): To retrieve semantically relevant past experiences (using `SemanticExperienceSearchTool`) and to get summaries of recent message history tailored to the current task (using `MessageSummarizationTool`).
+    *   `SmartLibrary`: To find existing components (agents, tools) relevant to the task.
+3.  **Enriched Context**: `ContextBuilderTool` assembles this information into a new, optimized `SmartContext` instance and returns it to `SystemAgent`.
+4.  **Informed Action**: `SystemAgent` uses this richer context for more effective planning, component selection, or task delegation.
+5.  **Experience Recording**: After a significant task or workflow is completed, `SystemAgent` can use the `ExperienceRecorderTool`.
+6.  **Persistence**: `ExperienceRecorderTool` structures the relevant information about the completed task (goal, inputs, decisions, outputs, outcome) and sends it to `MemoryManagerAgent` (via `SmartAgentBus`), which then uses its `MongoExperienceStoreTool` to save the structured experience into the `eat_agent_experiences` MongoDB collection. This makes the knowledge available for future retrieval.
+
+### 3.4. Workflow Generation & Execution
 
 Conceptually similar. `ProcessWorkflowTool` now generates an `IntentPlan` object and, if review is enabled, saves its dictionary representation to the `eat_intent_plans` MongoDB collection.
 
-### 3.4. Component Evolution
+### 3.5. Component Evolution
 
 Conceptually similar. `EvolveComponentTool` uses `SmartLibrary.evolve_record`, which now creates a new versioned document in the `eat_components` MongoDB collection, including newly generated embeddings.
 
-### 3.5. Dependency Injection & Initialization
+### 3.6. Dependency Injection & Initialization
 
 `DependencyContainer` now also manages the `MongoDBClient` instance. Initialization includes ensuring MongoDB indexes are created.
 
-### 3.6. Intent Review / Human-in-the-Loop Flow (MongoDB Backend)
+### 3.7. Intent Review / Human-in-the-Loop Flow (MongoDB Backend)
 
 1.  **Design Review (Optional):** Same flow, design is an in-memory object.
 2.  **Component Selection Review (Optional):** Same flow, component list is in-memory.
@@ -340,68 +291,6 @@ Provider pattern remains key. No direct impact from MongoDB change on this abstr
 
 ## 5. Governance and Safety
 
-Conceptually similar, but `IntentPlan` persistence in MongoDB enhances auditability and traceability of reviewed decisions. The Smart Memory system also contributes to governance by providing a record of past actions and their outcomes.
+Conceptually similar, but `IntentPlan` persistence in MongoDB enhances auditability and traceability of reviewed decisions.
 
-## 6. Smart Memory Workflow Integration
-
-The Smart Memory ecosystem is integrated into the `SystemAgent`'s operational loop to enhance its planning, execution, and learning capabilities.
-
-```mermaid
-graph TD
-    subgraph SystemAgent Operations
-        direction LR
-        SA_Start["Start Task (e.g., New Goal)"] --> SA_Plan["Planning Phase"]
-        SA_Plan --> SA_Delegate["Task Delegation (to other agents/tools)"]
-        SA_Delegate --> SA_Execute["Task Execution Monitoring"]
-        SA_Execute --> SA_Complete["Task Completion/Failure"]
-        SA_Complete --> SA_Record["Record Experience"]
-        SA_Record --> SA_End["End Task"]
-    end
-
-    subgraph Smart Memory Interactions
-        direction TB
-        CBT["ContextBuilderTool"]
-        ERT["ExperienceRecorderTool"]
-        MMA["MemoryManagerAgent"]
-        SLib["SmartLibrary (MongoDB)"]
-        MongoExp["MongoDB (eat_agent_experiences)"]
-    end
-
-    SA_Plan --> |Uses| CBT
-    CBT --> |Gets Experiences & Summaries| MMA
-    CBT --> |Gets Components| SLib
-    MMA --> |Retrieves from / Stores to| MongoExp
-
-    SA_Delegate --> |Optionally Uses for Target Agent Context| CBT
-
-    SA_Record --> |Uses| ERT
-    ERT --> |Stores Experience via| MMA
-
-    classDef agent fill:#D6EAF8,stroke:#2E86C1,stroke-width:2px;
-    classDef tool fill:#D1F2EB,stroke:#1ABC9C,stroke-width:2px;
-    classDef db fill:#FDEDEC,stroke:#E74C3C,stroke-width:2px;
-    classDef flow src:#F4D03F,stroke:#B7950B,stroke-width:2px;
-
-    class SA_Start,SA_Plan,SA_Delegate,SA_Execute,SA_Complete,SA_Record,SA_End flow;
-    class MMA agent;
-    class CBT,ERT tool;
-    class SLib,MongoExp db;
-```
-
-**Workflow Description:**
-
-1.  **Planning Phase (Context Building):**
-    *   When `SystemAgent` receives a new complex goal, before detailed planning (e.g., before using `GenerateWorkflowTool`), it can use the `ContextBuilderTool`.
-    *   `ContextBuilderTool` queries `MemoryManagerAgent` for relevant past experiences and message summaries, and `SmartLibrary` for relevant components.
-    *   The resulting `SmartContext` (rich with historical and component information) informs the `SystemAgent`'s planning process, leading to more robust and contextually aware plans.
-
-2.  **Task Delegation (Contextualization for Worker Agents):**
-    *   When `SystemAgent` delegates a sub-task to another agent, it can again use `ContextBuilderTool` to create a specific `SmartContext` tailored for that sub-task and the target worker agent.
-    *   This `SmartContext` is then passed to the worker agent, providing it with pre-processed, relevant information, reducing its need for redundant information gathering.
-
-3.  **Task Completion (Experience Recording):**
-    *   After a significant task or workflow concludes (successfully or not), `SystemAgent` uses the `ExperienceRecorderTool`.
-    *   `ExperienceRecorderTool` structures the details of the task (goals, components used, decisions made, final outcome, feedback, etc.) and sends this information to `MemoryManagerAgent` to be stored in the `eat_agent_experiences` collection.
-    *   This recorded experience becomes available for future learning and context building.
-
-This MongoDB-centric architecture, now including the Smart Memory Ecosystem, simplifies the EAT data layer, improves data consistency, and leverages MongoDB's strengths for both structured data and vector search, paving the way for enhanced scalability, learning, and more complex data interactions within the agent ecosystem.
+This MongoDB-centric architecture simplifies the EAT data layer, improves data consistency, and leverages MongoDB's strengths for both structured data and vector search, paving the way for enhanced scalability and more complex data interactions.
