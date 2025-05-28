@@ -247,11 +247,73 @@ You need **one** vector search index on the `eat_agent_registry` collection for 
     *   Replace `YOUR_EMBEDDING_DIMENSION` with the correct number (e.g., 1536).
     *   Click "Next," then "Create Search Index."
 
+### Smart Memory Experience Embeddings (`eat_agent_experiences` collection)
+
+For the Smart Memory system to search past agent experiences, you need a vector search index on the `eat_agent_experiences` collection. This collection stores various details about completed tasks, and specific fields like goal descriptions, sub-task details, and summaries are embedded for semantic search.
+
+1.  **Navigate to Atlas Search** and select your database.
+2.  **Create Index (using JSON Editor):**
+    *   Collection: `eat_agent_experiences`.
+    *   **Atlas Search Index Name (in Atlas UI):** `vector_index_experiences_default`
+        *(This name is referenced in `SemanticExperienceSearchTool.py`)*
+    *   **JSON Configuration:**
+        This example shows indexing the `embeddings.primary_goal_description_embedding` field. You can add other embedded fields from the `embeddings` object (like `embeddings.sub_task_description_embedding`, `embeddings.input_context_summary_embedding`, `embeddings.output_summary_embedding`) to the `fields` array of this *same index definition* if you want them to be searchable under this single index. Consult MongoDB Atlas documentation for the best way to define a single vector index over multiple fields if needed, or if your query patterns require separate focused indexes (which would impact free-tier limits).
+
+        ```json
+        {
+          "name": "vector_index_experiences_default",
+          "fields": [
+            {
+              "type": "vector",
+              "path": "embeddings.primary_goal_description_embedding",
+              "numDimensions": YOUR_EMBEDDING_DIMENSION,
+              "similarity": "cosine"
+            }
+            // To search other embedded fields within the 'embeddings' object using this same index,
+            // you might add more "vector" type field definitions here if your Atlas version
+            // and querying strategy support it under one index, or define them as separate indexes.
+            // Example for another field (check Atlas docs for multi-field indexing):
+            // ,{
+            //   "type": "vector",
+            //   "path": "embeddings.sub_task_description_embedding",
+            //   "numDimensions": YOUR_EMBEDDING_DIMENSION,
+            //   "similarity": "cosine"
+            // }
+
+            // Add any filterable fields from eat_agent_experiences you might use:
+            // ,{ "type": "filter", "path": "initiating_agent_id" },
+            // { "type": "filter", "path": "final_outcome" },
+            // { "type": "filter", "path": "tags" }
+          ]
+        }
+        ```
+    *   Replace `YOUR_EMBEDDING_DIMENSION` with the correct number (e.g., 1536).
+    *   Click "Next," then "Create Search Index."
+
 ### Free Tier Considerations (3 Index Limit)
 
-With the Atlas M0 (Free Tier) limit of 3 search indexes, the setup described above (2 for `eat_components` and 1 for `eat_agent_registry`) utilizes all available slots and provides the core semantic search capabilities for EAT.
+With the Atlas M0 (Free Tier) limit of 3 search indexes, you need to choose carefully. The EAT framework can potentially leverage several vector indexes:
 
-If you were previously using an index for `capabilities.capability_description_embedding` on `eat_agent_registry`, you would need to decide which feature is more important or upgrade your Atlas tier to support more indexes. The current `SmartAgentBus.discover_agents(task_description="...")` is designed to use the index on the agent's overall `description_embedding`.
+1.  **`eat_components` (SmartLibrary - Content):** Indexed as `idx_components_content_embedding`. (Essential for core component search by content).
+2.  **`eat_components` (SmartLibrary - Applicability):** Indexed as `applicability_embedding`. (Essential for task-aware component search).
+3.  **`eat_agent_registry` (Agent Bus - Descriptions):** Indexed as `vector_index_agent_description`. (Optional, for semantic search of agents by their overall description).
+4.  **`eat_agent_experiences` (Smart Memory):** Indexed as `vector_index_experiences_default`. (Essential for the new Smart Memory semantic search).
+
+**This means you have 4 potential vector indexes, but only 3 slots on the free tier.**
+
+**Recommendations for Free Tier Users:**
+*   **Option A (Prioritize Smart Memory & Full SmartLibrary):**
+    1.  `idx_components_content_embedding`
+    2.  `applicability_embedding`
+    3.  `vector_index_experiences_default`
+    (This means omitting the semantic search for agent descriptions in `eat_agent_registry`).
+*   **Option B (Prioritize Core EAT without Smart Memory search or with limited SmartLibrary):**
+    1.  `idx_components_content_embedding`
+    2.  `applicability_embedding`
+    3.  `vector_index_agent_description`
+    (This means omitting the `eat_agent_experiences` search, or sacrificing one of the `eat_components` indexes if you deem agent description search more critical than one aspect of component search).
+
+Consider your primary use case. If the Smart Memory functionality is central to your current work, Option A is recommended. If you need to reduce further, you might investigate if your version of Atlas allows a single index definition on `eat_components` to effectively serve both content and applicability searches, potentially freeing up a slot. Always refer to the latest MongoDB Atlas documentation on search index capabilities and limits.
 
 ---
 
