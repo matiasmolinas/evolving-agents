@@ -1,329 +1,125 @@
-# Tutorial: Testing EAT Examples with Local Dockerized MongoDB
+# Tutorial: Testing EAT Examples with Atlas CLI Local MongoDB
 
-This tutorial will guide you through setting up the Evolving Agents Toolkit (EAT) framework and running its example scripts using a local MongoDB instance managed by Docker.
+This tutorial guides you through setting up the Evolving Agents Toolkit (EAT) and running its example scripts using a **MongoDB Atlas CLI Local Deployment** for your database. This method provides full Atlas Vector Search features locally for development.
 
 ## 1. Prerequisites
-
-Before you begin, ensure you have the following installed:
 
 *   **Git:** For cloning the repository.
 *   **Python 3.11+:** EAT is designed for Python 3.11 or newer.
 *   **pip:** Python's package installer.
-*   **Docker Desktop (or Docker Engine + Docker Compose CLI):** For running MongoDB in a container.
+*   **Docker Desktop (or Docker Engine):** Required by the Atlas CLI to run its local MongoDB instance.
     *   [Install Docker](https://docs.docker.com/get-docker/)
-    *   [Install Docker Compose](https://docs.docker.com/compose/install/)
-*   **OpenAI API Key:** Most examples, especially those involving LLM interactions, will require an OpenAI API key. Other LLM providers might be configurable, but OpenAI is the default for many examples.
+*   **MongoDB Atlas CLI:** For creating and managing your local Atlas MongoDB deployment.
+    *   [Install the Atlas CLI](https://www.mongodb.com/docs/atlas/cli/stable/install-atlas-cli/)
+*   **(Optional) MongoDB Compass:** For a GUI to interact with your database and potentially create indexes.
+*   **OpenAI API Key:** Most EAT examples require an OpenAI API key.
 
 ## 2. Setup Instructions
 
-### Step 2.1: Clone the Repository
-
-Open your terminal and clone the `Adaptive-Agents-Framework` repository:
+### Step 2.1: Clone the EAT Repository
 
 ```bash
 git clone https://github.com/matiasmolinas/evolving-agents.git
 cd Adaptive-Agents-Framework
 ```
 
-*(Note: Replace the URL if your repository is hosted elsewhere or has a different name)*
-
-### Step 2.2: Set Up Python Virtual Environment & Install Dependencies
-
-It's highly recommended to use a virtual environment:
+### Step 2.2: Set Up Python Virtual Environment & Install EAT Dependencies
 
 ```bash
-# Create a virtual environment
 python -m venv venv
-
-# Activate the virtual environment
-# On macOS/Linux:
-source venv/bin/activate
-# On Windows:
-# venv\Scripts\activate
-
-# Install required Python packages
+# macOS/Linux: source venv/bin/activate
+# Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-# Install the EAT package in editable mode
 pip install -e .
 ```
 
-### Step 2.3: Configure Environment Variables (`.env` file)
+### Step 2.3: Set Up, Start, and Configure MongoDB Atlas CLI Local Deployment
 
-The EAT framework uses a `.env` file for configuration.
+This involves setting up the local MongoDB instance and creating the necessary Vector Search Indexes.
 
-1.  Copy the example environment file:
-    ```bash
-    cp .env.example .env
-    ```
+1.  **Set Up & Start Local Atlas Deployment:**
+    *   Follow **Section 3, Steps 3.1 and 3.2** of the `docs/MONGO-SETUP.md` guide. This includes:
+        *   Installing the Atlas CLI.
+        *   Running `atlas deployments setup eat-local-dev --type local --port 27017 --mdbVersion 7.0` (or your preferred name/port).
+    *   **Ensure your local deployment is RUNNING.** Check with `atlas deployments list`. If it's `IDLE` or `STOPPED`, use `atlas deployments start eat-local-dev` or `atlas deployments resume eat-local-dev`. If these commands give an "unexpected state: IDLE" error, refer to the "Fresh Install" instructions in `MONGO-SETUP.md` (Step 3.2).
 
-2.  Edit the `.env` file with your preferred text editor (e.g., `nano .env`, `code .env`):
-    *   **Crucial:** Add your `OPENAI_API_KEY`:
+2.  **Create Vector Search Indexes (CRITICAL):**
+    *   Follow **Section 3, Step 3.3** of `docs/MONGO-SETUP.md`. You have two options:
+        *   **Option A (Recommended): Using `mongosh`** (via `atlas deployments connect eat-local-dev --connectWith mongosh`). Copy-paste the four `db.collection.createSearchIndex({...})` commands provided there.
+        *   **Option B: Using MongoDB Compass.** Connect Compass to `mongodb://localhost:27017/`, navigate to the collections, and use the "Search Indexes" / "Atlas Search" tab with the JSON editor to define the four indexes.
+    *   **Remember to replace `YOUR_EMBEDDING_DIMENSION`** in the index definitions (e.g., 1536).
+
+### Step 2.4: Configure EAT Environment Variables (`.env` file)
+
+1.  In the EAT project root, copy `.env.example` to `.env`.
+2.  Edit `.env`:
+    *   Set `OPENAI_API_KEY="your-openai-api-key-here"`
+    *   Ensure MongoDB connection points to your local Atlas deployment:
         ```env
-        OPENAI_API_KEY="your-openai-api-key-here"
-        ```
-    *   **MongoDB Settings (for Docker Compose):**
-        The `docker-compose.yml` file is configured to set `MONGODB_URI` and `MONGODB_DATABASE_NAME` specifically for the application container to connect to the MongoDB container within the Docker network. The values for these in your `.env` file will be overridden by `docker-compose.yml` for the `app` service.
-        However, it's good practice to have them in your `.env` if you plan to run scripts *outside* of Docker that connect to a local MongoDB instance (e.g., if you run MongoDB directly without Docker for some reason, or connect to a different Atlas instance).
-        For this Docker-based tutorial, the `OPENAI_API_KEY` is the most critical setting in `.env`. The `docker-compose.yml` will handle MongoDB connection strings for the app container.
-    *   **Other Settings:**
-        You can review and adjust other settings like `LLM_MODEL`, `LLM_EMBEDDING_MODEL`, `LLM_USE_CACHE` as needed. The defaults from `.env.example` are generally fine for starting.
-        For example, the `.env.example` has:
-        ```env
-        LLM_PROVIDER="openai"
-        LLM_MODEL="gpt-4.1-mini"
-        LLM_EMBEDDING_MODEL="text-embedding-3-small"
-        MONGODB_URI="your_mongodb_srv_connection_string_with_username_and_password" # This will be overridden by docker-compose
-        MONGODB_DATABASE_NAME="evolving_agents_db" # This will be overridden by docker-compose
+        MONGODB_URI="mongodb://localhost:27017/" # Adjust port if changed
+        MONGODB_DATABASE_NAME="evolving_agents_db" # Must match DB used for indexes
         ```
 
-### Step 2.4: Build and Start Docker Services (MongoDB & App)
+## 3. Running EAT Examples Directly on Host
 
-This step will use Docker Compose to build the application image and start both the EAT application container and a MongoDB container.
+With your Atlas CLI Local MongoDB running and the Python virtual environment activated:
 
-1.  **Build the Docker images:**
-    Navigate to the project root directory (where `docker-compose.yml` and `Dockerfile` are) and run:
+1.  Navigate to the EAT project root (`Adaptive-Agents-Framework`).
+2.  Execute example scripts directly:
     ```bash
-    docker-compose build
+    python examples/invoice_processing/architect_zero_comprehensive_demo.py
+    python scripts/test_smart_memory.py
+    # Add other examples you want to test
     ```
-
-2.  **Start the services:**
-    Run the following command to start the containers in detached mode (in the background):
-    ```bash
-    docker-compose up -d
-    ```
-    *   This will:
-        *   Start a MongoDB container named `eat_mongo` (MongoDB version 7.0 as per `docker-compose.yml`).
-        *   Start the EAT application container named `eat_app`.
-        *   Create a Docker volume named `mongo-data` to persist MongoDB data across container restarts.
-        *   Create a Docker network named `eat_network` for the containers to communicate.
-        *   The `app` service in `docker-compose.yml` is configured with `MONGODB_URI=mongodb://mongo:27017/evolving_agents_db` and `MONGODB_DATABASE_NAME=evolving_agents_db`, so it will connect to the `eat_mongo` service on the internal Docker network.
-
-3.  **Check container status:**
-    To ensure both containers are running, use:
-    ```bash
-    docker-compose ps
-    ```
-    You should see both `eat_app` and `eat_mongo` with a state of `Up` (or `Up (healthy)` for `eat_mongo` after its health check passes).
-
-### Step 2.5: Create MongoDB Vector Search Indexes
-
-For the EAT framework's `SmartLibrary`, `SmartAgentBus`, and `SmartMemory` (via `MongoExperienceStoreTool` and `SemanticExperienceSearchTool`) to function correctly with semantic search, you **must** create Vector Search Indexes in your MongoDB instance.
-
-1.  **Access `mongosh` in the MongoDB Container:**
-    Open a new terminal window and execute:
-    ```bash
-    docker-compose exec mongo mongosh
-    ```
-    This connects you to the MongoDB shell running inside the `eat_mongo` container.
-
-2.  **Switch to the EAT Database:**
-    Inside the `mongosh` prompt, switch to the database used by the application (as defined in `docker-compose.yml`'s `MONGODB_URI` for the `app` service, typically `evolving_agents_db`):
-    ```javascript
-    use evolving_agents_db;
-    ```
-
-3.  **Create Vector Search Indexes:**
-    You need to create **four** vector search indexes.
-    **IMPORTANT:** Replace `YOUR_EMBEDDING_DIMENSION` in the commands below with the actual dimension of your embedding model. For OpenAI's `text-embedding-3-small` (the default in `.env.example`), this is **1536**.
-
-    *   **Index 1: `eat_components` - Content Embedding**
-        (Internal EAT name: `idx_components_content_embedding`)
-        ```javascript
-        db.eat_components.createSearchIndex({
-          "name": "idx_components_content_embedding",
-          "definition": { "mappings": { "dynamic": false, "fields": {
-            "content_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
-            "record_type": { "type": "string", "analyzer": "keyword" }, "domain": { "type": "string", "analyzer": "keyword" },
-            "status": { "type": "string", "analyzer": "keyword" }, "tags": { "type": "string", "analyzer": "keyword", "multi": true }
-          }}}
-        });
-        ```
-
-    *   **Index 2: `eat_components` - Applicability Embedding**
-        (Internal EAT name: `applicability_embedding`)
-        ```javascript
-        db.eat_components.createSearchIndex({
-          "name": "applicability_embedding",
-          "definition": { "mappings": { "dynamic": false, "fields": {
-            "applicability_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
-            "record_type": { "type": "string", "analyzer": "keyword" }, "domain": { "type": "string", "analyzer": "keyword" },
-            "status": { "type": "string", "analyzer": "keyword" }, "tags": { "type": "string", "analyzer": "keyword", "multi": true }
-          }}}
-        });
-        ```
-
-    *   **Index 3: `eat_agent_registry` - Agent Description Embedding**
-        (Internal EAT name: `vector_index_agent_description`)
-        ```javascript
-        db.eat_agent_registry.createSearchIndex({
-          "name": "vector_index_agent_description",
-          "definition": { "mappings": { "dynamic": false, "fields": {
-            "description_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
-            "name": { "type": "string", "analyzer": "keyword" }, "status": { "type": "string", "analyzer": "keyword" },
-            "type": { "type": "string", "analyzer": "keyword" }
-          }}}
-        });
-        ```
-
-    *   **Index 4: `eat_agent_experiences` - Smart Memory Embeddings**
-        (Internal EAT name: `vector_index_experiences_default`)
-        ```javascript
-        db.eat_agent_experiences.createSearchIndex({
-          "name": "vector_index_experiences_default",
-          "definition": { "mappings": { "dynamic": false, "fields": {
-            "embeddings.primary_goal_description_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
-            "embeddings.sub_task_description_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
-            "embeddings.input_context_summary_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
-            "embeddings.output_summary_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" }
-            // Example filterable fields (add if needed, see docs/MONGO-SETUP.md for more):
-            // ,"initiating_agent_id": { "type": "string", "analyzer": "keyword" }
-          }}}
-        });
-        ```
-    Wait for each command to return a success message (e.g., `{ ok: 1.0 }`). Index creation might take a moment. You can check index status within `mongosh` using `db.collectionName.getSearchIndexes()`.
-
-4.  **Exit `mongosh`:**
-    Type `exit` or press `Ctrl+D`.
-
-Your local MongoDB instance is now set up and ready for EAT.
-
-## 3. Running the Examples
-
-With the environment set up, you can now run the example scripts. The Python scripts will execute inside the `eat_app` Docker container, which has access to the `eat_mongo` container.
-
-### Step 3.1: Run the Comprehensive Demo
-
-The `README.md` highlights `examples/invoice_processing/architect_zero_comprehensive_demo.py` as a comprehensive demo. Let's run this first.
-
-Open your terminal in the project root and execute:
-
-```bash
-docker-compose exec app python examples/invoice_processing/architect_zero_comprehensive_demo.py
-```
-
-This command tells Docker Compose to execute the Python script inside the `app` service container.
-
-*   **Observe the output:** You'll see logs from the EAT framework, including agent interactions, tool usage, and potentially LLM calls.
-*   If `INTENT_REVIEW_ENABLED=true` and `INTENT_REVIEW_LEVELS` includes `intents` in your `.env` file, the script might pause for human review. Intent plans will be stored in MongoDB.
-
-### Step 3.2: Run Other Examples
-
-All examples in the `examples/` directory have been updated to use the MongoDB backend. You can run them similarly. For example, to run the Smart Memory test script:
-
-```bash
-docker-compose exec app python scripts/test_smart_memory.py
-```
-
-Or another example:
-
-```bash
-docker-compose exec app python examples/smart_agent_bus/dual_bus_demo.py
-```
-
-Replace the script path accordingly for other examples you wish to test.
+    The EAT application will connect to your local Atlas deployment.
 
 ## 4. Verifying Results
 
-After running an example, you can verify its effects:
+### Step 4.1: Check Local Output Files
 
-### Step 4.1: Check Output Files
-
-*   Some demos, like `architect_zero_comprehensive_demo.py`, might produce output files in the project root (or a specified output directory). For example:
-    *   `final_processing_output.json`: Contains the final structured JSON result from the `SystemAgent`.
-    *   `intent_plan_demo.json` (or similar, path configured in `.env` via `INTENT_REVIEW_OUTPUT_PATH`): An optional file copy of generated intent plans if review is enabled.
+Check project directory for files like `final_processing_output.json`.
 
 ### Step 4.2: Inspect MongoDB Collections
 
-This is the primary way to verify data persistence.
-
-1.  **Connect to `mongosh`:**
+*   **Using `mongosh` (via Atlas CLI):**
     ```bash
-    docker-compose exec mongo mongosh
-    ```
-
-2.  **Switch to the database:**
-    ```javascript
+    atlas deployments connect eat-local-dev --connectWith mongosh
     use evolving_agents_db;
+    db.eat_components.findOne();
+    // etc.
     ```
+*   **Using MongoDB Compass:**
+    Connect Compass to `mongodb://localhost:27017/`. Browse your `evolving_agents_db` and its collections (`eat_components`, `eat_agent_experiences`, etc.).
 
-3.  **Inspect collections:**
-    *   **`eat_components` (SmartLibrary):** Stores agents, tools, firmware.
-        ```javascript
-        db.eat_components.find().limit(5).pretty(); // View first 5 components
-        db.eat_components.countDocuments(); // Get total count
-        ```
-    *   **`eat_agent_registry` (SmartAgentBus Registry):** Stores agent registrations.
-        ```javascript
-        db.eat_agent_registry.find().limit(5).pretty();
-        db.eat_agent_registry.countDocuments();
-        ```
-    *   **`eat_agent_bus_logs` (SmartAgentBus Logs):** Stores logs of agent interactions.
-        ```javascript
-        db.eat_agent_bus_logs.find().sort({timestamp: -1}).limit(5).pretty(); // View 5 most recent logs
-        db.eat_agent_bus_logs.countDocuments();
-        ```
-    *   **`eat_llm_cache` (LLM Cache):** Stores cached LLM responses and embeddings (if `LLM_USE_CACHE=true`).
-        ```javascript
-        db.eat_llm_cache.find().limit(5).pretty();
-        db.eat_llm_cache.countDocuments();
-        ```
-    *   **`eat_intent_plans` (Intent Review):** Stores `IntentPlan` objects (if review for 'intents' level is enabled).
-        ```javascript
-        db.eat_intent_plans.find().limit(5).pretty();
-        db.eat_intent_plans.countDocuments();
-        ```
-    *   **`eat_agent_experiences` (Smart Memory):** Stores agent experiences if `ExperienceRecorderTool` or `MongoExperienceStoreTool` are used.
-        ```javascript
-        db.eat_agent_experiences.find().limit(5).pretty();
-        db.eat_agent_experiences.countDocuments();
-        ```
+## 5. Troubleshooting
 
-    You can also use **MongoDB Compass** or another GUI tool to connect to `mongodb://localhost:27017` (since port 27017 is exposed by the `eat_mongo` service) and explore the `evolving_agents_db` database and its collections visually.
-
-### Step 4.3: View Docker Logs
-
-If an example doesn't behave as expected, check the logs:
-
-*   **Application logs:**
-    ```bash
-    docker-compose logs app
-    ```
-*   **MongoDB logs:**
-    ```bash
-    docker-compose logs mongo
-    ```
-    Add `-f` to follow logs in real-time (e.g., `docker-compose logs -f app`).
-
-## 5. Troubleshooting Common Issues
-
-*   **`OPENAI_API_KEY` not set:** Ensure it's correctly set in your `.env` file in the project root.
-*   **Docker not running:** Make sure Docker Desktop or Docker daemon is running.
-*   **Port `27017` conflict:** If another MongoDB instance is using port 27017 on your host, the `eat_mongo` service might fail. You can change the host port mapping in `docker-compose.yml` (e.g., `"27018:27017"`) and adjust your connection string if connecting from the host (the `app` service will still use `mongodb://mongo:27017` internally).
-*   **`app` container connection issues to `mongo`:**
-    *   Wait for `eat_mongo` to become healthy. Check `docker-compose ps`. The healthcheck in `docker-compose.yml` allows time for startup.
-    *   Ensure the `eat_network` Docker network was created correctly.
-*   **Vector Search Index Errors:**
-    *   Double-check that all four vector search indexes were created correctly in `mongosh` (Step 2.5).
-    *   Verify `YOUR_EMBEDDING_DIMENSION` was replaced with the correct value (e.g., 1536).
-    *   Look for error messages like "index not found" or "Invalid $vectorSearch" in the `app` logs or MongoDB logs.
-*   **Python script errors:** If a script fails, the `docker-compose exec ...` command will show the Python traceback. Debug as you would a normal Python script, keeping in mind it's running inside the container.
+*   **`atlas deployments start eat-local-dev` Error: `deployment is in unexpected state: IDLE`**:
+    Try `atlas deployments resume eat-local-dev`. If it still fails, perform a fresh install of the local deployment: `atlas deployments delete eat-local-dev --force` then `atlas deployments setup ...` again. You will need to re-create the search indexes.
+*   **EAT App connection issues:**
+    *   Ensure Atlas CLI local deployment is `RUNNING`.
+    *   Verify `MONGODB_URI` in `.env` is `mongodb://localhost:27017/` (or correct port).
+*   **Vector Search Index errors:** Confirm indexes are created correctly in your local Atlas deployment with the right names, database, collection targets, field paths, and embedding dimensions.
+*   Refer to `docs/MONGO-SETUP.md` (Section 7) for more troubleshooting.
 
 ## 6. Stopping the Environment
 
-When you're finished testing:
-
-1.  **Stop and remove containers, network:**
+1.  **Stop your MongoDB Atlas CLI Local Deployment:**
     ```bash
-    docker-compose down
+    atlas deployments stop eat-local-dev
     ```
-
-2.  **(Optional) Remove the MongoDB data volume:**
-    If you want a completely fresh MongoDB instance next time (this will **delete all data** stored by the `eat_mongo` service):
-    ```bash
-    docker-compose down -v
-    ```
+    (Use `atlas deployments delete eat-local-dev --force` to remove it and its data completely).
 
 ## 7. Conclusion
 
-This tutorial provided steps to set up your EAT development environment with a local Dockerized MongoDB, create the necessary database indexes, and run the example scripts. You should now be able to test and explore the Evolving Agents Toolkit's capabilities with its new MongoDB backend. Remember to consult the `README.md` and `docs/` directory for more in-depth information on architecture and specific features.
+This tutorial outlined using the MongoDB Atlas CLI Local Deployment. This setup provides an Atlas-feature-rich local MongoDB, allowing you to run EAT scripts directly on your host while leveraging powerful vector search.
+```
+
+**Key Changes in these Final Updates:**
+
+*   **MONGO-SETUP.md:**
+    *   Explicitly added "Perform a Fresh Install" instructions within Step 3.2 for clarity on resolving the "unexpected state: IDLE" issue.
+    *   Added **Option B: Using MongoDB Compass (GUI)** within Step 3.3 for creating vector search indexes, providing a GUI alternative to `mongosh`.
+*   **EAT_EXAMPLES_TESTING_TUTORIAL.md:**
+    *   Directs users to the updated `MONGO-SETUP.md` for the detailed Atlas CLI local setup and index creation, including the "Fresh Install" advice and Compass option.
+    *   Removed the "Option 3.B: Run EAT Application in Docker" to fully align with the "avoid Docker if possible" for the EAT app itself. The tutorial now primarily focuses on running Python scripts directly against the Atlas CLI-managed MongoDB. A note about the project's `docker-compose.yml` (for the app only) could be added back if there's a strong desire to keep that option, but the request was to minimize Docker.
+    *   Simplified troubleshooting to reflect the current setup.

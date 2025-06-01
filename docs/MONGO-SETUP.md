@@ -8,9 +8,10 @@ This guide provides instructions for setting up MongoDB as the unified backend f
 2.  [Prerequisites](#2-prerequisites)
 3.  [Setup Instructions](#3-setup-instructions)
     *   [Step 3.1: Install the Atlas CLI](#step-31-install-the-atlas-cli)
-    *   [Step 3.2: Set Up Your Local Atlas Deployment](#step-32-set-up-your-local-atlas-deployment)
-    *   [Step 3.3: Connect to Your Local Atlas Deployment (`mongosh`)](#step-33-connect-to-your-local-atlas-deployment-mongosh)
-    *   [Step 3.4: Create Vector Search Indexes via `mongosh` (CRITICAL)](#step-34-create-vector-search-indexes-via-mongosh-critical)
+    *   [Step 3.2: Set Up Your Local Atlas Deployment (or Perform a Fresh Install)](#step-32-set-up-your-local-atlas-deployment-or-perform-a-fresh-install)
+    *   [Step 3.3: Create Vector Search Indexes (CRITICAL)](#step-33-create-vector-search-indexes-critical)
+        *   [Option 3.3.A: Using `mongosh` (Command Line)](#option-33a-using-mongosh-command-line)
+        *   [Option 3.3.B: Using MongoDB Compass (GUI)](#option-33b-using-mongodb-compass-gui)
 4.  [Configure EAT Project (`.env` file)](#4-configure-eat-project-env-file)
 5.  [Running the EAT Application](#5-running-the-eat-application)
 6.  [Managing Your Local Atlas Deployment](#6-managing-your-local-atlas-deployment)
@@ -21,22 +22,23 @@ This guide provides instructions for setting up MongoDB as the unified backend f
 
 ## 1. Why Atlas CLI Local Deployment for Dev/Test?
 
-*   **Full Atlas Vector Search Features Locally:** Test all EAT semantic search capabilities without needing a cloud instance for basic development.
-*   **No Cloud Index Limits During Development:** Create all necessary vector search indexes (currently 4 for full EAT functionality) without being constrained by the M0 free cloud tier's 3-index limit.
-*   **Consistent Environment:** Develop in an environment that closely mirrors MongoDB Atlas cloud deployments, easing future transitions if needed.
-*   **Local Resources & Control:** Runs on your machine using Docker (managed by the Atlas CLI), with no cloud costs during development.
-*   **Simplified Vector Search Setup:** Easier than configuring advanced vector search on a traditional self-hosted MongoDB.
+*   **Full Atlas Vector Search Features Locally:** Test all EAT semantic search capabilities.
+*   **No Cloud Index Limits During Development:** Create all necessary vector search indexes.
+*   **Consistent Environment:** Mirrors MongoDB Atlas cloud deployments.
+*   **Local Resources & Control:** Runs on your machine using Docker (managed by Atlas CLI).
+*   **Simplified Vector Search Setup:** Easier than traditional self-hosted MongoDB.
 
-**Important:** This local deployment is for **development and testing only** and is not suitable for production environments due to factors like single-node replica sets and default lack of authentication.
+**Important:** This local deployment is for **development and testing only.**
 
 ---
 
 ## 2. Prerequisites
 
-*   **Docker:** Docker Desktop or Docker Engine must be installed and running. The Atlas CLI uses Docker to run its local MongoDB instance.
+*   **Docker:** Docker Desktop or Docker Engine must be installed and running.
 *   **Python 3.11+:** For the EAT framework.
-*   **EAT Project:** You should have the EAT project code cloned.
-*   **OpenAI API Key (or other LLM provider configured):** Required by EAT for generating embeddings.
+*   **EAT Project Code:** Cloned locally.
+*   **OpenAI API Key (or other LLM provider configured):** For EAT's embedding generation.
+*   **(Optional, for GUI Index Creation) MongoDB Compass:** Download from [MongoDB Compass Download](https://www.mongodb.com/try/download/compass).
 
 ---
 
@@ -44,60 +46,73 @@ This guide provides instructions for setting up MongoDB as the unified backend f
 
 ### Step 3.1: Install the Atlas CLI
 
-Follow the official MongoDB instructions to install the Atlas CLI on your operating system:
-*   [Install the Atlas CLI](https://www.mongodb.com/docs/atlas/cli/stable/install-atlas-cli/)
+Follow official instructions: [Install the Atlas CLI](https://www.mongodb.com/docs/atlas/cli/stable/install-atlas-cli/)
+Verify: `atlas --version`
 
-Verify the installation:
-```bash
-atlas --version
-```
+### Step 3.2: Set Up Your Local Atlas Deployment (or Perform a Fresh Install)
 
-### Step 3.2: Set Up Your Local Atlas Deployment
-
-1.  **Login to Atlas (Recommended, but optional for basic local setup):**
-    Logging in can integrate with your Atlas account for other CLI features. If you skip this, `atlas local` commands should still work.
+1.  **Login to Atlas (Recommended):**
     ```bash
     atlas auth login
     ```
-    Follow the prompts to log in via your web browser.
 
-2.  **Create and Start the Local Deployment:**
-    Open your terminal. This command will download necessary Docker images (if not already present) and set up a local MongoDB instance. This might take a few minutes the first time.
+2.  **Create/Start the Local Deployment:**
+    *   **If setting up for the first time OR want a fresh install:**
+        Ensure any existing deployment with the same name is deleted first for a truly fresh start:
+        ```bash
+        # (Optional) Delete existing if you want a completely fresh state
+        atlas deployments delete eat-local-dev --force 
+        # (Optional) Prune Docker resources if you suspect issues with old volumes/networks
+        # docker system prune -a --volumes # Warning: Removes ALL unused Docker data.
+        ```
+        Then, create the new deployment:
+        ```bash
+        atlas deployments setup eat-local-dev --type local --port 27017 --mdbVersion 7.0
+        ```
+    *   **If resuming an existing PAUSED/IDLE deployment:**
+        Sometimes `atlas deployments start eat-local-dev` might show an "unexpected state" error if it's `IDLE`. Try `resume` first:
+        ```bash
+        atlas deployments resume eat-local-dev
+        ```
+        If `resume` doesn't work or the deployment is `STOPPED`, try `start`:
+        ```bash
+        atlas deployments start eat-local-dev
+        ```
+        If neither works and it remains `IDLE` or errors, it's best to perform a **fresh install** as described above (delete then setup).
+
+    *   **Parameters:**
+        *   `eat-local-dev`: Your chosen deployment name.
+        *   `--port 27017`: Standard MongoDB port. Change if needed.
+        *   `--mdbVersion 7.0`: Recommended. Check `atlas deployments availableversions --type local` for options.
+
+    *   **Verify:** After setup/start, check its status:
+        ```bash
+        atlas deployments list
+        ```
+        The `STATE` for `eat-local-dev` should be `RUNNING` or `AVAILABLE`. The connection string will be `mongodb://localhost:27017/`.
+
+### Step 3.3: Create Vector Search Indexes (CRITICAL)
+
+Choose **one** of the following methods (mongosh or Compass).
+
+#### Option 3.3.A: Using `mongosh` (Command Line)
+
+1.  **Connect to your Local Atlas Deployment with `mongosh`:**
     ```bash
-    atlas deployments setup eat-local-dev --type local --port 27017 --mdbVersion 7.0
+    atlas deployments connect eat-local-dev --connectWith mongosh
     ```
-    *   `eat-local-dev`: This is a suggested name for your local deployment. You can choose another.
-    *   `--type local`: Specifies a local deployment.
-    *   `--port 27017`: Sets the port MongoDB will listen on. `27017` is the standard MongoDB port. Change if `27017` is already in use on your host.
-    *   `--mdbVersion 7.0`: Specifies MongoDB version 7.0. Check `atlas deployments availableversions --type local` for other supported versions.
+    (Replace `eat-local-dev` if you used a different name).
 
-    Upon successful setup, the Atlas CLI will indicate the deployment is running and provide a connection string, typically `mongodb://localhost:27017/`.
-    By default, these local deployments run **without authentication enabled.**
-
-### Step 3.3: Connect to Your Local Atlas Deployment (`mongosh`)
-
-You'll need to connect to your local Atlas deployment to create the necessary search indexes.
-
-```bash
-atlas deployments connect eat-local-dev --connectWith mongosh
-```
-(Replace `eat-local-dev` if you used a different name in Step 3.2). This will open a `mongosh` session connected to your local Atlas instance.
-
-### Step 3.4: Create Vector Search Indexes via `mongosh` (CRITICAL)
-
-EAT's `SmartLibrary`, `SmartAgentBus`, and `SmartMemory` rely on specific Vector Search Indexes.
-
-1.  **Switch to the EAT Database in `mongosh`:**
-    The database name you choose here must match what you configure in your EAT project's `.env` file.
+2.  **Switch to the EAT Database in `mongosh`:**
+    This database name must match your `MONGODB_DATABASE_NAME` in the `.env` file.
     ```javascript
-    use evolving_agents_db; // Or your preferred MONGODB_DATABASE_NAME
+    use evolving_agents_db; // Or your chosen name
     ```
 
-2.  **Create the Vector Search Indexes:**
-    **IMPORTANT:** Replace `YOUR_EMBEDDING_DIMENSION` in the commands below with the actual dimension of your embedding model (e.g., **1536** for OpenAI's `text-embedding-3-small`).
+3.  **Create the Four Vector Search Indexes:**
+    **IMPORTANT:** Replace `YOUR_EMBEDDING_DIMENSION` with your model's dimension (e.g., **1536** for `text-embedding-3-small`).
 
-    *   **Index 1: `eat_components` - Content Embedding**
-        *   Atlas Search Index Name (and EAT internal reference): `idx_components_content_embedding`
+    *   **Index 1: `eat_components` - Content Embedding** (`idx_components_content_embedding`)
         ```javascript
         db.eat_components.createSearchIndex({
           "name": "idx_components_content_embedding",
@@ -109,8 +124,7 @@ EAT's `SmartLibrary`, `SmartAgentBus`, and `SmartMemory` rely on specific Vector
         });
         ```
 
-    *   **Index 2: `eat_components` - Applicability Embedding**
-        *   Atlas Search Index Name (and EAT internal reference): `applicability_embedding`
+    *   **Index 2: `eat_components` - Applicability Embedding** (`applicability_embedding`)
         ```javascript
         db.eat_components.createSearchIndex({
           "name": "applicability_embedding",
@@ -122,8 +136,7 @@ EAT's `SmartLibrary`, `SmartAgentBus`, and `SmartMemory` rely on specific Vector
         });
         ```
 
-    *   **Index 3: `eat_agent_registry` - Agent Description Embedding**
-        *   Atlas Search Index Name (and EAT internal reference): `vector_index_agent_description`
+    *   **Index 3: `eat_agent_registry` - Agent Description Embedding** (`vector_index_agent_description`)
         ```javascript
         db.eat_agent_registry.createSearchIndex({
           "name": "vector_index_agent_description",
@@ -135,8 +148,7 @@ EAT's `SmartLibrary`, `SmartAgentBus`, and `SmartMemory` rely on specific Vector
         });
         ```
 
-    *   **Index 4: `eat_agent_experiences` - Smart Memory Embeddings**
-        *   Atlas Search Index Name (and EAT internal reference): `vector_index_experiences_default`
+    *   **Index 4: `eat_agent_experiences` - Smart Memory Embeddings** (`vector_index_experiences_default`)
         ```javascript
         db.eat_agent_experiences.createSearchIndex({
           "name": "vector_index_experiences_default",
@@ -145,285 +157,109 @@ EAT's `SmartLibrary`, `SmartAgentBus`, and `SmartMemory` rely on specific Vector
             "embeddings.sub_task_description_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
             "embeddings.input_context_summary_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
             "embeddings.output_summary_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" }
-            // Add other filterable fields as needed based on your eat_agent_experiences_schema.md
           }}}
         });
         ```
-    Wait for each `createSearchIndex` command to return a success message (e.g., `{ ok: 1.0 }`). Index building may take a few moments. You can check status with `db.collectionName.getSearchIndexes()`.
+    Wait for each command to return `{ ok: 1.0 }`. Check status with `db.collectionName.getSearchIndexes()`.
 
-3.  **Exit `mongosh`:** Type `exit` or press `Ctrl+D`.
+4.  **Exit `mongosh`**: `exit` or `Ctrl+D`.
 
-Your local Atlas deployment is now ready with the necessary vector indexes for EAT.
+#### Option 3.3.B: Using MongoDB Compass (GUI)
+
+1.  **Connect MongoDB Compass to your Local Atlas Deployment:**
+    *   Open MongoDB Compass.
+    *   Create a new connection using the URI: `mongodb://localhost:27017/` (adjust port if non-default).
+    *   Authentication should be `None`.
+    *   Click "Connect".
+
+2.  **Navigate to the Database and Collections:**
+    *   Select your EAT database (e.g., `evolving_agents_db`). If it doesn't exist yet, you might need to run an EAT script once to create the collections, or manually create placeholder collections before defining indexes.
+    *   For each collection (`eat_components`, `eat_agent_registry`, `eat_agent_experiences`):
+        *   Select the collection.
+        *   Go to the "Search Indexes" or "Atlas Search" tab (the exact naming/location might vary slightly in Compass versions for local Atlas features).
+        *   Click "Create Search Index".
+
+3.  **Define Indexes using the JSON Editor:**
+    *   Choose "Atlas Vector Search" as the type if prompted.
+    *   Select the "JSON Editor" configuration method.
+    *   For each of the four indexes described in **Option 3.3.A (Step 3)**:
+        *   Enter the correct **Index Name** (e.g., `idx_components_content_embedding`).
+        *   Paste the corresponding **`definition` object** (the part inside `createSearchIndex({ ..., definition: { HERE } })`) into the JSON editor. Compass might only need the content of the `mappings` field or the whole `definition` depending on its UI for local Atlas search indexes. Refer to the structure from Option 3.3.A.
+            *Example for `idx_components_content_embedding`'s definition for Compass JSON editor:*
+            ```json
+            { 
+              "mappings": { 
+                "dynamic": false, 
+                "fields": {
+                  "content_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
+                  "record_type": { "type": "string", "analyzer": "keyword" }, 
+                  "domain": { "type": "string", "analyzer": "keyword" },
+                  "status": { "type": "string", "analyzer": "keyword" }, 
+                  "tags": { "type": "string", "analyzer": "keyword", "multi": true }
+                }
+              }
+            }
+            ```
+        *   Replace `YOUR_EMBEDDING_DIMENSION`.
+        *   Save/Create the index.
+    *   Wait for indexes to build and become "Active".
 
 ---
 
 ## 4. Configure EAT Project (`.env` file)
 
-Your EAT application needs to connect to this local Atlas deployment.
+Ensure your EAT project connects to this local Atlas deployment.
 
-1.  Navigate to the root directory of your EAT project.
-2.  If it doesn't exist, copy `.env.example` to `.env`: `cp .env.example .env`
-3.  Open `.env` and **ensure these lines are correctly set**:
+1.  In your EAT project root, copy `.env.example` to `.env` if not done.
+2.  Edit `.env` and set:
     ```env
-    # ... other settings like OPENAI_API_KEY ...
-
-    MONGODB_URI="mongodb://localhost:27017/" # Or the port you used in Step 3.2, e.g., mongodb://localhost:27018/
-    MONGODB_DATABASE_NAME="evolving_agents_db" # Must match the DB name used in mongosh for index creation
-
-    # ... other LLM settings ...
+    MONGODB_URI="mongodb://localhost:27017/" # Or your custom port
+    MONGODB_DATABASE_NAME="evolving_agents_db" # Must match the DB used for index creation
+    OPENAI_API_KEY="your-openai-api-key"
+    # ... other settings ...
     ```
-    *   The local Atlas deployment typically does **not** require username/password in the URI.
 
 ---
 
 ## 5. Running the EAT Application
 
-With your local Atlas deployment running (started via `atlas deployments start eat-local-dev`) and your `.env` file configured:
-
-*   **If running EAT scripts directly on host (Recommended for this setup):**
-    1.  Ensure your Python virtual environment for EAT is activated.
-    2.  Run example scripts from the EAT project root:
-        ```bash
-        python examples/invoice_processing/architect_zero_comprehensive_demo.py
-        python scripts/test_smart_memory.py
-        ```
-        The EAT application will use the `MONGODB_URI` from your `.env` file to connect to your local Atlas deployment.
-
-*   **If running EAT application inside a Docker container (e.g., using the project's `docker-compose.yml` for the `app` service only):**
-    1.  The `app` service in `docker-compose.yml` must be configured to pick up the `MONGODB_URI` from the `.env` file (which points to `localhost:27017`).
-    2.  Ensure any `environment` settings for `MONGODB_URI` within the `app` service in `docker-compose.yml` that point to an internal Docker alias (like `mongodb://mongo:27017`) are removed or commented out.
-    3.  The `depends_on: mongo` for the `app` service and the `mongo` service block itself in `docker-compose.yml` would typically be removed or commented out, as the database is managed externally by the Atlas CLI.
-    4.  Then run: `docker-compose up -d app` (or however you run just the app service). Docker Desktop usually allows containers to connect to `localhost` on the host machine.
+Refer to the `EAT_EXAMPLES_TESTING_TUTORIAL.md` for detailed instructions on how to run EAT examples. In summary:
+*   Ensure your Python virtual environment is active.
+*   Run scripts directly (e.g., `python examples/invoice_processing/architect_zero_comprehensive_demo.py`).
+*   Or, if using `docker-compose` for the EAT app, ensure it's configured to use the `MONGODB_URI` from your `.env` file pointing to `localhost`.
 
 ---
 
 ## 6. Managing Your Local Atlas Deployment
 
-Use the Atlas CLI to manage your local MongoDB deployment:
-
-*   **Start:** `atlas deployments start eat-local-dev`
-*   **Stop:** `atlas deployments stop eat-local-dev`
-*   **Pause (preserves data, stops Docker container):** `atlas deployments pause eat-local-dev`
-*   **Resume:** `atlas deployments resume eat-local-dev`
-*   **Delete (removes deployment and its data volume):** `atlas deployments delete eat-local-dev --force`
-*   **List Deployments:** `atlas deployments list`
-*   **View Logs:** `atlas deployments logs eat-local-dev -f`
+Use the Atlas CLI:
+*   `atlas deployments list`
+*   `atlas deployments start eat-local-dev`
+*   `atlas deployments stop eat-local-dev`
+*   `atlas deployments pause eat-local-dev`
+*   `atlas deployments resume eat-local-dev`
+*   `atlas deployments delete eat-local-dev --force` (Deletes data!)
+*   `atlas deployments logs eat-local-dev -f`
 
 ---
 
 ## 7. Troubleshooting
 
-*   **Atlas CLI `deployments setup` fails:** Ensure Docker is running and you have network connectivity.
-*   **EAT cannot connect to `mongodb://localhost:27017/`:**
-    *   Verify your local Atlas deployment is running (`atlas deployments list`).
-    *   Check the port number in your `MONGODB_URI` matches the port used during `atlas deployments setup`.
-*   **Vector Search "Index Not Found" Errors in EAT:**
-    *   Ensure all four indexes were created in the correct database (`MONGODB_DATABASE_NAME`) using the exact names and field paths specified in Step 3.4.
-    *   Verify `YOUR_EMBEDDING_DIMENSION` was correct.
-    *   Check index status via `db.collectionName.getSearchIndexes()` in `mongosh` connected to your local Atlas deployment.
-*   **`.env` not loaded:** Ensure `python-dotenv` is installed in your virtual environment.
+*   **`atlas deployments start ... Error: deployment is in unexpected state: IDLE`**:
+    *   Try `atlas deployments resume eat-local-dev`.
+    *   If that fails, the deployment might be in a corrupted state. The safest is to perform a **fresh install** (delete and re-setup):
+        ```bash
+        atlas deployments delete eat-local-dev --force
+        # (Optional) docker system prune -a --volumes  # BE CAREFUL: removes all unused Docker data
+        atlas deployments setup eat-local-dev --type local --port 27017 --mdbVersion 7.0 
+        ```
+        Then re-create the indexes (Step 3.3).
+*   **Cannot connect from EAT/Compass:** Verify deployment is `RUNNING` and the port in `MONGODB_URI` is correct.
+*   **Vector Search Index Errors in EAT:** Double-check index names, database name, field paths, and `YOUR_EMBEDDING_DIMENSION` in your index definitions.
+*   Ensure Docker is running.
 
 ---
 
 ## 8. Note on Production
 
-The MongoDB Atlas CLI Local Deployment is **for development and testing only.** For staging or production, you should use a managed **MongoDB Atlas cloud cluster** for reliability, scalability, backups, and security. The process of creating Vector Search Indexes in a cloud Atlas cluster is similar (using the Atlas UI JSON editor).
-
----
-```
-
----
-
-**Updated File: `EAT_EXAMPLES_TESTING_TUTORIAL.md`** (This replaces the previous `DOCKER_TESTING_GUIDE.md` content)
-
-```markdown
-# Tutorial: Testing EAT Examples with Atlas CLI Local MongoDB
-
-This tutorial guides you through setting up the Evolving Agents Toolkit (EAT) and running its example scripts using a **MongoDB Atlas CLI Local Deployment** for your database. This method is recommended for local development as it provides full Atlas Vector Search features without using the project's `docker-compose.yml` for the database service.
-
-## 1. Prerequisites
-
-*   **Git:** For cloning the repository.
-*   **Python 3.11+:** EAT is designed for Python 3.11 or newer.
-*   **pip:** Python's package installer.
-*   **Docker Desktop (or Docker Engine):** The Atlas CLI uses Docker to run its local MongoDB instance. Docker Compose is needed if you choose to run the EAT *application* itself in a container.
-    *   [Install Docker](https://docs.docker.com/get-docker/)
-*   **MongoDB Atlas CLI:** For creating and managing your local Atlas MongoDB deployment.
-    *   [Install the Atlas CLI](https://www.mongodb.com/docs/atlas/cli/stable/install-atlas-cli/)
-*   **OpenAI API Key:** Most EAT examples require an OpenAI API key.
-
-## 2. Setup Instructions
-
-### Step 2.1: Clone the EAT Repository
-
-```bash
-git clone https://github.com/matiasmolinas/evolving-agents.git
-cd Adaptive-Agents-Framework
-```
-*(Note: Adjust URL if your repository is hosted elsewhere)*
-
-### Step 2.2: Set Up Python Virtual Environment & Install EAT Dependencies
-
-```bash
-python -m venv venv
-# On macOS/Linux:
-source venv/bin/activate
-# On Windows:
-# venv\Scripts\activate
-
-pip install -r requirements.txt
-pip install -e .
-```
-
-### Step 2.3: Set Up and Start MongoDB Atlas CLI Local Deployment
-
-This step creates and starts your local MongoDB instance with Atlas Search capabilities. This MongoDB instance runs in a Docker container managed by the Atlas CLI.
-
-1.  **Follow `docs/MONGO-SETUP.md` (Sections 3.1, 3.2):**
-    *   Install the Atlas CLI if you haven't already.
-    *   Use the Atlas CLI to set up and start your local deployment. A typical command is:
-        ```bash
-        atlas deployments setup eat-local-dev --type local --port 27017 --mdbVersion 7.0
-        ```
-        Ensure this local deployment is **running** before proceeding (check with `atlas deployments list`).
-
-2.  **Create Vector Search Indexes in your Local Atlas Deployment:**
-    *   This is a **critical step** for EAT's semantic search features.
-    *   Connect to your local Atlas deployment using `mongosh` (as shown in `docs/MONGO-SETUP.md`, Step 3.3: `atlas deployments connect eat-local-dev --connectWith mongosh`).
-    *   Inside `mongosh`, execute the `db.collection.createSearchIndex({...})` commands provided in **Step 3.4** of `docs/MONGO-SETUP.md`. You need to create all four indexes detailed there for `eat_components` (x2), `eat_agent_registry`, and `eat_agent_experiences`.
-    *   **Remember to replace `YOUR_EMBEDDING_DIMENSION`** (e.g., with **1536** for `text-embedding-3-small`).
-    *   Exit `mongosh` after indexes are successfully created.
-
-### Step 2.4: Configure EAT Environment Variables (`.env` file)
-
-Your EAT application needs to know how to connect to the local Atlas deployment.
-
-1.  In the EAT project root, copy `.env.example` to `.env` if it doesn't exist:
-    ```bash
-    cp .env.example .env
-    ```
-2.  Edit the `.env` file:
-    *   Add your `OPENAI_API_KEY`:
-        ```env
-        OPENAI_API_KEY="your-openai-api-key-here"
-        ```
-    *   Configure MongoDB connection details:
-        ```env
-        MONGODB_URI="mongodb://localhost:27017/" # Adjust port if you used a different one for `atlas deployments setup`
-        MONGODB_DATABASE_NAME="evolving_agents_db" # Must match the database name used when creating indexes
-        ```
-    *   Review other EAT settings (e.g., `LLM_MODEL`) as needed.
-
-## 3. Running EAT Examples
-
-You have two main ways to run the EAT application examples:
-
-### Option 3.A: Run Python Scripts Directly on Host (Recommended for simplicity with this setup)
-
-With your Atlas CLI Local MongoDB running and the Python virtual environment activated:
-
-1.  Navigate to the EAT project root (`Adaptive-Agents-Framework`).
-2.  Execute example scripts directly:
-    ```bash
-    # Comprehensive Demo
-    python examples/invoice_processing/architect_zero_comprehensive_demo.py
-
-    # Smart Memory Test Script
-    python scripts/test_smart_memory.py
-
-    # Smart Agent Bus Demo
-    python examples/smart_agent_bus/dual_bus_demo.py
-    ```
-    The scripts will use the `MONGODB_URI` from your `.env` file to connect to the local Atlas deployment running on `localhost`.
-
-### Option 3.B: Run EAT Application in Docker (using `docker-compose.yml` for the `app` service only)
-
-If you prefer to run the EAT application itself within a Docker container while still using the externally managed Atlas CLI Local MongoDB:
-
-1.  **Modify `docker-compose.yml` (Important):**
-    *   Open `docker-compose.yml` in the EAT project root.
-    *   **Remove or comment out the entire `mongo` service block.**
-    *   In the `app` service definition:
-        *   **Remove or comment out `depends_on: mongo`**.
-        *   **Remove or comment out any `environment` variables that set `MONGODB_URI` or `MONGODB_DATABASE_NAME`** (e.g., lines like `- MONGODB_URI=mongodb://mongo:27017/...`). This ensures the `app` container uses the values from your `.env` file, which point to `localhost:27017`.
-    *   Your `app` service definition should effectively use the `.env` file for its MongoDB connection. Example `app` service after modification:
-        ```yaml
-        services:
-          app:
-            build:
-              context: .
-            container_name: eat_app
-            volumes:
-              - .:/app
-            env_file:
-              - ./.env # This will provide MONGODB_URI="mongodb://localhost:27017/"
-            # Removed: depends_on: mongo
-            # Removed: environment block that hardcoded MONGODB_URI to the 'mongo' service
-            networks:
-              - eat_network # Or remove if only 'app' service remains and it connects to host's localhost
-            tty: true
-            stdin_open: true
-        
-        # mongo service block would be removed or commented out
-        # volumes: mongo-data would be removed or commented out if mongo service is removed
-
-        # networks: eat_network might still be needed if other EAT services are added later,
-        # or can be simplified if app is the only service.
-        # For connecting to host's localhost from Docker, often no explicit network config beyond default is needed.
-        ```
-
-2.  **Build the EAT application image (if not already built or if Dockerfile changed):**
-    ```bash
-    docker-compose build app
-    ```
-
-3.  **Start *only* the EAT application service:**
-    ```bash
-    docker-compose up -d app
-    ```
-    The `eat_app` container will start and connect to your Atlas CLI Local MongoDB running on `localhost:27017` (Docker Desktop usually bridges `localhost` to the host).
-
-4.  **Run examples using `docker-compose exec`:**
-    ```bash
-    docker-compose exec app python examples/invoice_processing/architect_zero_comprehensive_demo.py
-    ```
-
-## 4. Verifying Results
-
-### Step 4.1: Check Local Output Files
-
-Some demos create files in the project directory (e.g., `final_processing_output.json`).
-
-### Step 4.2: Inspect MongoDB Collections (in your Local Atlas Deployment)
-
-1.  Connect to `mongosh` of your local Atlas deployment:
-    ```bash
-    atlas deployments connect eat-local-dev --connectWith mongosh
-    ```
-2.  Switch to database: `use evolving_agents_db;`
-3.  Inspect collections (e.g., `db.eat_components.find().limit(1).pretty();`, `db.eat_agent_experiences.countDocuments();`).
-
-## 5. Troubleshooting
-
-*   **EAT App connection issues to `localhost:27017` MongoDB:**
-    *   Ensure your Atlas CLI Local Deployment (`eat-local-dev`) is running (`atlas deployments list`).
-    *   Verify `MONGODB_URI` in `.env` is `mongodb://localhost:27017/` (or correct port).
-    *   If running EAT app in Docker (Option 3.B), ensure `docker-compose.yml` for the `app` service is *not* overriding `MONGODB_URI` to point to an internal Docker alias.
-*   **Vector Search Index errors:** Confirm indexes were created correctly in your local Atlas deployment (Step 2.3.2) with the right names, paths, and dimensions.
-*   Refer to `docs/MONGO-SETUP.md` for more detailed Atlas CLI troubleshooting.
-
-## 6. Stopping the Environment
-
-1.  **If running EAT app in Docker (Option 3.B):**
-    ```bash
-    docker-compose down
-    ```
-2.  **Stop your MongoDB Atlas CLI Local Deployment:**
-    ```bash
-    atlas deployments stop eat-local-dev # Or your deployment name
-    ```
-    To completely remove it and its data: `atlas deployments delete eat-local-dev --force`
-
-## 7. Conclusion
-
-This tutorial outlined using the MongoDB Atlas CLI Local Deployment for your database needs while developing with EAT. This provides a powerful, Atlas-feature-rich local MongoDB environment, allowing you to run EAT scripts directly or via a simplified Docker Compose setup for the application.
+Atlas CLI Local Deployment is **strictly for dev/test.** Use a managed MongoDB Atlas cloud cluster for production.
