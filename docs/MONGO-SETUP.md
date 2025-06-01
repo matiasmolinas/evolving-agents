@@ -117,7 +117,7 @@ Choose **one** of the following methods (mongosh or Compass).
         db.eat_components.createSearchIndex({
           "name": "idx_components_content_embedding",
           "definition": { "mappings": { "dynamic": false, "fields": {
-            "content_embedding": { "type": "vector", "dimensions": YOUR_EMBEDDING_DIMENSION, "similarity": "cosine" },
+            "content_embedding": { "type": "vector", "dimensions": 1536, "similarity": "cosine" },
             "record_type": { "type": "string", "analyzer": "keyword" }, "domain": { "type": "string", "analyzer": "keyword" },
             "status": { "type": "string", "analyzer": "keyword" }, "tags": { "type": "string", "analyzer": "keyword", "multi": true }
           }}}
