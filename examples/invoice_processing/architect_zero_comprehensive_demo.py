@@ -12,12 +12,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich import print as rprint
-import sys
+import sys # Ensure sys is imported for path manipulation
 
 # --- Evolving Agents Imports ---
 # Ensure the project root is in sys.path if running directly and not as an installed package
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(script_dir))
+project_root = os.path.dirname(os.path.dirname(script_dir)) # Go up two levels
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -36,7 +36,7 @@ from evolving_agents.agents.memory_manager_agent import MemoryManagerAgent
 from evolving_agents.tools.internal.mongo_experience_store_tool import MongoExperienceStoreTool
 from evolving_agents.tools.internal.semantic_experience_search_tool import SemanticExperienceSearchTool
 from evolving_agents.tools.internal.message_summarization_tool import MessageSummarizationTool
-from beeai_framework.memory import UnconstrainedMemory, TokenMemory # Added TokenMemory
+from beeai_framework.memory import UnconstrainedMemory, TokenMemory
 
 
 # --- Configuration ---
@@ -51,7 +51,7 @@ logging.getLogger("litellm").setLevel(logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 # logging.getLogger("SmartAgentBus").setLevel(logging.INFO)
 # logging.getLogger("SmartLibrary").setLevel(logging.INFO)
-# logging.getLogger("LLMCache").setLevel(logging.WARNING) # Set to WARNING if too noisy
+# logging.getLogger("LLMCache").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__) # Logger for this script
 if not load_dotenv():
@@ -63,7 +63,7 @@ console = Console(width=120)
 # --- Constants for Demo Output Files ---
 WORKFLOW_OUTPUT_PATH = "final_processing_output.json"
 SAMPLE_INVOICE_PATH = "sample_invoice_input.txt"
-INTENT_PLAN_FILE_COPY_PATH = "intent_plan_demo.json" # As per .env.example
+# INTENT_PLAN_FILE_COPY_PATH is now sourced from eat_config
 
 SAMPLE_INVOICE = """
 INVOICE #INV-9876
@@ -96,17 +96,18 @@ Notes: Expedited shipping requested.
 async def clean_previous_demo_outputs():
     """Remove previous demo-specific output files to start fresh."""
     console.print("[bold blue]OPERATION: Cleaning previous demo output files...[/]")
+    intent_plan_path_from_config = getattr(eat_config, 'INTENT_REVIEW_OUTPUT_PATH', 'intent_plans_output_copy')
+
     items_to_remove = [
         WORKFLOW_OUTPUT_PATH, SAMPLE_INVOICE_PATH, 
-        eat_config.INTENT_REVIEW_OUTPUT_PATH, # Use configured path
+        intent_plan_path_from_config,
         "architect_design_output.json", "architect_raw_output.txt",
         "generated_invoice_workflow.yaml"
     ]
-    # Obsolete file-based storage (no longer primary, but good to clean if they exist from old runs)
     obsolete_stores = [
         "smart_library_demo.json", "smart_agent_bus_demo.json", "agent_bus_logs_demo.json",
-        "./vector_db_demo", # Old ChromaDB path
-        eat_config.LLM_CACHE_DIR if not eat_config.LLM_USE_CACHE or not eat_config.MONGODB_URI else None # Old file cache dir if not using Mongo cache
+        "./vector_db_demo",
+        eat_config.LLM_CACHE_DIR if not eat_config.LLM_USE_CACHE or not eat_config.MONGODB_URI else None
     ]
     items_to_remove.extend(filter(None, obsolete_stores))
 
@@ -154,7 +155,7 @@ async def setup_framework_environment(container: DependencyContainer) -> Depende
     llm_service = LLMService(
         provider=eat_config.LLM_PROVIDER, model=eat_config.LLM_MODEL,
         embedding_model=eat_config.LLM_EMBEDDING_MODEL, use_cache=eat_config.LLM_USE_CACHE,
-        container=container # Pass container so LLMService can get mongodb_client if needed
+        container=container
     )
     container.register('llm_service', llm_service)
 
@@ -167,15 +168,15 @@ async def setup_framework_environment(container: DependencyContainer) -> Depende
 
     # --- Instantiate MemoryManagerAgent ---
     console.print("  → Initializing MemoryManagerAgent...")
-    memory_manager_agent_memory = TokenMemory(llm_service.chat_model) # Using TokenMemory is often better for ReAct
+    memory_manager_agent_memory = TokenMemory(llm_service.chat_model)
     memory_manager_agent = MemoryManagerAgent(
         llm_service=llm_service,
         mongo_experience_store_tool=experience_store_tool,
         semantic_search_tool=semantic_search_tool,
         message_summarization_tool=message_summarization_tool,
-        memory_override=memory_manager_agent_memory # Corrected keyword
+        memory_override=memory_manager_agent_memory
     )
-    container.register('memory_manager_agent_instance', memory_manager_agent) # Register the instance
+    container.register('memory_manager_agent_instance', memory_manager_agent)
     console.print("  [green]✓[/] MemoryManagerAgent initialized.")
 
     # 2. Smart Library
@@ -200,7 +201,7 @@ async def setup_framework_environment(container: DependencyContainer) -> Depende
         description="Manages experiences for learning. Call via 'process_task' with natural language.",
         agent_type="MemoryManagement",
         capabilities=[{"id": "process_task", "name": "Process Memory Task", "description": "Handles storage, retrieval, and summarization."}],
-        agent_instance=memory_manager_agent, # Pass the actual instance
+        agent_instance=memory_manager_agent,
         embed_capabilities=True
     )
     console.print(f"  [green]✓[/] MemoryManagerAgent registered on SmartAgentBus with ID: {MEMORY_MANAGER_AGENT_ID}.")
@@ -219,14 +220,13 @@ async def setup_framework_environment(container: DependencyContainer) -> Depende
     await seed_initial_library_mongodb(smart_library)
     
     console.print("  → Performing late initialization of SmartLibrary (triggers AgentBus sync if needed)...")
-    await smart_library.initialize() # This often syncs with AgentBus
+    await smart_library.initialize()
 
     console.print("[green]✓[/] Framework environment fully initialized with MongoDB backend.")
     return container
 
 async def seed_initial_library_mongodb(smart_library: SmartLibrary):
     """Seed the MongoDB SmartLibrary with basic components for the demo."""
-    # Simplified: Ensure components are present, create if not. Avoids duplicate errors.
     components_to_ensure = [
         {
             "name": "BasicDocumentAnalyzer", "record_type": "TOOL", "domain": "document_processing",
@@ -281,8 +281,8 @@ class BasicInvoiceProcessorInitializer:
     console.print("    - Allowing a moment for MongoDB operations if any were performed...")
     await asyncio.sleep(0.5)
 
+
 async def extract_json_with_llm(llm_service: LLMService, response_text: str) -> Optional[Dict[str, Any]]:
-    # ... (Function remains the same as your provided version)
     extraction_prompt = f"""
     The following text is a response from an AI agent. It is expected to contain a JSON object.
     Please extract ONLY the main JSON object from this text.
@@ -315,9 +315,7 @@ async def extract_json_with_llm(llm_service: LLMService, response_text: str) -> 
         logger.error(f"Error using LLM to extract JSON: {e}")
         return {"error": f"Exception during LLM extraction: {e}"}
 
-
 def extract_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
-    # ... (Function remains the same as your provided version)
     if not response_text: return None
     patterns = [
         r"```json\s*(\{[\s\S]*?\})\s*```",
@@ -341,7 +339,7 @@ def extract_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
             if potential_json_str.startswith('{') and potential_json_str.endswith('}') and potential_json_str.count('{') >= potential_json_str.count('}'):
                 if ':' in potential_json_str and ('"' in potential_json_str or "'" in potential_json_str):
                     parsed = json.loads(potential_json_str)
-                    if isinstance(parsed, dict) and len(parsed.keys()) > 1: # Require at least 2 keys
+                    if isinstance(parsed, dict) and len(parsed.keys()) > 1: 
                         json_objects_found.append(parsed)
         except json.JSONDecodeError:
             logger.debug(f"Loose JSON match failed to parse: '{potential_json_str[:100]}...'")
@@ -352,24 +350,21 @@ def extract_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
     logger.warning("Could not extract JSON using pattern matching from SystemAgent response.")
     return None
 
-# --- CORRECTED/IMPROVED get_nested_value FUNCTION ---
 def get_nested_value(data_dict: Dict[str, Any], keys_list_to_check: List[str], default_val: Any = 'N/A') -> Any:
     """
     Retrieves a value from a dictionary using a list of possible keys.
-    Performs case-insensitive and space-insensitive matching for keys.
+    Performs case-insensitive and space-insensitive matching for keys, also removing '#'.
     """
     if not isinstance(data_dict, dict):
         return default_val
 
-    # Normalize keys from the data_dict for robust matching
-    # store original key along with normalized key to retrieve actual value
     normalized_data_keys_map = {
         key.lower().replace(" ", "").replace("#", ""): key 
         for key in data_dict.keys() if isinstance(key, str)
     }
 
     for key_to_try in keys_list_to_check:
-        # Try exact match first
+        # Try exact match first (original key from the list)
         if key_to_try in data_dict:
             return data_dict[key_to_try]
         
@@ -387,13 +382,11 @@ async def run_demo():
         "[bold yellow]Evolving Agents Toolkit - Invoice Processing Demo (MongoDB Backend)[/]",
         border_style="yellow", padding=(1, 2)
     ))
-    # ... (intro prints remain the same) ...
     console.print("\n[bold]This demonstration shows how the SystemAgent can:[/]")
     console.print("  1. Accept a high-level business goal (invoice processing)")
     console.print("  2. Handle component search, creation, and orchestration internally (using MongoDB)")
     console.print("  3. Execute complex tasks without specifying implementation details")
     console.print("  4. Return structured, verified results\n")
-
 
     await clean_previous_demo_outputs()
     with open(SAMPLE_INVOICE_PATH, "w") as f: f.write(SAMPLE_INVOICE)
@@ -419,7 +412,7 @@ async def run_demo():
 
     **Non-Functional Requirements:**
     - High accuracy is critical.
-    - Output must be a single, valid JSON object containing the extracted data and a 'verification' section (status: 'ok'/'failed', discrepancies: list).
+    - Output must be a single, valid JSON object containing the extracted data and a 'verification' or 'Verification' section (status: 'ok'/'failed', discrepancies: list).
     - Handle potential variations in invoice layouts gracefully.
 
     **Input Data:**
@@ -444,7 +437,7 @@ async def run_demo():
 
             if not final_result_json or ("error" in final_result_json and final_result_json.get("error") != "No valid JSON object found in the provided text."):
                 console.print("\r[yellow]⚠ Standard JSON extraction failed or yielded error. Attempting LLM-based JSON extraction...[/]", end="", flush=True)
-                await asyncio.sleep(0.1) # Allow console to update
+                await asyncio.sleep(0.1)
                 final_result_json = await extract_json_with_llm(llm_service, final_output_text)
 
             if final_result_json and "error" not in final_result_json:
@@ -466,7 +459,7 @@ async def run_demo():
             console.print(f"[dim]Full execution result saved to [cyan]{WORKFLOW_OUTPUT_PATH}[/][/]")
 
         except Exception as e:
-            console.print(f"\r[bold red]✗ ERROR executing SystemAgent task: {e}[/]") # Clear spinner line
+            console.print(f"\r[bold red]✗ ERROR executing SystemAgent task: {e}[/]")
             import traceback
             logger.error("SystemAgent task execution failed:", exc_info=True)
             execution_result = { "status": "error", "error_message": str(e), "traceback": traceback.format_exc(), "agent_raw_output": "" }
@@ -491,24 +484,28 @@ async def run_demo():
     if isinstance(final_data_to_display, dict) and "error" not in final_data_to_display:
         final_data_dict = final_data_to_display
         console.print("\n[bold]Key Extracted Fields Summary:[/]")
-        # Updated keys to be more inclusive of common variations
-        invoice_no_keys = ['invoicenumber', 'invoice #', 'invoiceid', 'invoice_number', 'invoice_id']
-        vendor_keys = ['vendor', 'vendorname', 'vendor_name']
-        date_keys = ['date', 'invoicedate', 'invoice_date']
-        total_due_keys = ['totaldue', 'total due', 'total', 'amountdue', 'amount_due']
+        
+        invoice_no_keys = ['InvoiceNumber', 'Invoice #', 'InvoiceID', 'Invoice No']
+        vendor_keys = ['Vendor', 'VendorName']
+        date_keys = ['Date', 'InvoiceDate']
+        total_due_keys = ['TotalDue', 'Total Due', 'AmountDue', 'Total']
+        verification_keys = ['Verification', 'verification']
 
         console.print(f"  • Invoice #: [bold cyan]{get_nested_value(final_data_dict, invoice_no_keys)}[/]")
         console.print(f"  • Vendor: [bold cyan]{get_nested_value(final_data_dict, vendor_keys)}[/]")
         console.print(f"  • Date: [cyan]{get_nested_value(final_data_dict, date_keys)}[/]")
         console.print(f"  • Total Due: [bold cyan]${get_nested_value(final_data_dict, total_due_keys)}[/]")
 
-        verification = final_data_dict.get('verification', {})
-        ver_status = str(verification.get('status', 'unknown')).lower() # Ensure string for .lower()
+        verification_details = get_nested_value(final_data_dict, verification_keys, default_val={})
+            
+        ver_status = str(verification_details.get('status', 'unknown')).lower()
+        ver_message = verification_details.get('message', 'Calculations correct' if ver_status == 'ok' else 'Discrepancies found or unable to verify')
+
         if ver_status in ['ok', 'passed', 'verified', 'success']:
-            console.print(f"  • Verification: [bold green]PASSED[/] ([italic]{verification.get('message', 'Calculations correct')}[/])")
+            console.print(f"  • Verification: [bold green]PASSED[/] ([italic]{ver_message}[/])")
         else:
-            console.print(f"  • Verification: [bold red]FAILED or UNKNOWN[/] ([italic]{verification.get('message', 'Discrepancies found or unable to verify')}[/])")
-            discrepancies = verification.get('discrepancies', [])
+            console.print(f"  • Verification: [bold red]FAILED or UNKNOWN[/] ([italic]{ver_message}[/])")
+            discrepancies = verification_details.get('discrepancies', [])
             for discrepancy in discrepancies:
                 console.print(f"    [red]- {discrepancy}[/]")
     else:
@@ -526,17 +523,14 @@ async def run_demo():
     console.print(f"  • Key Collections: `eat_components`, `eat_agent_registry`, `eat_agent_bus_logs`, `eat_llm_cache`, `eat_intent_plans`, `eat_agent_experiences`.")
     console.print(f"  • Final demo output (this script's result) saved to: [cyan]{WORKFLOW_OUTPUT_PATH}[/]")
     
-    # Path for intent plan copy is now sourced from eat_config
-    intent_plan_path_from_config = getattr(eat_config, 'INTENT_REVIEW_OUTPUT_PATH', 'intent_plans_output_copy') # Default if not in config
+    intent_plan_path_from_config = getattr(eat_config, 'INTENT_REVIEW_OUTPUT_PATH', 'intent_plans_output_copy')
     if eat_config.INTENT_REVIEW_ENABLED and "intents" in eat_config.INTENT_REVIEW_LEVELS:
         console.print(f"  • Optional IntentPlan file copy (if review enabled and path set): [cyan]{intent_plan_path_from_config}[/]")
     else:
         console.print(f"  • Intent Review for 'intents' level is currently [yellow]disabled[/] in config or not set for this demo.")
 
-
 if __name__ == "__main__":
     try:
-        # Ensure .env is loaded and critical vars are checked
         if not os.getenv("MONGODB_URI") or not os.getenv("OPENAI_API_KEY"):
             console.print("[bold red]ERROR: MONGODB_URI and/or OPENAI_API_KEY not found in .env file or environment.[/]")
             console.print("Please ensure your .env file is correctly configured per .env.example and `docs/MONGO-SETUP.md`.")
@@ -550,4 +544,4 @@ if __name__ == "__main__":
             asyncio.run(run_demo())
     except Exception as main_error:
         console.print(f"[bold red]CRITICAL ERROR in main demo execution loop:[/]")
-        console.print_exception(show_locals=False) # Set show_locals=False for cleaner output in most cases
+        console.print_exception(show_locals=False)
