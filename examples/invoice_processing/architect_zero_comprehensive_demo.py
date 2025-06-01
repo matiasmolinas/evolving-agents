@@ -181,13 +181,13 @@ async def setup_framework_environment(container: DependencyContainer) -> Depende
 
     # --- Instantiate MemoryManagerAgent ---
     console.print("  → Initializing MemoryManagerAgent...")
-    memory_manager_agent_memory = UnconstrainedMemory()
+    memory_manager_agent_memory = UnconstrainedMemory() # Or TokenMemory(llm_service.chat_model)
     memory_manager_agent = MemoryManagerAgent(
         llm_service=llm_service,
         mongo_experience_store_tool=experience_store_tool,
         semantic_search_tool=semantic_search_tool,
         message_summarization_tool=message_summarization_tool,
-        memory=memory_manager_agent_memory
+        memory_override=memory_manager_agent_memory # <--- CHANGED KEYWORD
     )
     # Optional: Register MemoryManagerAgent in the container if other components might need direct access
     # container.register('memory_manager_agent', memory_manager_agent) # Not strictly needed if only accessed via bus
