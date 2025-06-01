@@ -23,9 +23,14 @@ from evolving_agents.providers.registry import ProviderRegistry
 from evolving_agents.providers.beeai_provider import BeeAIProvider
 from evolving_agents.core.dependency_container import DependencyContainer
 from evolving_agents.firmware.firmware import Firmware
-from evolving_agents.core.mongodb_client import MongoDBClient 
-from evolving_agents import config as eat_config 
-from beeai_framework.agents.react import ReActAgent 
+from evolving_agents.core.mongodb_client import MongoDBClient
+from evolving_agents.agents.memory_manager_agent import MemoryManagerAgent
+from evolving_agents.tools.internal.mongo_experience_store_tool import MongoExperienceStoreTool
+from evolving_agents.tools.internal.semantic_experience_search_tool import SemanticExperienceSearchTool
+from evolving_agents.tools.internal.message_summarization_tool import MessageSummarizationTool
+from evolving_agents import config as eat_config
+from beeai_framework.agents.react import ReActAgent
+from beeai_framework.memory import TokenMemory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -49,7 +54,7 @@ import logging
 
 from beeai_framework.agents.react import ReActAgent
 from beeai_framework.agents.types import AgentMeta
-from beeai_framework.memory import TokenMemory
+# TokenMemory is now imported at the top level
 from beeai_framework.backend.chat import ChatModel
 from beeai_framework.tools.tool import Tool
 
@@ -702,6 +707,26 @@ async def main():
             container=container 
         ) 
         container.register('llm_service', llm_service)
+
+        # --- Instantiate Internal Tools for MemoryManagerAgent ---
+        print("  → Initializing Internal Tools for MemoryManagerAgent...")
+        experience_store_tool = MongoExperienceStoreTool(mongodb_client=mongo_client, llm_service=llm_service)
+        semantic_search_tool = SemanticExperienceSearchTool(mongodb_client=mongo_client, llm_service=llm_service)
+        message_summarization_tool = MessageSummarizationTool(llm_service=llm_service)
+        print("  [green]✓[/] Internal Tools for MemoryManagerAgent initialized.")
+
+        # --- Instantiate MemoryManagerAgent ---
+        print("  → Initializing MemoryManagerAgent...")
+        memory_manager_agent_memory = TokenMemory(llm_service.chat_model) # Ensure TokenMemory is imported
+        memory_manager_agent = MemoryManagerAgent(
+            llm_service=llm_service,
+            mongo_experience_store_tool=experience_store_tool,
+            semantic_search_tool=semantic_search_tool,
+            message_summarization_tool=message_summarization_tool,
+            memory_override=memory_manager_agent_memory
+        )
+        container.register('memory_manager_agent_instance', memory_manager_agent)
+        print("  [green]✓[/] MemoryManagerAgent initialized and registered.")
         
         smart_library = SmartLibrary(container=container) 
         container.register('smart_library', smart_library)
@@ -711,6 +736,24 @@ async def main():
         
         agent_bus = SmartAgentBus(container=container) 
         container.register('agent_bus', agent_bus)
+
+        # --- Register MemoryManagerAgent with SmartAgentBus ---
+        print("  → Registering MemoryManagerAgent with SmartAgentBus...")
+        MEMORY_MANAGER_AGENT_ID = "memory_manager_agent_evolution_demo_id" # Unique ID for this demo
+        await agent_bus.register_agent(
+            agent_id=MEMORY_MANAGER_AGENT_ID,
+            name="MemoryManagerAgent",
+            description="Manages agent experiences, including storage, retrieval, and summarization of interactions in MongoDB.",
+            agent_type="MemoryManagement", # Or a suitable type
+            capabilities=[{
+                "id": "process_task", # Assuming a generic task processing capability
+                "name": "Process Memory Task",
+                "description": "Handles storage, retrieval, and summarization of agent experiences."
+            }],
+            agent_instance=memory_manager_agent, # The instance created in the previous step
+            embed_capabilities=True
+        )
+        print(f"  [green]✓[/] MemoryManagerAgent registered on SmartAgentBus with ID: {MEMORY_MANAGER_AGENT_ID}.")
         
         provider_registry = ProviderRegistry()
         provider_registry.register_provider(BeeAIProvider(llm_service)) 
