@@ -1,15 +1,20 @@
+# evolving_agents/tools/context/context_builder_tool.py
 import logging
 import json
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Type # Added Type for schema
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-from evolving_agents.core.base import BaseTool
+from beeai_framework.tools.tool import Tool, StringToolOutput # Correct import
+from beeai_framework.emitter.emitter import Emitter # Required for Tool
+from beeai_framework.context import RunContext # Required for Tool._run signature
+
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
-from evolving_agents.smart_library.smart_library import SmartLibrary # Assuming this path
+from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
-# from evolving_agents.core.smart_context import SmartContext, Message # If we were to build the object
+# SmartContext object itself is usually constructed by SystemAgent *after* this tool returns data
+# from evolving_agents.core.smart_context import SmartContext, Message 
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -18,233 +23,237 @@ class ContextBuilderInput(BaseModel):
     """
     Input schema for the ContextBuilderTool.
     """
-    target_agent_id: str = Field(..., description="ID or description of the agent for whom the context is being built.")
-    sub_task_description: str = Field(..., description="The specific sub-task description requiring context.")
-    current_messages: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="List of message dicts from current context.")
+    target_agent_id: str = Field(description="ID or description of the agent for whom the context is being built (often 'SystemAgent' or a specific sub-agent).")
+    sub_task_description: str = Field(..., description="The specific sub-task or goal for which context needs to be built.")
+    current_messages: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="Recent message history relevant to the sub-task. Each message should be a dict with 'sender' and 'content'.")
     
-    max_relevant_experiences: int = Field(default=3, gt=0, le=10, description="Max number of relevant experiences to retrieve.")
-    max_messages_to_summarize: int = Field(default=20, gt=0, le=100, description="Max number of recent messages to consider for summarization.")
+    max_relevant_experiences: int = Field(default=3, gt=0, le=10, description="Maximum number of relevant past experiences to retrieve from Smart Memory.")
+    max_messages_to_summarize: int = Field(default=10, gt=0, le=50, description="Maximum number of recent messages from current_messages to consider for summarization.")
     
-    include_message_summary: bool = Field(default=True, description="Whether to include a summary of current messages.")
-    include_relevant_experiences: bool = Field(default=True, description="Whether to include relevant past experiences.")
-    include_library_components: bool = Field(default=True, description="Whether to include relevant library components.")
+    # Flags to control what context components are built
+    include_message_summary: bool = Field(default=True, description="Whether to generate and include a summary of current_messages.")
+    include_relevant_experiences: bool = Field(default=True, description="Whether to retrieve and include relevant past experiences from Smart Memory.")
+    include_library_components: bool = Field(default=True, description="Whether to search for and include relevant components from SmartLibrary.")
+    
+    # Parameters for SmartLibrary search if include_library_components is true
+    library_search_limit: int = Field(default=3, gt=0, le=10, description="Max number of library components to retrieve.")
+    library_search_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Minimum similarity threshold for library component search.")
 
-class ContextBuilderTool(BaseTool):
+class BuiltContextData(BaseModel): # Output schema for the tool
+    current_task_for_context: str
+    retrieved_experiences: Optional[List[Dict[str, Any]]] = None
+    message_history_summary: Optional[str] = None
+    relevant_library_components: Optional[List[Dict[str, Any]]] = None
+    errors: Optional[List[str]] = None
+    tool_metadata: Dict[str, Any]
+
+class ContextBuilderTool(Tool[ContextBuilderInput, None, BuiltContextData]): # Input and Output Pydantic models
     """
-    Dynamically constructs an optimized SmartContext for a sub-task by
-    retrieving relevant past experiences, summarizing message history,
-    and finding relevant library components.
+    Dynamically constructs a rich contextual dataset for a sub-task by
+    querying Smart Memory for relevant past experiences, summarizing message history,
+    and finding relevant library components. This data is then used by SystemAgent
+    to create an optimized SmartContext instance.
     """
     name: str = "ContextBuilderTool"
     description: str = (
-        "Dynamically constructs an optimized SmartContext for a sub-task by retrieving relevant "
-        "past experiences, summarizing message history, and finding relevant library components."
+        "Builds rich context for a given sub-task by fetching relevant past experiences, "
+        "message summaries, and library components. Essential for informed planning by SystemAgent."
     )
-    input_schema: Dict[str, Any] = ContextBuilderInput.model_json_schema()
-    # Output is a dictionary representing SmartContext data
-    output_schema: Dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "current_task": {"type": "string"},
-            "data": {"type": "object"},
-            "messages": {"type": "array", "items": {"type": "object"}},
-            "metadata": {"type": "object"}
-        },
-        "description": "A dictionary representing the structured data for a SmartContext."
-    }
+    input_schema: Type[BaseModel] = ContextBuilderInput
+    output_schema: Type[BaseModel] = BuiltContextData
 
     def __init__(
         self,
         agent_bus: SmartAgentBus,
         smart_library: SmartLibrary,
         memory_manager_agent_id: str,
-        llm_service: Optional[LLMService] = None, # For any local LLM tasks, if needed in future
+        llm_service: LLMService, # LLMService is used here for SmartLibrary search
+        options: Optional[Dict[str, Any]] = None # For Tool base class
     ):
-        super().__init__()
-        if agent_bus is None:
-            raise ValueError("agent_bus cannot be None for ContextBuilderTool")
-        if smart_library is None:
-            raise ValueError("smart_library cannot be None for ContextBuilderTool")
-        if not memory_manager_agent_id:
-            raise ValueError("memory_manager_agent_id must be provided.")
+        super().__init__(options=options) # Call Tool's __init__
+        if agent_bus is None: raise ValueError("agent_bus cannot be None for ContextBuilderTool")
+        if smart_library is None: raise ValueError("smart_library cannot be None for ContextBuilderTool")
+        if not memory_manager_agent_id: raise ValueError("memory_manager_agent_id must be provided.")
+        if llm_service is None: raise ValueError("llm_service cannot be None for ContextBuilderTool (used for library search).")
 
         self.agent_bus = agent_bus
         self.smart_library = smart_library
         self.memory_manager_agent_id = memory_manager_agent_id
-        self.llm_service = llm_service # Currently unused, but available for future enhancements
+        self.llm_service = llm_service
+
+    def _create_emitter(self) -> Emitter: # Implement required method
+        return Emitter.root().child(
+            namespace=["tool", "context", "builder"],
+            creator=self,
+        )
 
     async def _request_mma_capability(
         self,
-        task_description: str,
-        timeout: Optional[int] = 60 # TODO: Implement timeout in SmartAgentBus if needed
+        task_description_for_mma: str,
+        # timeout: Optional[int] = 60 # Timeout would be handled by SmartAgentBus.request_capability if supported
     ) -> Any:
         """
         Helper method to send a task to the MemoryManagerAgent via the SmartAgentBus.
         """
-        bus_payload = {"task_description": task_description}
-        bus_capability_name = "process_task" # Generic capability for ReAct agent
+        bus_payload = {"task_description": task_description_for_mma}
+        bus_capability_name = "process_task" # Generic capability for MemoryManagerAgent (ReAct)
 
-        logger.debug(f"Requesting MMA ({self.memory_manager_agent_id}) for task: {task_description[:200]}...")
+        logger.debug(f"ContextBuilderTool: Requesting MMA ({self.memory_manager_agent_id}) for task: {task_description_for_mma[:150]}...")
         try:
             response = await self.agent_bus.request_capability(
-                target_agent_id=self.memory_manager_agent_id,
                 capability=bus_capability_name,
-                content=bus_payload,
-                # timeout=timeout # Pass timeout if bus supports it
+                content=bus_payload, 
+                specific_agent_id=self.memory_manager_agent_id,
+                timeout=180 # Increased timeout for potentially complex MMA tasks
             )
-            logger.debug(f"MMA response received: {type(response)}")
+            logger.debug(f"ContextBuilderTool: MMA response received (type: {type(response)}): {str(response)[:200]}...")
             return response
         except Exception as e:
-            logger.error(f"Error requesting MMA capability for task '{task_description[:100]}...': {e}", exc_info=True)
-            return None # Or a more specific error structure
+            logger.error(f"ContextBuilderTool: Error requesting MMA capability for task '{task_description_for_mma[:100]}...': {e}", exc_info=True)
+            return {"error": f"Failed to communicate with MemoryManagerAgent: {str(e)}"}
 
-    async def run(self, **kwargs: Any) -> Dict[str, Any]:
-        try:
-            config = ContextBuilderInput(**kwargs)
-        except Exception as e: # Pydantic's ValidationError
-            logger.error(f"Input validation error for ContextBuilderTool: {e}", exc_info=True)
-            # Return a minimal context indicating the error
-            return {
-                "current_task": kwargs.get("sub_task_description", "Unknown due to validation error"),
-                "data": {"error": f"Input validation error: {e}"},
-                "messages": [],
-                "metadata": {"source_tool": self.name, "timestamp": datetime.now(timezone.utc).isoformat()}
-            }
 
-        new_smart_context_data: Dict[str, Any] = {
-            "current_task": config.sub_task_description,
-            "data": {}, # For structured data like experiences, library components
-            "messages": [], # For summaries or important original messages
-            "metadata": {
-                "source_tool": self.name,
+    async def _run(
+        self, 
+        input: ContextBuilderInput, # Input is an instance of ContextBuilderInput
+        options: Optional[Dict[str, Any]] = None, 
+        context: Optional[RunContext] = None
+    ) -> BuiltContextData:
+        """
+        Constructs context data by querying memory and library.
+        """
+        built_data = BuiltContextData(
+            current_task_for_context=input.sub_task_description,
+            errors=[],
+            tool_metadata={
+                "tool_name": self.name,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "target_agent_id": config.target_agent_id,
-                "builder_config": config.model_dump(exclude_none=True)
+                "target_agent_id": input.target_agent_id,
+                "builder_config": input.model_dump(exclude_none=True)
             }
-        }
+        )
 
-        # 1. Retrieve Relevant Experiences
-        if config.include_relevant_experiences:
-            experience_task = (
-                f"Find experiences relevant to the task: '{config.sub_task_description}'. "
-                f"Return top {config.max_relevant_experiences} results. "
-                f"Include experience_id, sub_task_description, and output_summary for each."
+        # 1. Retrieve Relevant Experiences from Smart Memory
+        if input.include_relevant_experiences:
+            experience_task_desc = (
+                f"Find and return up to {input.max_relevant_experiences} experiences that are most semantically "
+                f"relevant to the following task: '{input.sub_task_description}'. For each relevant experience, "
+                "include its 'experience_id', 'primary_goal_description', 'sub_task_description', 'final_outcome', "
+                "and 'output_summary'."
             )
-            mma_response = await self._request_mma_capability(experience_task)
+            mma_exp_response = await self._request_mma_capability(experience_task_desc)
             
-            if mma_response:
-                # MemoryManagerAgent (ReAct) might return a list of dicts directly if its final answer is structured,
-                # or a string that needs parsing, or a dict containing the results.
-                # Assuming SemanticExperienceSearchTool (used by MMA) returns a list of dicts
-                # and MMA's ReAct prompt is set up to return this list as the final answer.
-                if isinstance(mma_response, list) and all(isinstance(item, dict) for item in mma_response):
-                    new_smart_context_data['data']['relevant_experiences_summary'] = mma_response
-                    logger.info(f"Added {len(mma_response)} relevant experiences to context.")
-                elif isinstance(mma_response, dict) and "final_answer" in mma_response and isinstance(mma_response["final_answer"], list): # Common ReAct pattern
-                    new_smart_context_data['data']['relevant_experiences_summary'] = mma_response["final_answer"]
-                    logger.info(f"Added {len(mma_response['final_answer'])} relevant experiences to context from MMA's final_answer.")
-                else:
-                    logger.warning(f"Unexpected format for relevant experiences from MMA: {type(mma_response)}. Response: {str(mma_response)[:500]}")
-                    new_smart_context_data['data']['relevant_experiences_error'] = f"Unexpected response format from MMA for experiences: {str(mma_response)[:200]}"
+            if isinstance(mma_exp_response, dict) and mma_exp_response.get("error"):
+                built_data.errors.append(f"Experience retrieval error: {mma_exp_response['error']}")
+            elif isinstance(mma_exp_response, list) and all(isinstance(item, dict) for item in mma_exp_response):
+                built_data.retrieved_experiences = mma_exp_response
+                logger.info(f"ContextBuilderTool: Added {len(mma_exp_response)} relevant experiences to context.")
+            elif isinstance(mma_exp_response, dict) and "final_answer" in mma_exp_response and isinstance(mma_exp_response["final_answer"], list):
+                built_data.retrieved_experiences = mma_exp_response["final_answer"]
+                logger.info(f"ContextBuilderTool: Added {len(mma_exp_response['final_answer'])} relevant experiences from MMA's final_answer.")
             else:
-                logger.warning("No response or error while retrieving relevant experiences from MMA.")
-                new_smart_context_data['data']['relevant_experiences_error'] = "Failed to retrieve experiences from MemoryManagerAgent."
+                msg = f"Unexpected format for relevant experiences from MMA: {str(mma_exp_response)[:200]}"
+                logger.warning(msg)
+                built_data.errors.append(msg)
 
-        # 2. Summarize Message History
-        if config.include_message_summary and config.current_messages:
-            messages_to_summarize = config.current_messages[-config.max_messages_to_summarize:]
+        # 2. Summarize Message History via Smart Memory
+        if input.include_message_summary and input.current_messages:
+            messages_to_summarize = input.current_messages[-input.max_messages_to_summarize:]
             if messages_to_summarize:
-                # Format messages for the prompt to MMA. JSON is less ambiguous than raw list of dicts in a string.
-                messages_json_string = json.dumps(messages_to_summarize)
+                messages_json_string = json.dumps(messages_to_summarize) # MMA expects string for ReAct processing
+                summary_task_desc = (
+                    f"Summarize the following message history (provided as a JSON string): {messages_json_string}. "
+                    f"The summary should focus on extracting key information, decisions, and context "
+                    f"relevant to the sub-task: '{input.sub_task_description}'. "
+                    f"Provide a concise textual summary."
+                )
+                mma_summary_response = await self._request_mma_capability(summary_task_desc)
+
+                summary_text = None
+                if isinstance(mma_summary_response, dict) and mma_summary_response.get("error"):
+                    built_data.errors.append(f"Message summary error: {mma_summary_response['error']}")
+                elif isinstance(mma_summary_response, str):
+                    summary_text = mma_summary_response
+                elif isinstance(mma_summary_response, dict) and "final_answer" in mma_summary_response and isinstance(mma_summary_response["final_answer"], str):
+                    summary_text = mma_summary_response["final_answer"]
                 
-                summary_task = (
-                    f"Summarize the following message history (JSON format): {messages_json_string}. "
-                    f"The summary should focus on information relevant to the goal: '{config.sub_task_description}'. "
-                    f"Provide a concise summary text."
-                )
-                mma_response = await self._request_mma_capability(summary_task)
-
-                if mma_response:
-                    # MemoryManagerAgent (ReAct) using MessageSummarizationTool should return a string summary.
-                    summary_text = None
-                    if isinstance(mma_response, str):
-                        summary_text = mma_response
-                    elif isinstance(mma_response, dict) and "final_answer" in mma_response and isinstance(mma_response["final_answer"], str):
-                        summary_text = mma_response["final_answer"]
-                    
-                    if summary_text and not summary_text.startswith("Error summarizing messages:") and not summary_text.startswith("Summary generation resulted in an empty response."):
-                        summary_message = {
-                            "sender_id": self.name, # Or "ContextBuilderTool"
-                            "content": {"summary": summary_text, "original_task_for_summary": config.sub_task_description},
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "type": "context_summary"
-                        }
-                        new_smart_context_data['messages'].append(summary_message)
-                        logger.info(f"Added message summary to context: {summary_text[:100]}...")
-                    else:
-                        logger.warning(f"Failed to get a valid summary from MMA. Response: {summary_text or mma_response}")
-                        new_smart_context_data['data']['message_summary_error'] = summary_text or f"Unexpected response from MMA for summary: {str(mma_response)[:200]}"
-                else:
-                    logger.warning("No response or error while requesting message summary from MMA.")
-                    new_smart_context_data['data']['message_summary_error'] = "Failed to get message summary from MemoryManagerAgent."
+                if summary_text and not summary_text.startswith("Error summarizing messages:"):
+                    built_data.message_history_summary = summary_text
+                    logger.info(f"ContextBuilderTool: Added message summary to context: {summary_text[:100]}...")
+                elif summary_text: # It was an error message from the summarizer tool itself
+                    msg = f"Failed to get a valid summary from MMA. MMA/Summarizer response: {summary_text}"
+                    logger.warning(msg)
+                    built_data.errors.append(msg)
+                else: # MMA response was not a string or expected dict structure
+                    msg = f"Unexpected response from MMA for summary: {str(mma_summary_response)[:200]}"
+                    logger.warning(msg)
+                    built_data.errors.append(msg)
         
-        # 3. Query SmartLibrary
-        if config.include_library_components:
+        # 3. Query SmartLibrary for relevant components
+        if input.include_library_components:
             try:
-                logger.debug(f"Querying SmartLibrary with: '{config.sub_task_description}'")
-                # Assuming limit is part of semantic_search args or a default. Let's use 5 as per prompt.
-                library_components = await self.smart_library.semantic_search(
-                    text_query=config.sub_task_description,
-                    limit=5
+                logger.debug(f"ContextBuilderTool: Querying SmartLibrary with task context: '{input.sub_task_description}'")
+                # SmartLibrary's semantic_search uses the sub_task_description as the task_context argument
+                # and also as the query if no more specific query is implied by the task.
+                library_results_tuples = await self.smart_library.semantic_search(
+                    query=input.sub_task_description, # Use sub-task as the primary query
+                    task_context=input.sub_task_description, # Also use as task context for T_raz search
+                    limit=input.library_search_limit,
+                    threshold=input.library_search_threshold
                 )
-                if library_components:
-                    # Store metadata: name, description, id (adapt to actual SmartLibraryItem structure)
-                    new_smart_context_data['data']['relevant_library_components'] = [
-                        {"id": comp.id, "name": comp.name, "description": comp.description, "score": comp.score} 
-                        for comp in library_components # Assuming SmartLibraryItem has these attrs
+                if library_results_tuples:
+                    built_data.relevant_library_components = [
+                        {
+                            "id": comp_dict["id"], 
+                            "name": comp_dict["name"], 
+                            "record_type": comp_dict["record_type"],
+                            "description": comp_dict["description"], 
+                            "final_score": final_score,
+                            "content_score": content_score,
+                            "task_score": task_score
+                        } 
+                        for comp_dict, final_score, content_score, task_score in library_results_tuples
                     ]
-                    logger.info(f"Added {len(library_components)} library components to context.")
+                    logger.info(f"ContextBuilderTool: Added {len(built_data.relevant_library_components)} library components to context.")
                 else:
-                    logger.info("No relevant library components found by SmartLibrary.")
-                    new_smart_context_data['data']['relevant_library_components'] = []
+                    logger.info("ContextBuilderTool: No relevant library components found by SmartLibrary.")
             except Exception as e:
-                logger.error(f"Error querying SmartLibrary: {e}", exc_info=True)
-                new_smart_context_data['data']['library_query_error'] = f"SmartLibrary query failed: {e}"
+                msg = f"ContextBuilderTool: Error querying SmartLibrary: {e}"
+                logger.error(msg, exc_info=True)
+                built_data.errors.append(msg)
         
-        return new_smart_context_data
+        if not built_data.errors: # If there were errors, errors list won't be None
+            built_data.errors = None
 
-# Example (Conceptual)
+        return built_data
+
+# Example (Conceptual - requires full EAT setup)
 # async def main_example():
-#     # ... (Requires extensive mocking of SmartAgentBus, MemoryManagerAgent, SmartLibrary) ...
-#     # class MockSmartAgentBus(SmartAgentBus): ...
-#     # class MockSmartLibrary(SmartLibrary): ...
-#     # class MockLLMService(LLMService): ...
-
-#     # mock_bus = MockSmartAgentBus(None)
-#     # mock_library = MockSmartLibrary(None, None, None) # type: ignore
-#     # mock_llm = MockLLMService()
-
-#     # context_tool = ContextBuilderTool(
-#     #     agent_bus=mock_bus,
-#     #     smart_library=mock_library,
-#     #     memory_manager_agent_id="mma_001",
-#     #     llm_service=mock_llm
+#     # ... (Setup container with LLMService, SmartLibrary, SmartAgentBus, MemoryManagerAgent) ...
+#     # Assume 'container' is fully initialized and MMA is registered on the bus.
+#     # context_builder_tool = ContextBuilderTool(
+#     #     agent_bus=container.get('agent_bus'),
+#     #     smart_library=container.get('smart_library'),
+#     #     memory_manager_agent_id=MEMORY_MANAGER_AGENT_ID, # Your MMA's registered ID
+#     #     llm_service=container.get('llm_service')
 #     # )
 
-#     # task_details = {
-#     #     "target_agent_id": "test_agent_007",
-#     #     "sub_task_description": "Develop a new feature for user authentication using OAuth2.",
-#     #     "current_messages": [
-#     #         {"sender_id": "manager", "content": "We need to prioritize OAuth2 for the login system."},
-#     #         {"sender_id": "developer", "content": "Okay, I'll start looking into suitable Python libraries."}
+#     # input_data_model = ContextBuilderInput(
+#     #     target_agent_id="SystemAgent",
+#     #     sub_task_description="Resolve a complex customer complaint about a faulty invoice calculation and unresponsive support.",
+#     #     current_messages=[
+#     #         {"sender": "customer", "content": "My invoice XYZ123 is wrong, the tax is incorrect!"},
+#     #         {"sender": "support_bot_v1", "content": "I understand you have an issue with invoice XYZ123. Can you specify the problem?"},
+#     #         {"sender": "customer", "content": "The subtotal is $100, tax is $10, but total says $120! And I couldn't reach anyone!"}
 #     #     ],
-#     #     "max_relevant_experiences": 2,
-#     #     "include_message_summary": True,
-#     #     "include_relevant_experiences": True,
-#     #     "include_library_components": True
-#     # }
-#     # built_context = await context_tool.run(**task_details)
-#     # print(json.dumps(built_context, indent=2))
+#     #     include_relevant_experiences=True,
+#     #     include_message_summary=True,
+#     #     include_library_components=True
+#     # )
+
+#     # built_context_result = await context_builder_tool._run(input=input_data_model)
+#     # print("\n--- Built Context Data ---")
+#     # print(built_context_result.model_dump_json(indent=2))
 #     pass
 
 # if __name__ == "__main__":
