@@ -28,6 +28,10 @@ from evolving_agents.tools.intent_review.workflow_design_review_tool import Work
 from evolving_agents.tools.intent_review.component_selection_review_tool import ComponentSelectionReviewTool
 from evolving_agents.tools.intent_review.approve_plan_tool import ApprovePlanTool
 
+# Memory and Context Tools
+from evolving_agents.tools.memory.experience_recorder_tool import ExperienceRecorderTool
+from evolving_agents.tools.context.context_builder_tool import ContextBuilderTool
+
 # Core Components
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.firmware.firmware import Firmware
@@ -38,6 +42,10 @@ from evolving_agents.core.base import IAgent # Ensure IAgent is imported
 from evolving_agents.core.mongodb_client import MongoDBClient # For passing to tools
 
 logger = logging.getLogger(__name__)
+
+# Placeholder for the MemoryManagerAgent's ID.
+# This will be updated when the MemoryManagerAgent is formally registered with the bus.
+MEMORY_MANAGER_AGENT_ID = "memory_manager_agent_default_id"
 
 class SystemAgentFactory:
     @staticmethod
@@ -135,11 +143,24 @@ class SystemAgentFactory:
         # **MODIFIED: Pass mongodb_client or container to ApprovePlanTool**
         approve_plan_tool = ApprovePlanTool(llm_service=resolved_llm_service, mongodb_client=resolved_mongodb_client, container=container)
 
+        # Memory and Context Tools
+        experience_recorder_tool = ExperienceRecorderTool(
+            agent_bus=resolved_agent_bus,
+            memory_manager_agent_id=MEMORY_MANAGER_AGENT_ID
+        )
+        context_builder_tool = ContextBuilderTool(
+            agent_bus=resolved_agent_bus,
+            smart_library=resolved_smart_library,
+            memory_manager_agent_id=MEMORY_MANAGER_AGENT_ID,
+            llm_service=resolved_llm_service
+        )
+
         tools = [
             contextual_search_tool, task_context_tool, search_tool, create_tool, evolve_tool,
             register_tool, request_tool, discover_tool,
             generate_workflow_tool, process_workflow_tool,
             workflow_design_review_tool, component_selection_review_tool, approve_plan_tool,
+            experience_recorder_tool, context_builder_tool, # Added new tools
         ]
         logger.debug(f"SystemAgentFactory: {len(tools)} tools instantiated.")
 
@@ -149,16 +170,22 @@ class SystemAgentFactory:
             description=(
                 "I am the System Agent, the central orchestrator for the agent ecosystem. "
                 "My primary purpose is to help you reuse, evolve, and create agents and tools "
-                "to solve your problems efficiently. I find the most relevant components by "
-                "deeply understanding the specific task context you're working in. "
+                "to solve your problems efficiently. I leverage a Smart Memory system to learn from "
+                "past experiences and build rich, task-relevant context. I find the most relevant "
+                "components by deeply understanding the specific task context you're working in, "
+                "often using the ContextBuilderTool to gather historical data and library components. "
+                "After significant tasks, I use the ExperienceRecorderTool to log outcomes for future learning. "
                 "I can also operate in a human-in-the-loop workflow where my plans are reviewed "
                 "before execution to ensure safety and appropriateness."
             ),
             extra_description=(
-                "When faced with a complex task, I might need to break it down. This could involve analyzing requirements, "
-                "identifying or creating necessary agents/tools via the SmartLibrary, coordinating their execution, "
-                "and potentially generating an internal plan if multiple steps are needed. "
-                "I use task context for relevant component discovery. My goal is to deliver the final result."
+                "When faced with a complex task, I first consider if similar tasks have been done before by using the "
+                "ContextBuilderTool to retrieve relevant experiences and summarize message histories. This tool also helps me "
+                "find suitable components from the SmartLibrary. This enriched context informs my planning, whether it's "
+                "designing a workflow, selecting components, or delegating to other agents. "
+                "After completing a significant workflow or achieving a key objective, I should remember to use the "
+                "ExperienceRecorderTool to save the process and outcome. This helps the entire system learn and improve. "
+                "My goal is to deliver the final result effectively and learn from each interaction."
             ),
             tools=tools
         )

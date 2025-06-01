@@ -230,6 +230,40 @@ After the demo runs:
 
 This project is licensed under the Apache License Version 2.0. See the [LICENSE](./LICENSE) file for details.
 
+---
+
+**🚀 Project Status & Smart Memory Integration Update! 🧠**
+
+We are excited to announce that the core **Smart Memory** architecture, a key feature for enhancing autonomous learning and contextual understanding in EAT, has been integrated into the main branch!
+
+*   **Core Smart Memory Components Integrated:**
+    *   The `MemoryManagerAgent` is now part of the toolkit, responsible for orchestrating memory operations.
+    *   Internal tools for `MemoryManagerAgent` (`MongoExperienceStoreTool`, `SemanticExperienceSearchTool`, `MessageSummarizationTool`) are implemented and use the MongoDB backend.
+    *   `SystemAgent` is now equipped with `ContextBuilderTool` and `ExperienceRecorderTool` to interact with the Smart Memory system via the `SmartAgentBus`.
+    *   The MongoDB schema for `eat_agent_experiences` is defined (`eat_agent_experiences_schema.md`) and the necessary Vector Search Index (`vector_index_experiences_default`) should be created as per `docs/MONGO-SETUP.md`.
+
+*   **Current Example Status:**
+    *   ✅ The comprehensive demo **`examples/invoice_processing/architect_zero_comprehensive_demo.py`** has been updated and successfully demonstrates the initialization of Smart Memory components and the `SystemAgent`'s new memory-related tools. While this demo doesn't yet deeply exercise the *full feedback loop* of Smart Memory influencing `SystemAgent`'s choices in complex ways, it verifies the integration.
+    *   ⏳ **Other Examples & Deeper Integration:**
+        *   The remaining examples in the `examples/` directory are **pending updates** to fully leverage and showcase the Smart Memory capabilities.
+        *   The `scripts/test_smart_memory.py` script is specifically designed for focused testing of the Smart Memory system and should be working with the MongoDB backend.
+        *   We are actively working on updating all examples and creating new ones that clearly demonstrate how Smart Memory:
+            *   Enhances `SystemAgent`'s problem-solving by providing rich historical context.
+            *   Informs and improves the component evolution process.
+
+*   **⚠️ Important Note for Users & Testers:**
+    *   While the core Smart Memory infrastructure is in place and integrated with MongoDB, the **full potential of this feature will be best realized as more examples are updated and as the `SystemAgent`'s ReAct logic becomes more sophisticated in its use of the memory tools.**
+    *   For now, when running examples other than `architect_zero_comprehensive_demo.py` or `scripts/test_smart_memory.py`, Smart Memory features might not be actively utilized or demonstrated.
+
+*   **Coming Soon:**
+    *   Updates to all example scripts to showcase various aspects of Smart Memory interaction.
+    *   More detailed demonstrations of how `SystemAgent` uses `ContextBuilderTool` for informed planning and `ExperienceRecorderTool` for learning.
+    *   Examples of how `EvolutionStrategistAgent` might leverage Smart Memory for more targeted evolution suggestions.
+
+We appreciate your patience as we roll out these powerful enhancements across the entire toolkit. The move to MongoDB and the integration of Smart Memory are significant steps towards achieving truly autonomous and self-improving AI agent systems with EAT. Please refer to `docs/ARCHITECTURE.md` for the updated system design including Smart Memory.
+
+---
+
 ## Acknowledgements
 
 *   Leverages concepts and the core ReAct agent from the [BeeAI Framework](https://github.com/i-am-bee/beeai-framework).
