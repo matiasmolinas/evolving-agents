@@ -427,17 +427,3 @@ Some demos create files in the project directory (e.g., `final_processing_output
 ## 7. Conclusion
 
 This tutorial outlined using the MongoDB Atlas CLI Local Deployment for your database needs while developing with EAT. This provides a powerful, Atlas-feature-rich local MongoDB environment, allowing you to run EAT scripts directly or via a simplified Docker Compose setup for the application.
-```
-
-**Key Changes and Rationale for these Updates:**
-
-*   **Central Focus on Atlas CLI Local Deployment:** Both documents now clearly state this as the recommended method for local development and testing, explicitly to avoid user-managed Docker for the database while still getting Atlas Search features.
-*   **`MONGO-SETUP.md` Streamlined:** It's now almost entirely dedicated to the Atlas CLI Local method, making it the primary instruction set for DB setup.
-*   **Main Tutorial (`EAT_EXAMPLES_TESTING_TUTORIAL.md`):**
-    *   It directs users to `MONGO-SETUP.md` for the Atlas CLI Local DB setup.
-    *   It then provides two options for running the EAT application:
-        *   **Option 3.A (Direct Python):** This is the simplest "no Docker for the app" path.
-        *   **Option 3.B (Docker for App Only):** For users who still want to containerize the EAT application, it explains how to modify `docker-compose.yml` to remove the `mongo` service and ensure the `app` service connects to the `localhost` where the Atlas CLI's MongoDB is running.
-*   **Consistency:** The vector index creation commands and troubleshooting tips are now more consistently referenced from `MONGO-SETUP.MD`.
-
-This approach provides a clear, focused path for developers wanting the full features locally with minimal direct Docker management for the database component.
