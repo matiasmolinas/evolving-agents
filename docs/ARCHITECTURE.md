@@ -52,12 +52,14 @@ graph TD
     ToolsSystem -- Records/Retrieves Experiences via Bus --> MMA
     MMA -- Manages --> SM
     SM -- Stores/Retrieves --> MongoDB
-    MMA -- Uses Internal Tools --> LLMS % For summarization, embedding (if not done by MongoExperienceStoreTool)
+    MMA -- Uses Internal Tools --> LLMS
+    %% For summarization, embedding (if not done by MongoExperienceStoreTool)
 
     %% SmartLibrary Interactions
     ToolsSystem -- Manages Components --> SL
     SL -- Stores/Retrieves --> MongoDB
-    SL -- Uses --> LLMS % For T_raz, embeddings
+    SL -- Uses --> LLMS 
+    %% For T_raz, embeddings
 
     %% AgentBus Interactions
     ToolsSystem -- Interacts via --> SB
@@ -71,7 +73,8 @@ graph TD
     SA -.->|Optional: Requests Evolution Insights| EvoS
     EvoS -- Analyzes --> SL
     EvoS -- Analyzes --> SM
-    EvoS -- Analyzes --> ComponentTracker["ComponentExperienceTracker\n(Metrics in AgentBus logs or dedicated store)"] % ComponentExperienceTracker data source
+    EvoS -- Analyzes --> ComponentTracker["ComponentExperienceTracker\n(Metrics in AgentBus logs or dedicated store)"]
+    %% ComponentExperienceTracker data source
 
     %% Other Dependencies
     AgentF -- Uses --> Providers["Providers\n(BeeAI, OpenAI, etc)"]
@@ -91,7 +94,7 @@ graph TD
     classDef tool fill:#ccf,stroke:#333,stroke-width:2px;
     classDef infra fill:#eee,stroke:#666,stroke-width:1px,color:#333;
     style SA fill:#69c,stroke:#000,stroke-width:3px,color:#fff;
-    style SM fill:#c9f,stroke:#333,stroke-width:2px; % Highlight Smart Memory
+    style SM fill:#c9f,stroke:#333,stroke-width:2px; %% Highlight Smart Memory
     style MMA fill:#9cf,stroke:#333,stroke-width:2px;
 ```
 *Diagram Key: `agent` = Core EAT Agent, `service` = Core EAT Service, `tool` = SystemAgent's Internal Tools, `infra` = Supporting Infrastructure. Smart Memory is highlighted as a key service.*
@@ -148,24 +151,63 @@ This is a critical addition for enabling advanced learning and autonomous evolut
 
 ### 2.4. Smart Library (MongoDB Backend)
 
-(Content largely the same, just re-numbering from original doc)
 Persistent storage and discovery for reusable components (agents, tools, firmware).
 *   **MongoDB Collection:** `eat_components`.
 *   **Stores:** Component documents with code, description, metadata, `content_embedding` (E_orig), and `applicability_embedding` (E_raz).
 *   **Discovery:** Uses MongoDB Atlas Vector Search for dual embedding strategy.
 *   **Interface & Indexing:** Methods like `create_record`, `semantic_search`, `evolve_record` interact with MongoDB. Embeddings (E_orig, E_raz) and applicability text (T_raz) are generated and stored.
 
-*(Mermaid diagram for SmartLibrary can remain as is)*
+```mermaid
+graph TD
+    SLI["SmartLibrary Interface"] -->|Manages| Records["Component Records (MongoDB Documents)\n(id, name, ..., content_embedding, applicability_embedding, metadata.applicability_text)"]
+    Records -- Stored in --> MongoDBLib["MongoDB (eat_components collection)"]:::infra
+    MongoDBLib -- Vector Indexes on --> VIdxContent["Content Embedding (E_orig)"]
+    MongoDBLib -- Vector Indexes on --> VIdxApp["Applicability Embedding (E_raz)"]
+
+    SLI -->|Uses| LLMSLib["LLM Service (Embeddings & T_raz Generation)"]
+
+    subgraph "Storage & Search (MongoDB)"
+        direction LR
+        Records -- CRUD Ops --> MongoDBLib
+        VIdxContent -- Used by --> SemanticSearch["SmartLibrary.semantic_search()\n(MongoDB $vectorSearch)"]
+        VIdxApp -- Used by --> SemanticSearch
+    end
+
+    LLMSLib -- Generates E_orig, E_raz --> Records
+    LLMSLib -- Generates T_raz --> Records[metadata.applicability_text]
+
+    classDef infra fill:#eee,stroke:#666,stroke-width:1px,color:#333;
+```
+*Diagram Note: `MongoDBLib` and `LLMSLib` are used to avoid name clashes with the main diagram's `MongoDB` and `LLMS` if rendered separately.*
 
 ### 2.5. Smart Agent Bus (MongoDB Backend)
 
-(Content largely the same, just re-numbering)
 Manages inter-agent communication and capability discovery.
 *   **Agent Registry (MongoDB Collection):** `eat_agent_registry`.
 *   **Execution Logs (MongoDB Collection):** `eat_agent_bus_logs`.
 *   **Role, Discovery, Resilience, Interface:** As described previously, interacts with MongoDB. `MemoryManagerAgent` is a key agent registered here.
 
-*(Mermaid diagram for SmartAgentBus can remain as is)*
+```mermaid
+graph TD
+    SABI["AgentBus Interface"] -->|Manages| Reg["Agent Registry (MongoDB 'eat_agent_registry')"]
+    SABI -->|Logs to| ExecLogs["Execution Logs (MongoDB 'eat_agent_bus_logs')"]
+    SABI -->|Uses for Discovery| LLMSBus["LLM Service (for embedding query if vector searching descriptions)"]
+    SABI -->|Monitors| CB["Circuit Breakers (File-based)"]
+
+    Reg -- Optional Vector Index on --> AgentDescEmbeds["Agent Description Embeddings"]
+    Reg -- Optional Vector Index on --> CapEmbeds["Capability Description Embeddings"]
+
+
+    subgraph "Data Bus Communication (request_capability)"
+        direction LR
+        Requester --> SABI
+        SABI -->|Finds Provider (Queries Reg)| Reg
+        SABI -->|Routes Request| Provider["Agent/Tool Instance"]
+        Provider -->|Returns Result| SABI
+        SABI -->|Returns Result| Requester
+    end
+```
+*Diagram Note: `LLMSBus` used for clarity. Discovery uses MongoDB queries (metadata or vector).*
 
 ### 2.6. Smart Context
 
@@ -190,17 +232,49 @@ Data structure for passing task-relevant information.
 ### 2.11. Firmware
 ### 2.12. Adapters
 ### 2.13. Intent Review System (MongoDB Backend)
-(These sections 2.8 - 2.13 remain largely the same as your previous version, just re-numbered)
+
+(Sections 2.8 - 2.13: Content remains conceptually the same as your provided version, ensure numbering is consistent if you re-integrate fully.)
 
 ## 3. Key Architectural Patterns & Flows
 
 ### 3.1. Agent Communication (via Agent Bus)
-(Remains the same)
+(Content remains the same)
 
 ### 3.2. Task-Aware Context Retrieval (Dual Embedding on MongoDB)
-(Remains the same, emphasizing that `task_context` for search is often now enriched by Smart Memory via `ContextBuilderTool`)
+(Content remains the same, but the `task_context` used for search is now often enriched by Smart Memory via `ContextBuilderTool` before `SmartLibrary.semantic_search` is called.)
 
-*(Sequence diagram for Task-Aware Context Retrieval can remain as is)*
+```mermaid
+sequenceDiagram
+    participant Agent as Requesting Agent (e.g., SystemAgent)
+    participant CtxBuilder as ContextBuilderTool
+    participant MMA as MemoryManagerAgent
+    participant SL as SmartLibrary (MongoDB backed)
+    participant MongoDB as MongoDB (eat_components, eat_agent_experiences)
+    participant LLM_Emb as Embedding Service
+
+    Agent->>Agent: Formulate Initial Task Query / Description
+    Agent->>CtxBuilder: BuildContext(Task Description)
+    CtxBuilder->>MMA: RequestRelevantExperiences(Task Description via Bus)
+    MMA->>MongoDB: SemanticSearch on 'eat_agent_experiences'
+    MongoDB-->>MMA: Past Relevant Experiences
+    MMA-->>CtxBuilder: Experiences
+    CtxBuilder->>SL: StandardSearchForComponents(Task Description)
+    SL->>MongoDB: SemanticSearch on 'eat_components'
+    MongoDB-->>SL: Relevant Library Components
+    SL-->>CtxBuilder: Library Components
+    CtxBuilder-->>Agent: Enriched SmartContext (contains experiences, components, original task)
+    
+    Note over Agent: Agent now has richer context for its next action.
+    Agent->>Agent: Refine Query & Task Context (using Enriched SmartContext)
+    Agent->>LLM_Emb: Embed Query (E_orig_query), Embed Task Context (E_raz_query)
+    LLM_Emb-->>Agent: Query Embeddings
+
+    Agent->>SL: semantic_search(Query, Task Context, ...)
+    SL->>MongoDB: $vectorSearch on 'applicability_embedding' with E_raz_query
+    MongoDB-->>SL: Top-K Candidate Component Documents
+    SL->>SL: Re-rank/Score (as before)
+    SL-->>Agent: Final Relevant Component Documents & Scores
+```
 
 ### 3.3. Agent Learning and Context Enrichment Flow (with Smart Memory)
 
@@ -219,12 +293,10 @@ This is a **central flow** enabled by the Smart Memory ecosystem:
     *   More targeted parameters for tool/agent execution.
 4.  **Task Execution:** `SystemAgent` orchestrates the execution of the planned steps.
 5.  **Experience Recording:** After a significant sub-task or the overall task is completed (or fails), `SystemAgent` uses `ExperienceRecorderTool`.
-    *   `ExperienceRecorderTool` structures the key details of the just-completed experience (goal, input summary, components used, decisions, output summary, outcome).
+    *   `ExperienceRecorderTool` structures the key details of the just-completed experience (goal, input summary, components used, decisions, output summary, outcome, reasoning snippets).
     *   It sends this structured experience to `MemoryManagerAgent` (via `SmartAgentBus`).
     *   `MemoryManagerAgent` uses `MongoExperienceStoreTool` to save the experience (including generating its embeddings) into the `eat_agent_experiences` collection in MongoDB.
 6.  **Learning Loop Closure:** The newly recorded experience is now available for future `ContextBuilderTool` queries, allowing the system to learn and improve over time.
-
-*(Consider adding a sequence diagram for this Smart Memory Learning Loop if desired)*
 
 ### 3.4. Informed Component Evolution
 
@@ -241,20 +313,55 @@ Smart Memory plays a vital role in making component evolution more targeted and 
 5.  **Future Use:** This new, contextually-evolved component is now available for future tasks and will be discoverable via `SmartLibrary` searches, further improving system performance.
 
 ### 3.5. Workflow Generation & Execution
-(Remains largely the same, but workflow generation can now be informed by context from Smart Memory if `SystemAgent` uses `ContextBuilderTool` before calling `GenerateWorkflowTool`)
+(Content remains largely the same, but workflow generation can now be informed by context from Smart Memory if `SystemAgent` uses `ContextBuilderTool` before calling `GenerateWorkflowTool`)
 
 ### 3.6. Dependency Injection & Initialization
-(Remains the same)
+(Content remains the same)
 
 ### 3.7. Intent Review / Human-in-the-Loop Flow (MongoDB Backend)
-(Remains the same)
+(Content remains the same)
 
-*(Sequence diagram for Intent Review can remain as is)*
+```mermaid
+sequenceDiagram
+    participant SysA as SystemAgent
+    participant PWT as ProcessWorkflowTool
+    participant MongoDBReview as MongoDB (eat_intent_plans)
+    participant Reviewer as IntentReviewAgent / Human
+    participant APT as ApprovePlanTool
+
+    Note over SysA: Task requires workflow
+    SysA->>PWT: ProcessWorkflow(workflowYAML, objective, ...)
+    Note over PWT: Intent Review Enabled
+    PWT->>PWT: Parse YAML, Substitute Params
+    PWT->>PWT: Validate Steps & Generate IntentPlan Object
+    PWT->>MongoDBReview: Save/Upsert IntentPlan Object (as document)
+    MongoDBReview-->>PWT: Confirm Save (e.g., plan_id)
+    PWT-->>SysA: Return plan_id (and status: intent_plan_created)
+
+    Note over SysA: Review Required for plan_id
+    SysA->>Reviewer: Request Intent Plan Review (Pass plan_id)
+    Reviewer->>APT: Use ApprovePlanTool (Input: plan_id)
+    APT->>MongoDBReview: Load IntentPlan document by plan_id
+    MongoDBReview-->>APT: Return IntentPlan document
+    Note over APT: Presents Plan to Reviewer
+    APT->>Reviewer: Get Approval/Rejection Decision & Comments
+    Reviewer-->>SysA: Return Decision (Approved/Rejected, comments)
+
+    alt Plan Approved
+        APT->>MongoDBReview: Update IntentPlan document status to APPROVED, add comments
+        SysA->>MongoDBReview: (Later) Load Approved Intents from Plan for execution
+        SysA-->>Caller: Final Result
+    else Plan Rejected
+        APT->>MongoDBReview: Update IntentPlan document status to REJECTED, add reason
+        SysA->>SysA: Halt Execution / Report Rejection
+        SysA-->>Caller: Report Rejection / Failure
+    end
+```
 
 ## 4. Multi-Framework Integration
-(Remains the same)
+(Content remains the same)
 
 ## 5. Governance and Safety
-(Remains the same, with Smart Memory adding to audit trails)
+(Content remains the same, with Smart Memory adding to audit trails for learning and decisions)
 
 This enhanced architecture, with Smart Memory at its core, provides a more powerful foundation for EAT to achieve its goal of building adaptive, learning, and autonomously evolving AI agent systems. The ability to learn from rich, contextualized past experiences allows the system to make more intelligent decisions about current tasks and future evolutions.
