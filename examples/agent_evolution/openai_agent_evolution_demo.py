@@ -418,23 +418,40 @@ async def cleanup_openai_demo_environment(container: DependencyContainer):
         "InvoiceProcessor_V1_Evolved_OpenAI_Demo" # Name used in demonstrate_system_agent_tools
     ]
 
-    if smart_library:
-        logger.info("Cleaning up demo components from SmartLibrary using smart_library.delete_records_by_query...")
+    if smart_library: # Ensure smart_library instance exists
+        logger.info("Cleaning up demo components from SmartLibrary...")
         total_components_deleted_count = 0
         for component_name in demo_component_names:
             try:
-                result = await smart_library.delete_records_by_query({"name": component_name})
-                if result and result.deleted_count > 0:
-                    logger.info(f"    Cleaned up {result.deleted_count} records with name '{component_name}' using SmartLibrary.")
-                    total_components_deleted_count += result.deleted_count
+                # Find all records matching the component name
+                matching_components = await smart_library.find_records(query={"name": component_name})
+
+                if matching_components:
+                    logger.info(f"    Found {len(matching_components)} component(s) with name '{component_name}' to delete.")
+                    for comp_dict in matching_components:
+                        comp_id = comp_dict.get("id")
+                        if comp_id:
+                            # Delete each record by its ID. Set permanent=True to ensure hard delete.
+                            delete_result = await smart_library.delete_record(record_id=comp_id, permanent=True)
+                            # Check if delete_result indicates success (deleted_count for hard delete, modified_count for soft delete)
+                            if delete_result and (getattr(delete_result, 'deleted_count', 0) > 0 or getattr(delete_result, 'modified_count', 0) > 0):
+                                logger.info(f"      Successfully deleted component ID: {comp_id} (Name: {component_name}).")
+                                total_components_deleted_count += 1
+                            else:
+                                logger.warning(f"      Attempted to delete component ID: {comp_id} (Name: {component_name}), but delete operation reported no change or failed.")
+                        else:
+                            logger.warning(f"    Found component with name '{component_name}' but it's missing an 'id'. Skipping deletion of this specific entry.")
                 else:
-                    logger.info(f"    No records found or deleted for component name '{component_name}' using SmartLibrary.")
+                    logger.info(f"    No components found with name '{component_name}'.")
             except Exception as e:
-                logger.error(f"  Error deleting component '{component_name}' using SmartLibrary: {e}")
+                # Log the full traceback for the exception e
+                import traceback
+                logger.error(f"  Error processing component '{component_name}' for deletion: {e}\nTraceback: {traceback.format_exc()}")
+
         if total_components_deleted_count > 0:
-            logger.info(f"  Total demo components deleted via SmartLibrary: {total_components_deleted_count}")
+            logger.info(f"  Total demo components deleted: {total_components_deleted_count}")
     else:
-        logger.warning("SmartLibrary not available for component cleanup.")
+        logger.warning("SmartLibrary not available, skipping demo component cleanup.")
 
     # Cleanup experiences from MongoDB
     # Using hardcoded "eat_agent_experiences" as MongoExperienceStoreTool.DEFAULT_COLLECTION_NAME
@@ -490,12 +507,18 @@ async def main():
         llm_service = LLMService(
             provider=eat_config.LLM_PROVIDER,
             model=eat_config.LLM_MODEL,
-            embedding_model=eat_config.LLM_EMBEDDING_MODEL,
+            embedding_model="text-embedding-ada-002", # Explicitly set for this demo
             use_cache=eat_config.LLM_USE_CACHE,
-            container=container  # Pass container for MongoDB cache
+            container=container
         )
         container.register('llm_service', llm_service)
-        print("✓ LLMService initialized.")
+        # Update the log message to reflect the override
+        logger.info(
+            f"LLMService initialized with provider: {eat_config.LLM_PROVIDER}, "
+            f"model: {eat_config.LLM_MODEL}, "
+            f"EMBEDDING MODEL OVERRIDDEN TO: 'text-embedding-ada-002', " # Clearly indicate the override
+            f"cache enabled: {eat_config.LLM_USE_CACHE}"
+        )
 
         # Initialize SmartLibrary AFTER MongoDBClient and LLMService
         library = SmartLibrary(container=container)
