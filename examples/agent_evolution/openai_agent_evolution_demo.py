@@ -418,7 +418,7 @@ async def cleanup_openai_demo_environment(container: DependencyContainer):
         "InvoiceProcessor_V1_Evolved_OpenAI_Demo" # Name used in demonstrate_system_agent_tools
     ]
 
-    if smart_library and hasattr(smart_library, 'components_collection') and smart_library.components_collection:
+    if smart_library and hasattr(smart_library, 'components_collection') and smart_library.components_collection is not None:
         logger.info("Cleaning up demo components from SmartLibrary...")
         for component_name in demo_component_names:
             try:
