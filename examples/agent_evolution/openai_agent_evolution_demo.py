@@ -424,7 +424,7 @@ async def cleanup_openai_demo_environment(container: DependencyContainer):
         for component_name in demo_component_names:
             try:
                 # Find all records matching the component name
-                matching_components = await smart_library.find_records(query={"name": component_name})
+                matching_components = await smart_library.get_records_by_query(query={"name": component_name})
 
                 if matching_components:
                     logger.info(f"    Found {len(matching_components)} component(s) with name '{component_name}' to delete.")
