@@ -468,8 +468,8 @@ async def main():
         
         container = DependencyContainer()
         
-        # Initialize MongoDB Client first as it's needed for cleanup
-        mongo_client = None
+        # Initialize MongoDB Client first as it's a foundational service
+        mongo_client = None # Define mongo_client here to ensure it's in scope for the finally block of cleanup
         try:
             mongo_uri = os.getenv("MONGODB_URI", eat_config.MONGODB_URI)
             mongo_db_name = os.getenv("MONGODB_DATABASE_NAME", eat_config.MONGODB_DATABASE_NAME)
@@ -481,28 +481,46 @@ async def main():
             mongo_uri_log = os.getenv("MONGODB_URI", "Not Set") 
             mongo_db_name_log = os.getenv("MONGODB_DATABASE_NAME", "Not Set")
             logger.error(f"CRITICAL: MongoDBClient failed: {e}. URI: {mongo_uri_log}, DB: {mongo_db_name_log}")
-            # Attempt cleanup even if MongoDB connection fails, as local files might need cleaning.
-            # mongo_client will be None, and cleanup_openai_demo_environment handles this.
+            # Attempt to run cleanup even if mongo client failed, for local files.
+            # The cleanup function itself should handle mongo_client being None.
+            await cleanup_openai_demo_environment(container)
+            return # Exit if MongoDB connection fails as it's critical
 
-        await cleanup_openai_demo_environment(container) # Call cleanup function
-
-        # If MongoDB failed above and is critical for the rest of the demo, exit.
-        if not mongo_client:
-            logger.error("Exiting demo due to MongoDB initialization failure.")
-            return
-
-        llm_service = LLMService(provider=eat_config.LLM_PROVIDER, model=eat_config.LLM_MODEL,
-                                 embedding_model=eat_config.LLM_EMBEDDING_MODEL, use_cache=eat_config.LLM_USE_CACHE, 
-                                 container=container) 
+        # Initialize LLMService
+        llm_service = LLMService(
+            provider=eat_config.LLM_PROVIDER,
+            model=eat_config.LLM_MODEL,
+            embedding_model=eat_config.LLM_EMBEDDING_MODEL,
+            use_cache=eat_config.LLM_USE_CACHE,
+            container=container  # Pass container for MongoDB cache
+        )
         container.register('llm_service', llm_service)
+        print("✓ LLMService initialized.")
+
+        # Initialize SmartLibrary AFTER MongoDBClient and LLMService
+        library = SmartLibrary(container=container)
+        container.register('smart_library', library)
+        print("✓ SmartLibrary initialized and registered.")
+
+        # Now call cleanup_openai_demo_environment as SmartLibrary and other core services are available
+        await cleanup_openai_demo_environment(container)
+
+        # If MongoDB failed during the initial try-except and we proceeded to cleanup,
+        # mongo_client might be None. We should have exited already if it was critical.
+        # This is an additional check, though the one above should catch it.
+        if not container.get('mongodb_client'):
+             logger.error("MongoDB client not available after cleanup. Exiting demo.")
+             return
 
         # Instantiate Memory Management Tools
-        experience_store_tool = MongoExperienceStoreTool(mongodb_client=mongo_client, llm_service=llm_service)
+        print("  → Initializing Internal Tools for MemoryManagerAgent...")
+        experience_store_tool = MongoExperienceStoreTool(mongodb_client=mongo_client, llm_service=llm_service) # mongo_client is from the outer scope
         semantic_search_tool = SemanticExperienceSearchTool(mongodb_client=mongo_client, llm_service=llm_service)
         message_summarization_tool = MessageSummarizationTool(llm_service=llm_service)
-        print("✓ Memory Management Tools (MongoExperienceStore, SemanticExperienceSearch, MessageSummarization) initialized.")
+        print("✓ Internal Tools for MemoryManagerAgent initialized.") # Adjusted print message
 
         # Instantiate MemoryManagerAgent
+        print("  → Initializing MemoryManagerAgent...")
         memory_manager_agent_memory = TokenMemory(llm_service.chat_model)
         memory_manager_agent = MemoryManagerAgent(
             llm_service=llm_service,
@@ -512,28 +530,17 @@ async def main():
             memory_override=memory_manager_agent_memory
         )
         container.register('memory_manager_agent_instance', memory_manager_agent)
-        print("✓ MemoryManagerAgent initialized and registered in container.")
-        
-        library = SmartLibrary(container=container)
-        container.register('smart_library', library)
-        await setup_evolution_demo_library(library) 
+        print("✓ MemoryManagerAgent initialized and registered in container.") # Adjusted print message
 
+        # Firmware, AgentBus, etc.
         firmware = Firmware(); container.register('firmware', firmware)
-        agent_bus = SmartAgentBus(container=container); container.register('agent_bus', agent_bus)
-        
-        provider_registry = ProviderRegistry()
-        provider_registry.register_provider(OpenAIAgentsProvider(llm_service)) 
-        provider_registry.register_provider(BeeAIProvider(llm_service)) 
-        container.register('provider_registry', provider_registry)
-        
-        agent_factory = AgentFactory(library, llm_service, provider_registry)
-        container.register('agent_factory', agent_factory)
-        
-        print("\nInitializing System Agent...")
-        system_agent = await SystemAgentFactory.create_agent(container=container)
-        container.register('system_agent', system_agent)
+        print("✓ Firmware initialized.")
 
+        agent_bus = SmartAgentBus(container=container); container.register('agent_bus', agent_bus)
+        print("✓ SmartAgentBus initialized.")
+        
         # Register MemoryManagerAgent with SmartAgentBus
+        print("  → Registering MemoryManagerAgent with SmartAgentBus...")
         MEMORY_MANAGER_AGENT_ID = "memory_manager_agent_openai_evolution_demo"
         await agent_bus.register_agent(
             agent_id=MEMORY_MANAGER_AGENT_ID,
@@ -548,10 +555,31 @@ async def main():
             agent_instance=memory_manager_agent,
             embed_capabilities=True
         )
-        print(f"✓ MemoryManagerAgent registered with SmartAgentBus under ID: {MEMORY_MANAGER_AGENT_ID}")
+        print(f"✓ MemoryManagerAgent registered with SmartAgentBus under ID: {MEMORY_MANAGER_AGENT_ID}") # Adjusted print
+
+        # ProviderRegistry, AgentFactory
+        provider_registry = ProviderRegistry()
+        provider_registry.register_provider(OpenAIAgentsProvider(llm_service))
+        provider_registry.register_provider(BeeAIProvider(llm_service))
+        container.register('provider_registry', provider_registry)
+        print("✓ ProviderRegistry initialized and providers registered.")
+
+        agent_factory = AgentFactory(library, llm_service, provider_registry) # library is already initialized
+        container.register('agent_factory', agent_factory)
+        print("✓ AgentFactory initialized.")
         
+        print("\nInitializing System Agent...")
+        system_agent = await SystemAgentFactory.create_agent(container=container)
+        container.register('system_agent', system_agent)
+        print("✓ SystemAgent initialized.")
+
+        # Call setup_evolution_demo_library AFTER SmartLibrary is initialized and cleanup has run
+        await setup_evolution_demo_library(library)
+
+        # Initialize library and agent bus from library (late initializations)
         await library.initialize() 
         await agent_bus.initialize_from_library() 
+        print("✓ SmartLibrary and SmartAgentBus late initializations complete.")
         
         initial_agent_record = await library.find_record_by_name("InvoiceProcessor_V1", "AGENT")
         initial_agent_id = initial_agent_record["id"] if initial_agent_record else None
