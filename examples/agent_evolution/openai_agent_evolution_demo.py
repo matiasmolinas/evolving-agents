@@ -418,40 +418,28 @@ async def cleanup_openai_demo_environment(container: DependencyContainer):
         "InvoiceProcessor_V1_Evolved_OpenAI_Demo" # Name used in demonstrate_system_agent_tools
     ]
 
-    if smart_library: # Ensure smart_library instance exists
-        logger.info("Cleaning up demo components from SmartLibrary...")
-        total_components_deleted_count = 0
+    # Component cleanup using direct collection access, similar to setup_evolution_demo_library
+    if smart_library and smart_library.components_collection is not None:
+        logger.info("Cleaning up demo components from SmartLibrary using direct collection access...")
+        total_components_deleted_this_run = 0
         for component_name in demo_component_names:
             try:
-                # Find all records matching the component name
-                matching_components = await smart_library.get_records_by_query(query={"name": component_name})
-
-                if matching_components:
-                    logger.info(f"    Found {len(matching_components)} component(s) with name '{component_name}' to delete.")
-                    for comp_dict in matching_components:
-                        comp_id = comp_dict.get("id")
-                        if comp_id:
-                            # Delete each record by its ID. Set permanent=True to ensure hard delete.
-                            delete_result = await smart_library.delete_record(record_id=comp_id, permanent=True)
-                            # Check if delete_result indicates success (deleted_count for hard delete, modified_count for soft delete)
-                            if delete_result and (getattr(delete_result, 'deleted_count', 0) > 0 or getattr(delete_result, 'modified_count', 0) > 0):
-                                logger.info(f"      Successfully deleted component ID: {comp_id} (Name: {component_name}).")
-                                total_components_deleted_count += 1
-                            else:
-                                logger.warning(f"      Attempted to delete component ID: {comp_id} (Name: {component_name}), but delete operation reported no change or failed.")
-                        else:
-                            logger.warning(f"    Found component with name '{component_name}' but it's missing an 'id'. Skipping deletion of this specific entry.")
+                # Directly use the components_collection for deletion
+                result = await smart_library.components_collection.delete_many({"name": component_name})
+                if result.deleted_count > 0:
+                    logger.info(f"    Cleaned up {result.deleted_count} records with name '{component_name}'.")
+                    total_components_deleted_this_run += result.deleted_count
                 else:
-                    logger.info(f"    No components found with name '{component_name}'.")
+                    # This case means no records matched the name.
+                    logger.info(f"    No records found with name '{component_name}' to delete via direct collection access.")
             except Exception as e:
-                # Log the full traceback for the exception e
                 import traceback
-                logger.error(f"  Error processing component '{component_name}' for deletion: {e}\nTraceback: {traceback.format_exc()}")
+                logger.error(f"  Error deleting component '{component_name}' via direct collection access: {e}\nTraceback: {traceback.format_exc()}")
 
-        if total_components_deleted_count > 0:
-            logger.info(f"  Total demo components deleted: {total_components_deleted_count}")
+        if total_components_deleted_this_run > 0:
+            logger.info(f"  Total demo components deleted via direct collection access: {total_components_deleted_this_run}")
     else:
-        logger.warning("SmartLibrary not available, skipping demo component cleanup.")
+        logger.warning("SmartLibrary or its components_collection not available, skipping demo component cleanup by name.")
 
     # Cleanup experiences from MongoDB
     # Using hardcoded "eat_agent_experiences" as MongoExperienceStoreTool.DEFAULT_COLLECTION_NAME
