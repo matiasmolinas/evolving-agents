@@ -418,29 +418,29 @@ async def cleanup_openai_demo_environment(container: DependencyContainer):
         "InvoiceProcessor_V1_Evolved_OpenAI_Demo" # Name used in demonstrate_system_agent_tools
     ]
 
-    if smart_library and hasattr(smart_library, 'components_collection') and smart_library.components_collection is not None:
-        logger.info("Cleaning up demo components from SmartLibrary...")
+    if smart_library:
+        logger.info("Cleaning up demo components from SmartLibrary using smart_library.delete_records_by_query...")
+        total_components_deleted_count = 0
         for component_name in demo_component_names:
             try:
-                # Ensure mongo_client is available for the library to use, if it's not pre-initialized in SmartLibrary
-                if not smart_library.db_client and mongo_client:
-                    await smart_library.set_db_client(mongo_client)
-
-                if smart_library.components_collection: # Re-check after potential db client set
-                    delete_result = await smart_library.components_collection.delete_many({"name": component_name})
-                    logger.info(f"  Deleted {delete_result.deleted_count} components named '{component_name}'.")
+                result = await smart_library.delete_records_by_query({"name": component_name})
+                if result and result.deleted_count > 0:
+                    logger.info(f"    Cleaned up {result.deleted_count} records with name '{component_name}' using SmartLibrary.")
+                    total_components_deleted_count += result.deleted_count
                 else:
-                    logger.warning(f"  SmartLibrary components_collection not available for '{component_name}'.")
+                    logger.info(f"    No records found or deleted for component name '{component_name}' using SmartLibrary.")
             except Exception as e:
-                logger.error(f"  Error deleting component '{component_name}': {e}")
+                logger.error(f"  Error deleting component '{component_name}' using SmartLibrary: {e}")
+        if total_components_deleted_count > 0:
+            logger.info(f"  Total demo components deleted via SmartLibrary: {total_components_deleted_count}")
     else:
-        logger.warning("SmartLibrary or components_collection not available for component cleanup.")
+        logger.warning("SmartLibrary not available for component cleanup.")
 
     # Cleanup experiences from MongoDB
     # Using hardcoded "eat_agent_experiences" as MongoExperienceStoreTool.DEFAULT_COLLECTION_NAME
     # might not be readily available here without extra imports or setup.
     experiences_collection_name = "eat_agent_experiences"
-    if mongo_client and mongo_client.db:
+    if mongo_client and mongo_client.db is not None: # Corrected check
         try:
             experiences_collection = mongo_client.db[experiences_collection_name]
             delete_result = await experiences_collection.delete_many({})
