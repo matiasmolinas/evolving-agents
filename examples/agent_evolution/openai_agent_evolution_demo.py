@@ -26,7 +26,13 @@ from evolving_agents.core.dependency_container import DependencyContainer
 from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.core.mongodb_client import MongoDBClient
 from evolving_agents import config as eat_config
-from evolving_agents.utils.json_utils import safe_json_dumps 
+from evolving_agents.utils.json_utils import safe_json_dumps
+# Evolving Agents Imports
+from evolving_agents.agents.memory_manager_agent import MemoryManagerAgent
+from evolving_agents.tools.internal.mongo_experience_store_tool import MongoExperienceStoreTool
+from evolving_agents.tools.internal.semantic_experience_search_tool import SemanticExperienceSearchTool
+from evolving_agents.tools.internal.message_summarization_tool import MessageSummarizationTool
+from beeai_framework.memory import TokenMemory
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -398,50 +404,68 @@ async def setup_evolution_demo_library(library: SmartLibrary):
     print(f"\nLibrary setup complete for OpenAI demo.")
 
 
-class AgentExperienceTracker:
-    def __init__(self, storage_path="openai_agent_experiences.json"): 
-        self.storage_path = storage_path
-        self.experiences: Dict[str, Dict[str, Any]] = {}
-        self._load_experiences()
-    
-    def _load_experiences(self):
-        try:
-            if os.path.exists(self.storage_path):
-                with open(self.storage_path, 'r') as f: self.experiences = json.load(f)
-        except Exception: self.experiences = {}
+async def cleanup_openai_demo_environment(container: DependencyContainer):
+    logger.info("Starting OpenAI demo environment cleanup...")
+    smart_library: Optional[SmartLibrary] = container.get('smart_library')
+    mongo_client: Optional[MongoDBClient] = container.get('mongodb_client')
 
-    def _save_experiences(self):
-        try:
-            with open(self.storage_path, 'w') as f: json.dump(self.experiences, f, indent=2)
-        except Exception as e: logger.error(f"Error saving experiences: {e}")
+    demo_component_names = [
+        "AdvancedInvoiceExtractor_OpenAI_Demo",
+        "InvoiceProcessor_V2_OpenAI_Demo", # Evolved from InvoiceProcessor_V1
+        "MedicalRecordProcessor_OpenAI_Demo", # Adapted from InvoiceProcessor_V*
+        "DemoInvoiceProcessorTool_OpenAI_TextDemo",
+        "FallbackInvoiceAgent_OpenAI_Demo",
+        "InvoiceProcessor_V1_Evolved_OpenAI_Demo" # Name used in demonstrate_system_agent_tools
+    ]
 
-    def record_invocation(self, agent_id: Optional[str], agent_name: str, domain: str, input_text: str, success: bool, response_time: float):
-        if not agent_id: logger.warning(f"Cannot record invocation for agent '{agent_name}' without an ID."); return
-        if agent_id not in self.experiences:
-            self.experiences[agent_id] = {"name": agent_name, "total_invocations": 0, "successful_invocations": 0, "domains": {}, "inputs": [], "evolutions": []}
-        exp = self.experiences[agent_id]
-        exp["total_invocations"] += 1
-        if success: exp["successful_invocations"] += 1
-        if domain not in exp["domains"]: exp["domains"][domain] = {"count": 0, "success": 0}
-        exp["domains"][domain]["count"] += 1
-        if success: exp["domains"][domain]["success"] += 1
-        exp["inputs"].append({"text": input_text[:100]+"...", "success": success, "time": response_time, "timestamp": time.time()})
-        exp["inputs"] = exp["inputs"][-10:]
-        self._save_experiences()
-    
-    def record_evolution(self, agent_id: Optional[str], new_agent_id: Optional[str], evolution_type: str, changes: Dict[str, Any]):
-        if not agent_id or not new_agent_id: logger.warning(f"Cannot record evolution without original and new agent IDs. Orig: {agent_id}, New: {new_agent_id}"); return
-        if agent_id not in self.experiences: 
-             self.experiences[agent_id] = {"name": f"Original_of_{new_agent_id}", "total_invocations": 0, "successful_invocations": 0, "domains": {}, "inputs": [], "evolutions": []}
-        elif "evolutions" not in self.experiences[agent_id]: 
-            self.experiences[agent_id]["evolutions"] = []
+    # Component cleanup using direct collection access, similar to setup_evolution_demo_library
+    if smart_library and smart_library.components_collection is not None:
+        logger.info("Cleaning up demo components from SmartLibrary using direct collection access...")
+        total_components_deleted_this_run = 0
+        for component_name in demo_component_names:
+            try:
+                # Directly use the components_collection for deletion
+                result = await smart_library.components_collection.delete_many({"name": component_name})
+                if result.deleted_count > 0:
+                    logger.info(f"    Cleaned up {result.deleted_count} records with name '{component_name}'.")
+                    total_components_deleted_this_run += result.deleted_count
+                else:
+                    # This case means no records matched the name.
+                    logger.info(f"    No records found with name '{component_name}' to delete via direct collection access.")
+            except Exception as e:
+                import traceback
+                logger.error(f"  Error deleting component '{component_name}' via direct collection access: {e}\nTraceback: {traceback.format_exc()}")
+
+        if total_components_deleted_this_run > 0:
+            logger.info(f"  Total demo components deleted via direct collection access: {total_components_deleted_this_run}")
+    else:
+        logger.warning("SmartLibrary or its components_collection not available, skipping demo component cleanup by name.")
+
+    # Cleanup experiences from MongoDB
+    # Using hardcoded "eat_agent_experiences" as MongoExperienceStoreTool.DEFAULT_COLLECTION_NAME
+    # might not be readily available here without extra imports or setup.
+    experiences_collection_name = "eat_agent_experiences"
+    if mongo_client and mongo_client.db is not None: # Corrected check
+        try:
+            experiences_collection = mongo_client.db[experiences_collection_name]
+            delete_result = await experiences_collection.delete_many({})
+            logger.info(f"Deleted {delete_result.deleted_count} documents from '{experiences_collection_name}' collection.")
+        except Exception as e:
+            logger.error(f"Error cleaning up '{experiences_collection_name}' collection: {e}")
+    else:
+        logger.warning(f"MongoDB client or database not available for '{experiences_collection_name}' cleanup.")
+
+    # Remove old local tracker file if it exists
+    tracker_path = "openai_agent_experiences.json"
+    if os.path.exists(tracker_path):
+        try:
+            os.remove(tracker_path)
+            logger.info(f"Removed old local tracker file: {tracker_path}")
+        except Exception as e:
+            logger.error(f"Error removing local tracker file '{tracker_path}': {e}")
             
-        self.experiences[agent_id]["evolutions"].append({"new_agent_id": new_agent_id, "evolution_type": evolution_type, "changes": changes, "timestamp": time.time()})
-        self._save_experiences()
-    
-    def get_agent_experience(self, agent_id: Optional[str]) -> Dict[str, Any]:
-        if not agent_id: return {}
-        return self.experiences.get(agent_id, {})
+    logger.info("OpenAI demo environment cleanup complete.")
+
 
 async def main():
     try:
@@ -449,6 +473,8 @@ async def main():
         
         container = DependencyContainer()
         
+        # Initialize MongoDB Client first as it's a foundational service
+        mongo_client = None # Define mongo_client here to ensure it's in scope for the finally block of cleanup
         try:
             mongo_uri = os.getenv("MONGODB_URI", eat_config.MONGODB_URI)
             mongo_db_name = os.getenv("MONGODB_DATABASE_NAME", eat_config.MONGODB_DATABASE_NAME)
@@ -460,36 +486,111 @@ async def main():
             mongo_uri_log = os.getenv("MONGODB_URI", "Not Set") 
             mongo_db_name_log = os.getenv("MONGODB_DATABASE_NAME", "Not Set")
             logger.error(f"CRITICAL: MongoDBClient failed: {e}. URI: {mongo_uri_log}, DB: {mongo_db_name_log}")
-            return
+            # Attempt to run cleanup even if mongo client failed, for local files.
+            # The cleanup function itself should handle mongo_client being None.
+            await cleanup_openai_demo_environment(container)
+            return # Exit if MongoDB connection fails as it's critical
 
-        llm_service = LLMService(provider=eat_config.LLM_PROVIDER, model=eat_config.LLM_MODEL,
-                                 embedding_model=eat_config.LLM_EMBEDDING_MODEL, use_cache=eat_config.LLM_USE_CACHE, 
-                                 container=container) 
+        # Initialize LLMService
+        llm_service = LLMService(
+            provider=eat_config.LLM_PROVIDER,
+            model=eat_config.LLM_MODEL,
+            embedding_model="text-embedding-ada-002", # Explicitly set for this demo
+            use_cache=eat_config.LLM_USE_CACHE,
+            container=container
+        )
         container.register('llm_service', llm_service)
-        
+        # Update the log message to reflect the override
+        logger.info(
+            f"LLMService initialized with provider: {eat_config.LLM_PROVIDER}, "
+            f"model: {eat_config.LLM_MODEL}, "
+            f"EMBEDDING MODEL OVERRIDDEN TO: 'text-embedding-ada-002', " # Clearly indicate the override
+            f"cache enabled: {eat_config.LLM_USE_CACHE}"
+        )
+
+        # Initialize SmartLibrary AFTER MongoDBClient and LLMService
         library = SmartLibrary(container=container)
         container.register('smart_library', library)
-        await setup_evolution_demo_library(library) 
+        print("✓ SmartLibrary initialized and registered.")
 
+        # Now call cleanup_openai_demo_environment as SmartLibrary and other core services are available
+        await cleanup_openai_demo_environment(container)
+
+        # If MongoDB failed during the initial try-except and we proceeded to cleanup,
+        # mongo_client might be None. We should have exited already if it was critical.
+        # This is an additional check, though the one above should catch it.
+        if not container.get('mongodb_client'):
+             logger.error("MongoDB client not available after cleanup. Exiting demo.")
+             return
+
+        # Instantiate Memory Management Tools
+        print("  → Initializing Internal Tools for MemoryManagerAgent...")
+        experience_store_tool = MongoExperienceStoreTool(mongodb_client=mongo_client, llm_service=llm_service) # mongo_client is from the outer scope
+        semantic_search_tool = SemanticExperienceSearchTool(mongodb_client=mongo_client, llm_service=llm_service)
+        message_summarization_tool = MessageSummarizationTool(llm_service=llm_service)
+        print("✓ Internal Tools for MemoryManagerAgent initialized.") # Adjusted print message
+
+        # Instantiate MemoryManagerAgent
+        print("  → Initializing MemoryManagerAgent...")
+        memory_manager_agent_memory = TokenMemory(llm_service.chat_model)
+        memory_manager_agent = MemoryManagerAgent(
+            llm_service=llm_service,
+            mongo_experience_store_tool=experience_store_tool,
+            semantic_search_tool=semantic_search_tool,
+            message_summarization_tool=message_summarization_tool,
+            memory_override=memory_manager_agent_memory
+        )
+        container.register('memory_manager_agent_instance', memory_manager_agent)
+        print("✓ MemoryManagerAgent initialized and registered in container.") # Adjusted print message
+
+        # Firmware, AgentBus, etc.
         firmware = Firmware(); container.register('firmware', firmware)
+        print("✓ Firmware initialized.")
+
         agent_bus = SmartAgentBus(container=container); container.register('agent_bus', agent_bus)
+        print("✓ SmartAgentBus initialized.")
         
+        # Register MemoryManagerAgent with SmartAgentBus
+        print("  → Registering MemoryManagerAgent with SmartAgentBus...")
+        MEMORY_MANAGER_AGENT_ID = "memory_manager_agent_openai_evolution_demo"
+        await agent_bus.register_agent(
+            agent_id=MEMORY_MANAGER_AGENT_ID,
+            name="MemoryManagerAgent",
+            description="Manages agent experiences using MongoDB for storage, retrieval, and summarization of interactions.",
+            agent_type="MemoryManagement",
+            capabilities=[{
+                "id": "process_task",
+                "name": "Process Memory Task",
+                "description": "Handles storage, retrieval, and summarization of agent experiences."
+            }],
+            agent_instance=memory_manager_agent,
+            embed_capabilities=True
+        )
+        print(f"✓ MemoryManagerAgent registered with SmartAgentBus under ID: {MEMORY_MANAGER_AGENT_ID}") # Adjusted print
+
+        # ProviderRegistry, AgentFactory
         provider_registry = ProviderRegistry()
-        provider_registry.register_provider(OpenAIAgentsProvider(llm_service)) 
-        provider_registry.register_provider(BeeAIProvider(llm_service)) 
+        provider_registry.register_provider(OpenAIAgentsProvider(llm_service))
+        provider_registry.register_provider(BeeAIProvider(llm_service))
         container.register('provider_registry', provider_registry)
-        
-        agent_factory = AgentFactory(library, llm_service, provider_registry)
+        print("✓ ProviderRegistry initialized and providers registered.")
+
+        agent_factory = AgentFactory(library, llm_service, provider_registry) # library is already initialized
         container.register('agent_factory', agent_factory)
+        print("✓ AgentFactory initialized.")
         
         print("\nInitializing System Agent...")
         system_agent = await SystemAgentFactory.create_agent(container=container)
         container.register('system_agent', system_agent)
-        
+        print("✓ SystemAgent initialized.")
+
+        # Call setup_evolution_demo_library AFTER SmartLibrary is initialized and cleanup has run
+        await setup_evolution_demo_library(library)
+
+        # Initialize library and agent bus from library (late initializations)
         await library.initialize() 
         await agent_bus.initialize_from_library() 
-        
-        experience_tracker = AgentExperienceTracker()
+        print("✓ SmartLibrary and SmartAgentBus late initializations complete.")
         
         initial_agent_record = await library.find_record_by_name("InvoiceProcessor_V1", "AGENT")
         initial_agent_id = initial_agent_record["id"] if initial_agent_record else None
@@ -525,8 +626,6 @@ async def main():
         if evolved_record and evolved_record.get("parent_id") == initial_agent_id:
             evolved_id = evolved_record["id"]
             print(f"✓ Verified evolution in SmartLibrary: Original ID {initial_agent_id} -> New ID {evolved_id} (Name: {evolved_record['name']})")
-            if initial_agent_id and evolved_id and initial_agent_id != evolved_id:
-                 experience_tracker.record_evolution(initial_agent_id, evolved_id, "standard_evolution_openai", {"changes": "Improved JSON, validation, etc."})
         else: 
             if evolved_record:
                  print(f"✓ Found component named '{evolved_agent_name}' (ID: {evolved_record['id']}), but its parent_id does not match {initial_agent_id} or was not set.")
@@ -564,8 +663,6 @@ async def main():
             
             if medical_processor_id:
                 print(f"✓ Verified: {adapted_agent_name} adapted/created in library with ID: {medical_processor_id}")
-                if source_agent_id_for_adaptation: 
-                    experience_tracker.record_evolution(source_agent_id_for_adaptation, medical_processor_id, "domain_adaptation_openai", {"target_domain": "medical"})
                 
                 test_medical_prompt = f"Use the agent with ID '{medical_processor_id}' (which should be {adapted_agent_name}) to process: {SAMPLE_MEDICAL_RECORD}"
                 test_med_res_msg = await system_agent.run(test_medical_prompt)
