@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import List
 from evolving_agents.agents.architect_zero import create_architect_zero
-from evolving_agents.smart_library.smart_library import SmartLibrary
+# from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.system_agent import SystemAgentFactory
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
@@ -46,6 +46,9 @@ async def run_smart_autocomplete(
     container = DependencyContainer()
 
     # Initialize MongoDBClient
+    # TODO: Check eat_config for any MingiDB-specific MongoDB configurations
+    # (e.g., specific collection names or other parameters) and ensure they are used
+    # by the MingiDB component when it's initialized.
     mongo_uri = eat_config.MONGODB_URI
     mongo_db_name = eat_config.MONGODB_DATABASE_NAME
     if not mongo_uri or not mongo_db_name:
@@ -62,19 +65,36 @@ async def run_smart_autocomplete(
     print(f"MongoDBClient initialized and registered for DB: {mongo_db_name}")
     
     # Step 1: Set up core services
-    llm_service = LLMService(provider=eat_config.LLM_PROVIDER, model=eat_config.LLM_MODEL, embedding_model=eat_config.LLM_EMBEDDING_MODEL, use_cache=eat_config.LLM_USE_CACHE, mongodb_client=mongodb_client, container=container)
+    # TODO: Review eat_config for any other MingiDB-specific settings
+    # (e.g., cache policies, indexing options) that might need to be passed to
+    # the MingiDB component or affect its behavior.
+    llm_service = LLMService(
+        provider=eat_config.LLM_PROVIDER,
+        model=eat_config.LLM_MODEL,
+        embedding_model=eat_config.LLM_EMBEDDING_MODEL,
+        use_cache=eat_config.LLM_USE_CACHE,
+        mongodb_client=mongodb_client,
+        container=container
+    )
     container.register('llm_service', llm_service)
     
-    smart_library = SmartLibrary(llm_service=llm_service, container=container)
-    container.register('smart_library', smart_library)
+    # smart_library = SmartLibrary(llm_service=llm_service, container=container)
+    # container.register('smart_library', smart_library)
     
     # Create firmware for component creation
     from evolving_agents.firmware.firmware import Firmware
     firmware = Firmware()
     container.register('firmware', firmware)
+    # TODO: Initialize and register MingiDB memory component here
+    # Example (replace with actual MingiDB class and parameters):
+    # from evolving_agents.mingidb_memory.mingidb_memory import MingiDBMemory # Hypothetical import
+    # mingidb_memory = MingiDBMemory(mongodb_client=mongodb_client, llm_service=llm_service, container=container)
+    # container.register('memory_service', mingidb_memory) # Or appropriate name
+    # await mingidb_memory.initialize()
     
     # Step 2: Create agent bus with null system agent
-    agent_bus = SmartAgentBus(smart_library=smart_library, llm_service=llm_service, container=container)
+    # TODO: Pass the MingiDB memory component to SmartAgentBus if required
+    agent_bus = SmartAgentBus(llm_service=llm_service, container=container)
     container.register('agent_bus', agent_bus)
     
     # Step 3: Create the system agent
@@ -82,7 +102,7 @@ async def run_smart_autocomplete(
     container.register('system_agent', system_agent)
     
     # Initialize components
-    await smart_library.initialize()
+    # await smart_library.initialize()
     await agent_bus.initialize_from_library()
 
     # Step 4: Create the architect agent using the container
