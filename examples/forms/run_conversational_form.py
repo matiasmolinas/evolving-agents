@@ -150,15 +150,18 @@ async def create_conversational_form(form_prompt: str, form_id: str = "feedback_
     # Register Components in SmartLibrary
     for comp in extracted_components:
         try:
-            record_id = await smart_library.create_record(
+            sl_record = await smart_library.create_record(
                 name=comp["name"],
                 record_type="AGENT",  # Assuming these are agent-like components
                 domain="conversational_form",
                 description=comp["description"],
                 code_snippet=comp["code"]
             )
-            component_record_ids.append(record_id)
-            print(f"Component '{comp['name']}' registered in SmartLibrary with ID: {record_id}")
+            if sl_record and isinstance(sl_record, dict) and 'id' in sl_record:
+                component_record_ids.append(sl_record['id']) # Append only the ID string
+                print(f"Component '{comp['name']}' registered in SmartLibrary with ID: {sl_record['id']}")
+            else:
+                print(f"Warning: SmartLibrary did not return a valid record for component {comp['name']}. Record: {sl_record}")
         except Exception as e:
             print(f"Error registering component {comp['name']} in SmartLibrary: {e}")
             # Decide if you want to append a placeholder ID or skip
