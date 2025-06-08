@@ -65,8 +65,6 @@ async def run_smart_autocomplete(
     print(f"MongoDBClient initialized and registered for DB: {mongo_db_name}")
     
     # Step 1: Set up core services
-    # TODO: Pass the actual MingiDB memory component to LLMService if required
-    # This is a speculative change based on the assumption that LLMService might directly use the new memory service.
     # TODO: Review eat_config for any other MingiDB-specific settings
     # (e.g., cache policies, indexing options) that might need to be passed to
     # the MingiDB component or affect its behavior.
@@ -76,8 +74,7 @@ async def run_smart_autocomplete(
         embedding_model=eat_config.LLM_EMBEDDING_MODEL,
         use_cache=eat_config.LLM_USE_CACHE,
         mongodb_client=mongodb_client,
-        container=container,
-        memory_service=None # TODO: Replace None with the actual MingiDB memory instance
+        container=container
     )
     container.register('llm_service', llm_service)
     
