@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import os
+import logging
 from evolving_agents.agents.architect_zero import create_architect_zero
 from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.system_agent import SystemAgentFactory
@@ -12,12 +13,16 @@ from evolving_agents.agent_bus.smart_agent_bus import SmartAgentBus
 from evolving_agents.core.dependency_container import DependencyContainer
 from evolving_agents.core.mongodb_client import MongoDBClient
 from datetime import datetime, timezone
+from evolving_agents.tools.memory.experience_recorder_tool import ExperienceRecorderTool, ExperienceDataInput
 
 import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Placeholder for Memory Manager Agent ID (to be updated with actual ID later)
+MEMORY_MANAGER_AGENT_ID = "memory_manager_agent_v1"
 
 async def create_conversational_form(form_prompt: str, form_id: str = "feedback_form"):
     """Create a conversational form based on natural language description."""
@@ -40,6 +45,12 @@ async def create_conversational_form(form_prompt: str, form_id: str = "feedback_
     # Create agent bus with null system agent
     agent_bus = SmartAgentBus(container=container)
     container.register('agent_bus', agent_bus)
+
+    # Instantiate ExperienceRecorderTool
+    experience_recorder_tool = ExperienceRecorderTool(
+        agent_bus=agent_bus,
+        memory_manager_agent_id=MEMORY_MANAGER_AGENT_ID
+    )
     
     # Create the system agent
     system_agent = await SystemAgentFactory.create_agent(container=container)
@@ -85,62 +96,80 @@ async def create_conversational_form(form_prompt: str, form_id: str = "feedback_
     
     result = await architect.run(form_creation_prompt)
     
-    # Extract agent names from the result using regex for better detection
-    agents_used = []
-    # Look for agent/component names in various patterns
-    agent_patterns = [
-        r"class\s+(\w+)(?:Agent|Manager|Processor|Parser|Generator|Validator)",
-        r"def\s+create_(\w+)(?:Agent|Manager|Processor|Parser|Generator|Validator)",
-        r"['\"]*name['\"]*\s*:\s*['\"]*(\w+)(?:Agent|Manager|Processor|Parser|Generator|Validator)['\"]"
-    ]
-    
-    for pattern in agent_patterns:
-        for match in re.finditer(pattern, result.result.text, re.IGNORECASE):
-            agent_name = match.group(1)
-            # Add suffixes if they're missing but implied
-            if not any(suffix in agent_name for suffix in ["Agent", "Manager", "Processor", "Parser", "Generator", "Validator"]):
-                # Add appropriate suffix based on context
-                if "valid" in result.result.text[max(0, match.start()-20):min(len(result.result.text), match.end()+20)].lower():
-                    agent_name += "Validator"
-                elif "process" in result.result.text[max(0, match.start()-20):min(len(result.result.text), match.end()+20)].lower():
-                    agent_name += "Processor"
-                elif "parse" in result.result.text[max(0, match.start()-20):min(len(result.result.text), match.end()+20)].lower():
-                    agent_name += "Parser"
-                elif "generat" in result.result.text[max(0, match.start()-20):min(len(result.result.text), match.end()+20)].lower():
-                    agent_name += "Generator"
-                elif "manag" in result.result.text[max(0, match.start()-20):min(len(result.result.text), match.end()+20)].lower():
-                    agent_name += "Manager"
-                else:
-                    agent_name += "Agent"
-            
-            # Clean up the name and add if not already in list
-            agent_name = agent_name.strip()
-            if agent_name and agent_name not in agents_used and len(agent_name) > 3:
-                agents_used.append(agent_name)
-    
-    # If no agents are found, extract any capitalized names that might be components
-    if not agents_used:
-        # Look for capitalized words that might be component names
-        for match in re.finditer(r"\b([A-Z][a-zA-Z]+(?:Agent|Manager|Processor|Parser|Generator|Validator|Tool))\b", result.result.text):
-            agent_name = match.group(1)
-            if agent_name not in agents_used:
-                agents_used.append(agent_name)
-    
-    # If still no agents found, use the default names from the prompt
-    if not agents_used:
-        agents_used = [
+    # Enhanced Component Detail Extraction
+    component_record_ids = []
+    component_pattern = re.compile(
+        r"Component Name:\s*(.*?)\s*"
+        r"Purpose and Responsibilities:\s*([\s\S]*?)\s*"
+        r"Sample Code:\s*\`\`\`python\s*([\s\S]*?)\`\`\`",
+        re.DOTALL
+    )
+
+    extracted_components = []
+    for match in component_pattern.finditer(result.result.text):
+        comp_name = match.group(1).strip()
+        comp_description = match.group(2).strip()
+        comp_code = match.group(3).strip()
+
+        if not comp_name:
+            print("Warning: Found a component with no name. Skipping.")
+            continue
+
+        if not comp_description:
+            print(f"Warning: No description found for component {comp_name}. Using placeholder.")
+            comp_description = "No description provided."
+
+        if not comp_code:
+            print(f"Warning: No code snippet found for component {comp_name}. Using placeholder.")
+            comp_code = "# No code snippet extracted."
+
+        extracted_components.append({
+            "name": comp_name,
+            "description": comp_description,
+            "code": comp_code
+        })
+
+    # If direct parsing fails, fall back to named components from the prompt
+    # and use them as placeholders.
+    if not extracted_components:
+        print("Warning: Could not parse component details from architect response. Using default names from prompt.")
+        default_component_names = [
             "FormDefinitionParser", 
             "ConversationFlowManager", 
             "ResponseValidator", 
             "ResponseProcessor", 
             "FormSummaryGenerator"
         ]
-    
+        for name in default_component_names:
+            extracted_components.append({
+                "name": name,
+                "description": "No description provided (default component).",
+                "code": "# No code snippet extracted (default component)."
+            })
+
+    # Register Components in SmartLibrary
+    for comp in extracted_components:
+        try:
+            record_id = await smart_library.create_record(
+                name=comp["name"],
+                record_type="AGENT",  # Assuming these are agent-like components
+                domain="conversational_form",
+                description=comp["description"],
+                code_snippet=comp["code"]
+            )
+            component_record_ids.append(record_id)
+            print(f"Component '{comp['name']}' registered in SmartLibrary with ID: {record_id}")
+        except Exception as e:
+            print(f"Error registering component {comp['name']} in SmartLibrary: {e}")
+            # Decide if you want to append a placeholder ID or skip
+            # For now, let's skip if registration fails.
+            # Alternatively, you could use a special marker for failed registrations.
+
     # Save the form definition to MongoDB
     form_definition_data = {
         "form_id": form_id,
         "form_prompt": form_prompt,
-        "agents_used": agents_used,
+        "component_record_ids": component_record_ids, # Updated key
         "created_at": datetime.now(timezone.utc) # Store creation time
     }
     try:
@@ -155,12 +184,36 @@ async def create_conversational_form(form_prompt: str, form_id: str = "feedback_
         print(f"Error saving form definition {form_id} to MongoDB: {e}")
         # Optionally, re-raise or handle as appropriate for the application
     
-    print(f"Form system design complete. Agents identified: {len(agents_used)}")
-    
+    print(f"Form system design complete. Components processed: {len(component_record_ids)}")
+
+    # Prepare and record the experience
+    if component_record_ids: # Only record if components were processed
+        experience_input = ExperienceDataInput(
+            primary_goal_description="System to create a conversational form.",
+            sub_task_description=form_prompt, # The original prompt used to create the form
+            initiating_agent_id="form_creation_service", # Or "architect_zero"
+            final_outcome="success", # Assuming success if we reach this point
+            components_used=component_record_ids, # The list of SmartLibrary record IDs
+            output_summary=f"Form system created with ID: {form_id}. Components: {', '.join(component_record_ids)}",
+            workflow_id=form_id, # Use form_id as a workflow identifier
+            session_id=None, # Or a generated session ID if applicable
+            tags=["form_creation", "conversational_form", form_id]
+        )
+        try:
+            recording_result = await experience_recorder_tool.run(input=experience_input)
+            if recording_result.status == "success":
+                print(f"Form creation experience for {form_id} recorded successfully. Experience ID: {recording_result.experience_id}")
+            else:
+                # Using print for warning as basic logging setup might be out of scope for this change
+                print(f"Warning: Failed to record form creation experience for {form_id}. Message: {recording_result.message}")
+        except Exception as e:
+            # Using print for warning
+            print(f"Warning: Exception during form creation experience recording for {form_id}: {e}")
+
     return {
         "status": "success",
         "form_id": form_id,
-        "agents_used": agents_used,
+        "component_record_ids": component_record_ids, # Updated key
         "message": f"Conversational form created with ID: {form_id}",
         "full_response": result.result.text
     }
@@ -181,6 +234,12 @@ async def fill_out_form(form_id: str, user_responses: list):
     # Create agent bus with null system agent
     agent_bus = SmartAgentBus(container=container)
     container.register('agent_bus', agent_bus)
+
+    # Instantiate ExperienceRecorderTool
+    experience_recorder_tool = ExperienceRecorderTool(
+        agent_bus=agent_bus,
+        memory_manager_agent_id=MEMORY_MANAGER_AGENT_ID
+    )
     
     # Create the system agent
     system_agent = await SystemAgentFactory.create_agent(container=container)
@@ -277,12 +336,6 @@ async def fill_out_form(form_id: str, user_responses: list):
     }
     try:
         form_responses_collection = mongodb_client.get_collection(form_responses_collection_name)
-        # Using update_one with $push to append responses if the document exists, 
-        # or insert if it's new. This example assumes one document per form_id 
-        # that gets updated. If each submission should be a new document, use insert_one.
-        # For this case, let's assume we are replacing the whole response set for a given form_id
-        # if fill_out_form is called multiple times for the same form_id for simplicity,
-        # similar to how files were overwritten.
         await form_responses_collection.replace_one(
             {"form_id": form_id}, 
             form_responses_data, 
@@ -292,6 +345,31 @@ async def fill_out_form(form_id: str, user_responses: list):
     except Exception as e:
         print(f"Error saving form responses for {form_id} to MongoDB: {e}")
         # Optionally, re-raise or handle as appropriate
+
+    # Prepare and record the experience for form filling
+    form_component_ids = form_definition.get("component_record_ids", [])
+    user_responses_summary = json.dumps(user_responses)
+
+    experience_input = ExperienceDataInput(
+        primary_goal_description="User filling out a conversational form.",
+        sub_task_description=f"Processing user responses for form_id: {form_id}.",
+        initiating_agent_id="form_filling_service",
+        final_outcome="success",
+        components_used=form_component_ids,
+        input_context_summary=user_responses_summary,
+        output_summary=summary_result.result.text,
+        workflow_id=form_id,
+        session_id=None,
+        tags=["form_filling", "user_response", form_id]
+    )
+    try:
+        recording_result = await experience_recorder_tool.run(input=experience_input)
+        if recording_result.status == "success":
+            print(f"Form filling experience for {form_id} recorded successfully. Experience ID: {recording_result.experience_id}")
+        else:
+            print(f"Warning: Failed to record form filling experience for {form_id}. Message: {recording_result.message}")
+    except Exception as e:
+        print(f"Warning: Exception during form filling experience recording for {form_id}: {e}")
     
     return {
         "status": "success",
@@ -338,7 +416,7 @@ async def main():
     )
     
     print("Form Created!")
-    print(f"Agents used: {form_result['agents_used']}")
+    print(f"Component Record IDs: {form_result['component_record_ids']}")
 
     if mongodb_client:
         print("\n--- Verifying restaurant_feedback definition from MongoDB ---")
