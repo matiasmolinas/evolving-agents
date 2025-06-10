@@ -118,36 +118,47 @@ class ComponentExperienceTracker:
         update_doc["$inc"]["total_invocations"] = 1
         update_doc["$inc"]["total_execution_time_ms"] = duration_ms
         update_doc["$set"]["last_invocation_timestamp"] = current_time
-        # Initialize fields that might not be present in $inc during upsert
+
+        # Base $setOnInsert - fields that are always set on insert
+        # Note: error_types_summary is handled conditionally below.
         update_doc["$setOnInsert"] = {
             "component_id": component_id,
             "name": name,
             "record_type": record_type,
             "first_invocation_timestamp": current_time,
             "average_response_time_ms": 0.0, # Initial value, will be calculated and updated
-            "error_types_summary": {},       # Initial empty dict
-            "evolution_history_summary": [], # Initial empty list
-            "input_params_summary": {},      # Initial empty dict
-            "output_summary_tracking": {}    # Initial empty dict
+            "evolution_history_summary": [],
+            "input_params_summary": {},
+            "output_summary_tracking": {}
             # DO NOT include: total_invocations, successful_invocations, 
-            # failed_invocations, total_execution_time_ms here.
-            # These will be correctly initialized by the $inc operator.
+            # failed_invocations, total_execution_time_ms here as $inc handles them.
+            # error_types_summary is handled conditionally.
         }
 
         if success:
             update_doc["$inc"]["successful_invocations"] = 1
-        else:
+            # If successful and it's a new document, error_types_summary should be {}
+            update_doc["$setOnInsert"]["error_types_summary"] = {}
+        else: # Not successful (error occurred)
             update_doc["$inc"]["failed_invocations"] = 1
             if error:
-                # Extract error type (e.g., "ValueError" from "ValueError: Some message")
                 error_type = error.split(":")[0].strip()
-                if not error_type: # Handle cases where error message might not have ':'
+                if not error_type:
                     error_type = "UnknownError"
-                # Sanitize error_type to be a valid MongoDB key (replace '.' and '$')
-                error_type = error_type.replace(".", "_").replace("$", "_")
-                update_doc["$inc"][f"error_types_summary.{error_type}"] = 1
+                # Sanitize error_type to be a valid MongoDB key
+                error_type_safe_key = error_type.replace(".", "_").replace("$", "_")
+
+                # For existing documents, $inc the specific error type
+                update_doc["$inc"][f"error_types_summary.{error_type_safe_key}"] = 1
+
+                # For new documents (upsert case): initialize error_types_summary with this first error
+                update_doc["$setOnInsert"]["error_types_summary"] = {error_type_safe_key: 1}
+            else: # No specific error message provided, but success is False
+                # Initialize empty if no error type to count for a new doc
+                update_doc["$setOnInsert"]["error_types_summary"] = {}
         
         # Remove empty $set or $inc to avoid MongoDB errors if they are empty
+        # $setOnInsert should always have content due to component_id etc.
         if not update_doc["$set"]:
             del update_doc["$set"]
         if not update_doc["$inc"]:
