@@ -21,7 +21,20 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# Placeholder for Memory Manager Agent ID (to be updated with actual ID later)
+# Placeholder & Dependency Clarification:
+# The MEMORY_MANAGER_AGENT_ID ("memory_manager_agent_v1") is a crucial placeholder.
+# The ExperienceRecorderTool relies on this ID to communicate with a MemoryManagerAgent
+# via the SmartAgentBus for storing form creation and filling experiences.
+#
+# FOR FULL EXPERIENCE RECORDING FUNCTIONALITY:
+# 1. A MemoryManagerAgent instance must be running.
+# 2. This agent must be registered with the SmartAgentBus using this exact ID ("memory_manager_agent_v1").
+#
+# If these conditions are not met by the broader Evolving Agents execution environment,
+# the script will output warnings (e.g., "Targeted agent memory_manager_agent_v1 not found...")
+# and the experience recording steps will fail, though other form operations might still succeed.
+# In a more complete deployment, this ID would typically be sourced from a configuration system
+# (e.g., environment variables, config files) or via dynamic service discovery on the SmartAgentBus.
 MEMORY_MANAGER_AGENT_ID = "memory_manager_agent_v1"
 
 async def create_conversational_form(form_prompt: str, form_id: str = "feedback_form"):
@@ -419,7 +432,7 @@ async def main():
     )
     
     print("Form Created!")
-    print(f"Component Record IDs: {form_result['component_record_ids']}")
+    print(f"Component Record IDs: {form_result.get('component_record_ids', 'N/A')}") # Use .get for safety
 
     if mongodb_client:
         print("\n--- Verifying restaurant_feedback definition from MongoDB ---")
@@ -493,7 +506,7 @@ async def main():
     )
     
     print("Form Created!")
-    print(f"Agents used: {job_form_result['agents_used']}")
+    print(f"Component Record IDs: {job_form_result.get('component_record_ids', 'N/A')}") # Use .get for safety
     
     # Process another set of responses for the job application
     candidate1_responses = [
@@ -536,7 +549,7 @@ async def main():
     )
     
     print("Form Created!")
-    print(f"Agents used: {event_form_result['agents_used']}")
+    print(f"Component Record IDs: {event_form_result.get('component_record_ids', 'N/A')}") # Use .get for safety
     
     # Event registration responses
     event_responses = [
