@@ -104,23 +104,6 @@ class AgentFactory:
         
         logger.info(f"Creating agent '{record['name']}' using framework '{framework_name}'")
         
-        # First, try direct instantiation for BeeAI agents
-        if framework_name.lower() == "beeai":
-            try:
-                agent = await self._create_beeai_agent_directly(record, tools, config)
-                if agent:
-                    # Store in active agents
-                    self.active_agents[record["name"]] = {
-                        "record": record,
-                        "instance": agent,
-                        "type": "AGENT",
-                        "framework": framework_name,
-                        "provider_id": "BeeAIProvider"
-                    }
-                    return agent
-            except Exception as e:
-                logger.warning(f"Direct BeeAI agent creation failed: {str(e)}, falling back to provider")
-        
         # Get the appropriate provider
         provider = self.provider_registry.get_provider_for_framework(framework_name)
         
@@ -156,92 +139,6 @@ class AgentFactory:
             import traceback
             logger.error(traceback.format_exc())
             raise
-    
-    async def _create_beeai_agent_directly(
-        self, 
-        record: Dict[str, Any], 
-        tools: Optional[List[Any]] = None,
-        config: Optional[Dict[str, Any]] = None
-    ) -> Optional[ReActAgent]:
-        """
-        Attempt to create a BeeAI agent directly from the code without using a provider.
-        
-        Args:
-            record: Agent record from the Smart Library
-            tools: Optional tools to provide to the agent
-            config: Optional configuration
-            
-        Returns:
-            BeeAI agent instance if successful, None otherwise
-        """
-        code_snippet = record["code_snippet"]
-        
-        # Try to find a class with a create_agent method
-        class_match = re.search(r"class\s+(\w+)(?:\(.*\))?:", code_snippet)
-        if not class_match:
-            return None
-        
-        initializer_class_name = class_match.group(1)
-        
-        # Check if create_agent method exists
-        if "def create_agent" not in code_snippet:
-            return None
-        
-        try:
-            # Create a unique module name
-            module_name = f"dynamic_agent_{record['id'].replace('-', '_')}"
-            
-            # Write the code to a temporary file
-            with tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w') as f:
-                f.write(code_snippet)
-                temp_file = f.name
-            
-            try:
-                # Create a module spec
-                spec = importlib.util.spec_from_file_location(module_name, temp_file)
-                if not spec or not spec.loader:
-                    return None
-                
-                # Import the module
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = module
-                spec.loader.exec_module(module)
-                
-                # Get the initializer class
-                if hasattr(module, initializer_class_name):
-                    initializer_class = getattr(module, initializer_class_name)
-                    
-                    # Check for static create_agent method
-                    if hasattr(initializer_class, "create_agent"):
-                        # Get the LLM service's chat model
-                        chat_model = self.llm_service.chat_model
-                        
-                        # Check the signature of create_agent
-                        import inspect
-                        sig = inspect.signature(initializer_class.create_agent)
-                        
-                        # Call the create_agent method based on its parameters
-                        if "tools" in sig.parameters:
-                            agent = initializer_class.create_agent(chat_model, tools)
-                        else:
-                            agent = initializer_class.create_agent(chat_model)
-                        
-                        if isinstance(agent, ReActAgent):
-                            return agent
-            finally:
-                # Clean up the temporary file
-                os.unlink(temp_file)
-                
-                # Remove the module from sys.modules
-                if module_name in sys.modules:
-                    del sys.modules[module_name]
-        
-        except Exception as e:
-            logger.error(f"Error creating BeeAI agent directly: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            
-        return None
     
     async def execute_agent(
         self, 

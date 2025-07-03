@@ -244,6 +244,13 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
             tool_template = "# Default tool template would be here"
         
         # Build the appropriate prompt based on component type and framework
+
+        # Check for Python execution keywords to suggest SandboxTool
+        python_execution_keywords = ["execute python", "run python script", "python code execution", "evaluate python"]
+        suggest_sandbox = False
+        if record_type == "TOOL" and any(keyword in requirements.lower() for keyword in python_execution_keywords):
+            suggest_sandbox = True
+
         if record_type == "AGENT":
             if framework.lower() == "beeai":
                 creation_prompt = f"""
@@ -332,6 +339,57 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
                 - Create an appropriate input schema class named {name}Input
                 - Define proper input fields with descriptions
                 - Implement the _run method with appropriate logic
+                - Include error handling
+                - For domain '{domain}', include all required disclaimers
+                - The code must be complete and executable
+
+                CODE:
+                """
+            else:
+                sandbox_instructions = ""
+                if suggest_sandbox:
+                    sandbox_instructions = """
+                IMPORTANT: If this tool is meant to execute arbitrary Python code based on its input,
+                it MUST use the 'beeai_framework.tools.code.SandboxTool' internally to execute that code safely.
+                Ensure you import SandboxTool and call it appropriately within the _run method.
+                Example:
+                from beeai_framework.tools.code import SandboxTool
+                # ... in _run method ...
+                # sandbox = SandboxTool()
+                # result = await sandbox.run(code_to_run)
+                """
+
+                creation_prompt = f"""
+                {firmware_content}
+
+                Create a Python tool using the BeeAI framework that fulfills these requirements:
+                "{requirements}"
+
+                TOOL NAME: {name}
+                DOMAIN: {domain}
+                DESCRIPTION: {description}
+                {sandbox_instructions}
+                IMPORTANT REQUIREMENTS:
+                1. The tool must be a properly implemented BeeAI Tool class
+                2. Use the following framework imports:
+                - from beeai_framework.tools.tool import Tool, StringToolOutput
+                - from beeai_framework.context import RunContext
+                - from pydantic import BaseModel, Field
+
+                3. The tool must follow this structure with an input schema and _run method:
+
+                REFERENCE TEMPLATE FOR A BEEAI TOOL:
+                ```python
+    {tool_template}
+                ```
+
+                YOUR TASK:
+                Create a similar tool class for: "{requirements}"
+                - Use {name} as the class name
+                - Create an appropriate input schema class named {name}Input
+                - Define proper input fields with descriptions
+                - Implement the _run method with appropriate logic
+                {'- If applicable, use SandboxTool for safety as per above instructions.' if suggest_sandbox else ''}
                 - Include error handling
                 - For domain '{domain}', include all required disclaimers
                 - The code must be complete and executable

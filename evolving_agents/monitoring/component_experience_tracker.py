@@ -381,6 +381,71 @@ class ComponentExperienceTracker:
             self.logger.error(f"Error retrieving latest A/B test results: {e}", exc_info=True)
             return []
 
+    # --- Emitter Callbacks ---
+    async def _handle_event(self, run_context: Any, success: bool, record_type: str):
+        """Helper to handle common event logic."""
+        try:
+            run = run_context.run # Assuming run_context has a 'run' attribute which is the Run object
+
+            component_instance = run.creator
+            component_id = getattr(component_instance, 'id', None) # Try to get a stable ID
+            name = ""
+
+            if record_type == "TOOL":
+                name = getattr(component_instance, 'name', 'UnknownTool')
+                if not component_id: component_id = name # Fallback if ID not present
+            elif record_type == "AGENT":
+                meta = getattr(component_instance, 'meta', None)
+                name = getattr(meta, 'name', 'UnknownAgent') if meta else 'UnknownAgent'
+                if not component_id: component_id = name # Fallback if ID not present
+            else:
+                self.logger.warning(f"Unknown record type for event handling: {record_type}")
+                return
+
+            if not component_id: # If ID is still None or empty after fallbacks
+                self.logger.error(f"Could not determine component_id for {record_type} '{name}'. Skipping event recording.")
+                return
+
+            duration_ms = run.duration.total_seconds() * 1000
+            error_str = str(run.error) if not success and run.error else None
+
+            # Here, input_params and output_summary are not directly available from typical emitter contexts
+            # without more specific event data. Leaving them as None for now.
+            await self.record_event(
+                component_id=component_id,
+                name=name,
+                record_type=record_type,
+                duration_ms=duration_ms,
+                success=success,
+                error=error_str
+            )
+        except AttributeError as ae:
+            self.logger.error(f"AttributeError accessing run_context attributes for {record_type} event: {ae}. Context: {run_context}", exc_info=True)
+        except Exception as e:
+            self.logger.error(f"Error processing {record_type} {'success' if success else 'error'} event: {e}", exc_info=True)
+
+    async def on_tool_success(self, run_context: Any, **kwargs):
+        """Callback for tool:success event."""
+        self.logger.debug(f"on_tool_success triggered. Context keys: {list(getattr(run_context, '__dict__', {}).keys())}")
+        await self._handle_event(run_context, success=True, record_type="TOOL")
+
+    async def on_tool_error(self, run_context: Any, **kwargs):
+        """Callback for tool:error event."""
+        self.logger.debug(f"on_tool_error triggered. Context keys: {list(getattr(run_context, '__dict__', {}).keys())}")
+        await self._handle_event(run_context, success=False, record_type="TOOL")
+
+    async def on_agent_success(self, run_context: Any, **kwargs): # Or agent:end
+        """Callback for agent:success or agent:end event if success indicated."""
+        # Note: BeeAI's agent:end might be more general. Success needs to be inferred or passed.
+        # For now, assuming the event implies success or carries that info.
+        self.logger.debug(f"on_agent_success triggered. Context keys: {list(getattr(run_context, '__dict__', {}).keys())}")
+        await self._handle_event(run_context, success=True, record_type="AGENT") # Success=True is an assumption here
+
+    async def on_agent_error(self, run_context: Any, **kwargs):
+        """Callback for agent:error event."""
+        self.logger.debug(f"on_agent_error triggered. Context keys: {list(getattr(run_context, '__dict__', {}).keys())}")
+        await self._handle_event(run_context, success=False, record_type="AGENT")
+
 import asyncio
 
 async def main(): # Example usage

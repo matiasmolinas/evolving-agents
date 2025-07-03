@@ -413,43 +413,32 @@ class SmartAgentBus:
         except Exception as e:
             logger.error(f"Failed to write execution log to MongoDB: {e}", exc_info=True)
 
-        if self.experience_tracker:
-            try:
-                # Prepare parameters for record_event
-                # 'task' dict is available in this method's scope as 'task'
-                # 'result' is available as 'result'
-                # 'error' is available as 'error'
-                # 'duration' is available as 'duration' (in seconds)
-                # 'agent_id' is available as 'agent_id'
-                # 'agent_name' is available (already resolved in log_entry preparation)
-
-                # Extract input_params from the 'task' dictionary.
-                input_params_for_experience = task.get("content", task) if isinstance(task.get("content"), dict) else task
-
-                # Determine record_type (AGENT/TOOL)
-                component_type = "UNKNOWN"
-                if agent_id != "N/A" and agent_id in self.agents:
-                    component_type = self.agents[agent_id].get("type", "UNKNOWN")
-                
-                output_summary_for_experience = None
-                if result and isinstance(result, dict):
-                    output_summary_for_experience = str(result.get("content_summary", result))[:500] # Summarize
-                elif result:
-                    output_summary_for_experience = str(result)[:500]
-
-
-                await self.experience_tracker.record_event(
-                    component_id=agent_id,
-                    name=agent_name, # agent_name resolved for log_entry
-                    record_type=component_type,
-                    duration_ms=duration * 1000 if duration is not None else 0.0,
-                    success=error is None,
-                    error=error,
-                    input_params=input_params_for_experience,
-                    output_summary=output_summary_for_experience
-                )
-            except Exception as e:
-                logger.error(f"SmartAgentBus: Failed to record event with ComponentExperienceTracker for agent {agent_id}: {e}", exc_info=True)
+        # The following block for direct ComponentExperienceTracker.record_event call
+        # is now redundant because events are handled via emitter callbacks in _execute_agent_task.
+        # Commenting it out to prevent double recording.
+        # if self.experience_tracker:
+        #     try:
+        #         input_params_for_experience = task.get("content", task) if isinstance(task.get("content"), dict) else task
+        #         component_type = "UNKNOWN"
+        #         if agent_id != "N/A" and agent_id in self.agents:
+        #             component_type = self.agents[agent_id].get("type", "UNKNOWN")
+        #         output_summary_for_experience = None
+        #         if result and isinstance(result, dict):
+        #             output_summary_for_experience = str(result.get("content_summary", result))[:500]
+        #         elif result:
+        #             output_summary_for_experience = str(result)[:500]
+        #         await self.experience_tracker.record_event(
+        #             component_id=agent_id,
+        #             name=agent_name,
+        #             record_type=component_type,
+        #             duration_ms=duration * 1000 if duration is not None else 0.0,
+        #             success=error is None,
+        #             error=error,
+        #             input_params=input_params_for_experience,
+        #             output_summary=output_summary_for_experience
+        #         )
+        #     except Exception as e:
+        #         logger.error(f"SmartAgentBus: Failed to record event with ComponentExperienceTracker for agent {agent_id}: {e}", exc_info=True)
 
     def _check_circuit_breaker(self, agent_id: str) -> bool:
         if agent_id not in self.circuit_breakers: return False
@@ -858,16 +847,59 @@ class SmartAgentBus:
                     input_for_run = str(input_for_run) 
 
                 logger.debug(f"Executing .run() on instance for agent {agent_id} with input type {type(input_for_run)}")
-                run_result = await agent_instance.run(input_for_run) 
                 
-                if hasattr(run_result, 'result') and hasattr(run_result.result, 'text'):
-                    return run_result.result.text
-                elif hasattr(run_result, 'text'):
-                    return run_result.text
-                elif isinstance(run_result, str):
-                    return run_result
-                try: return json.loads(json.dumps(run_result, default=str))
-                except: return str(run_result)
+                # --- Emitter Integration ---
+                run_obj = agent_instance.run(input_for_run) # Get the Run object without awaiting yet
+
+                if self.experience_tracker:
+                    logger.debug(f"Attaching ComponentExperienceTracker callbacks to Run object for agent {agent_id}")
+                    run_obj = run_obj.on("tool:success", self.experience_tracker.on_tool_success)
+                    run_obj = run_obj.on("tool:error", self.experience_tracker.on_tool_error)
+                    # Assuming agent:end or a specific success event for agents.
+                    # If agent:end is used, on_agent_success needs to infer success or get it from context.
+                    # For now, let's assume distinct success/error events or that on_agent_success can handle it.
+                    run_obj = run_obj.on("agent:success", self.experience_tracker.on_agent_success) # Placeholder for actual agent success event
+                    run_obj = run_obj.on("agent:error", self.experience_tracker.on_agent_error)
+                    # A common pattern is to use 'agent:end' and check run.error
+                    # async def on_agent_end_for_tracker(run_context, **kwargs):
+                    #    if run_context.run.error:
+                    #        await self.experience_tracker.on_agent_error(run_context, **kwargs)
+                    #    else:
+                    #        await self.experience_tracker.on_agent_success(run_context, **kwargs)
+                    # run_obj = run_obj.on("agent:end", on_agent_end_for_tracker)
+
+                else:
+                    logger.debug(f"Experience tracker not available for agent {agent_id}, skipping event attachment.")
+
+                # Now execute the run by awaiting it
+                final_run_result = await run_obj
+                # --- End Emitter Integration ---
+
+                # Process final_run_result (which is the awaited Run object)
+                # The actual output is usually on final_run_result.final_output or final_run_result.output
+                output_data = getattr(final_run_result, 'final_output', None)
+                if output_data is None:
+                    output_data = getattr(final_run_result, 'output', final_run_result) # Fallback
+
+                if hasattr(output_data, 'result') and hasattr(output_data.result, 'text'): # Legacy ReAct style?
+                    return output_data.result.text
+                elif hasattr(output_data, 'text'): # Simple text output
+                    return output_data.text
+                elif isinstance(output_data, str):
+                    return output_data
+
+                # If it's a Pydantic model or dict, return as is (or serialized)
+                # The old code tried to serialize everything to string, which might not be desired.
+                # For now, return the structured data if possible.
+                if hasattr(output_data, 'model_dump_json'): # Pydantic model
+                    return json.loads(output_data.model_dump_json()) # Return as dict
+                elif isinstance(output_data, (dict, list)):
+                    return output_data
+
+                # Fallback: convert to string
+                try: return json.loads(json.dumps(output_data, default=str))
+                except: return str(output_data)
+
             except Exception as e:
                 logger.error(f"Execution via .run() method failed for agent {agent_id}: {e}", exc_info=True)
                 raise RuntimeError(f"Agent's .run() method failed: {e}") from e

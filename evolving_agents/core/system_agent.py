@@ -5,9 +5,10 @@ import uuid # For fallback library name
 from typing import Dict, Any, List, Optional
 
 # BeeAI Framework imports
-from beeai_framework.agents.react import ReActAgent
+from beeai_framework.agents.tool_calling import ToolCallingAgent # Changed from ReActAgent
 from beeai_framework.agents.types import AgentMeta
 from beeai_framework.memory import TokenMemory, UnconstrainedMemory
+from beeai_framework.tools.tool import BaseToolOutput # For a generic output type
 
 # Import our specialized tools
 # Standard Tools
@@ -18,10 +19,6 @@ from evolving_agents.tools.smart_library.task_context_tool import TaskContextToo
 from evolving_agents.tools.agent_bus.register_agent_tool import RegisterAgentTool
 from evolving_agents.tools.agent_bus.request_agent_tool import RequestAgentTool
 from evolving_agents.tools.agent_bus.discover_agent_tool import DiscoverAgentTool
-
-# Workflow Tools
-from evolving_agents.workflow.generate_workflow_tool import GenerateWorkflowTool
-from evolving_agents.workflow.process_workflow_tool import ProcessWorkflowTool
 
 # Intent Review Tools
 from evolving_agents.tools.intent_review.workflow_design_review_tool import WorkflowDesignReviewTool
@@ -57,7 +54,7 @@ class SystemAgentFactory:
         mongodb_client: Optional[MongoDBClient] = None, # Added for explicit passing
         memory_type: str = "token",
         container: Optional[DependencyContainer] = None
-    ) -> ReActAgent:
+    ) -> ToolCallingAgent[BaseToolOutput]: # Updated return type
 
         # --- Resolve Dependencies ---
         logger.debug(f"SystemAgentFactory: Received container: {container is not None}")
@@ -128,11 +125,6 @@ class SystemAgentFactory:
         request_tool = RequestAgentTool(resolved_agent_bus)
         discover_tool = DiscoverAgentTool(resolved_agent_bus) # This tool now uses MongoDB via AgentBus
 
-        # Workflow Tools
-        generate_workflow_tool = GenerateWorkflowTool(resolved_llm_service, resolved_smart_library)
-        # **MODIFIED: Pass mongodb_client or container to ProcessWorkflowTool**
-        process_workflow_tool = ProcessWorkflowTool(mongodb_client=resolved_mongodb_client, container=container)
-
         # Task context tools
         task_context_tool = TaskContextTool(resolved_llm_service)
         contextual_search_tool = ContextualSearchTool(task_context_tool, search_tool)
@@ -158,7 +150,7 @@ class SystemAgentFactory:
         tools = [
             contextual_search_tool, task_context_tool, search_tool, create_tool, evolve_tool,
             register_tool, request_tool, discover_tool,
-            generate_workflow_tool, process_workflow_tool,
+            # generate_workflow_tool, process_workflow_tool, # Removed old workflow tools
             workflow_design_review_tool, component_selection_review_tool, approve_plan_tool,
             experience_recorder_tool, context_builder_tool, # Added new tools
         ]
@@ -192,11 +184,12 @@ class SystemAgentFactory:
 
         # --- Memory and Agent Creation ---
         memory = UnconstrainedMemory() if memory_type == "unconstrained" else TokenMemory(chat_model)
-        system_agent = ReActAgent(
+        system_agent = ToolCallingAgent[BaseToolOutput]( # Changed to ToolCallingAgent
             llm=chat_model,
             tools=tools,
             memory=memory,
-            meta=meta
+            meta=meta,
+            output_schema=BaseToolOutput # Added a generic output schema
         )
 
         # --- Tool Mapping ---
