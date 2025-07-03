@@ -1,11 +1,12 @@
 # evolving_agents/agents/memory_manager_agent.py
 import logging
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Type
 
-from beeai_framework.agents.react import ReActAgent
+from beeai_framework.agents.tool_calling import ToolCallingAgent # Changed from ReActAgent
 from beeai_framework.agents.types import AgentMeta
 from beeai_framework.memory import UnconstrainedMemory, TokenMemory
 from beeai_framework.backend.chat import ChatModel
+from pydantic import BaseModel, Field # Added for Output schema
 
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.tools.internal.mongo_experience_store_tool import MongoExperienceStoreTool
@@ -14,7 +15,13 @@ from evolving_agents.tools.internal.message_summarization_tool import MessageSum
 
 logger = logging.getLogger(__name__)
 
-class MemoryManagerAgent(ReActAgent):
+class MemoryOperationOutput(BaseModel):
+    """Output schema for MemoryManagerAgent's operations."""
+    status: str = Field(description="Status of the memory operation, e.g., 'success', 'error', 'not_found'.")
+    message: Optional[str] = Field(None, description="A message detailing the outcome or error.")
+    data: Optional[Any] = Field(None, description="Data retrieved or context relevant to the operation, e.g., experience_id, search results, summary.")
+
+class MemoryManagerAgent(ToolCallingAgent[MemoryOperationOutput]): # Updated base class and added generic type
     def __init__(
         self,
         llm_service: LLMService,
@@ -67,17 +74,16 @@ class MemoryManagerAgent(ReActAgent):
         if final_memory is None:
             final_memory = TokenMemory(llm_service.chat_model)
 
-        # Call ReActAgent's __init__
-        # Ensure the parameters match what ReActAgent from beeai-framework==0.1.4 expects.
-        # Common parameters are llm, tools, memory, meta.
+        # Call ToolCallingAgent's __init__
         super().__init__(
             llm=llm_service.chat_model,
-            tools=final_agent_meta.tools, # Pass the tools list
+            tools=final_agent_meta.tools,
             memory=final_memory,
-            meta=final_agent_meta         # Pass the AgentMeta object
+            meta=final_agent_meta,
+            output_schema=MemoryOperationOutput # Assuming ToolCallingAgent takes output_schema
         )
 
-        # After super().__init__(), ReActAgent should have populated self.name, self.description, etc.
+        # After super().__init__(), ToolCallingAgent should have populated self.name, self.description, etc.
         # from the 'meta' object. If self.name is still not available, it indicates a deeper issue
         # with ReActAgent's initialization or an incorrect assumption about its behavior.
 
@@ -94,13 +100,30 @@ class MemoryManagerAgent(ReActAgent):
         logger.info(f"MemoryManagerAgent '{agent_name_for_log}' initialized with LLM: {llm_type_for_log}, Memory: {memory_type_for_log}, Tools: {tool_names_for_log}")
 
 
-    async def run(self, task_description: str) -> Any:
+    async def run(self, task_description: str) -> MemoryOperationOutput: # Updated return type
         logger.info(f"MemoryManagerAgent '{getattr(self, 'name', 'UnnamedMMA')}' received task: {task_description[:200]}...")
         try:
-            result_message = await super().run(prompt=task_description) 
-            final_result = result_message.result.text if hasattr(result_message, 'result') and hasattr(result_message.result, 'text') else str(result_message)
-            logger.info(f"MemoryManagerAgent '{getattr(self, 'name', 'UnnamedMMA')}' completed task. Final result snippet: {final_result[:200]}...")
-            return final_result
+            # super().run for ToolCallingAgent will return the Pydantic model instance (MemoryOperationOutput)
+            # if the LLM response correctly maps to the schema.
+            # If it can't parse, it might raise an error or return a default/error object.
+            raw_output = await super().run(prompt=task_description)
+
+            if isinstance(raw_output, MemoryOperationOutput):
+                logger.info(f"MemoryManagerAgent '{getattr(self, 'name', 'UnnamedMMA')}' completed task. Status: {raw_output.status}")
+                return raw_output
+            else:
+                # This case implies the LLM response didn't match the MemoryOperationOutput schema
+                # or ToolCallingAgent's run method returned something unexpected.
+                logger.warning(f"MemoryManagerAgent '{getattr(self, 'name', 'UnnamedMMA')}' received unexpected output type: {type(raw_output)}. Content: {str(raw_output)[:200]}")
+                return MemoryOperationOutput(
+                    status="error",
+                    message=f"Unexpected output format from agent: {str(raw_output)[:200]}",
+                    data=str(raw_output)
+                )
         except Exception as e:
             logger.error(f"Error during MemoryManagerAgent '{getattr(self, 'name', 'UnnamedMMA')}' execution for task '{task_description[:100]}...': {e}", exc_info=True)
-            raise
+            return MemoryOperationOutput(
+                status="error",
+                message=f"Execution error: {str(e)}",
+                data={"task_description": task_description}
+            )

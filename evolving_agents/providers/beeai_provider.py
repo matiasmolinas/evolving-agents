@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional, Union
 import ast
 
 # BeeAI framework imports
-from beeai_framework.agents.react import ReActAgent
+from beeai_framework.agents.tool_calling import ToolCallingAgent # Changed from ReActAgent
 from beeai_framework.agents.types import AgentExecutionConfig, AgentMeta
 from beeai_framework.memory import TokenMemory, UnconstrainedMemory
 from beeai_framework.tools.tool import Tool
@@ -42,9 +42,9 @@ class BeeAIProvider(FrameworkProvider):
     tools: Optional[List[Tool]] = None,
     firmware_content: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None
-    ) -> ReActAgent:
+    ) -> ToolCallingAgent: # Updated return type
         """
-        Create a BeeAgent with the specified configuration.
+        Create a BeeAI ToolCallingAgent with the specified configuration.
         
         Args:
             record: Agent record from the Smart Library
@@ -53,9 +53,9 @@ class BeeAIProvider(FrameworkProvider):
             config: Optional configuration parameters
             
         Returns:
-            Instantiated BeeAgent
+            Instantiated ToolCallingAgent
         """
-        logger.info(f"Creating BeeAgent '{record['name']}' with {len(tools) if tools else 0} tools")
+        logger.info(f"Creating BeeAI ToolCallingAgent '{record['name']}' with {len(tools) if tools else 0} tools")
         
         # Apply default config if none provided
         config = config or {}
@@ -106,27 +106,31 @@ class BeeAIProvider(FrameworkProvider):
         else:  # token memory by default
             memory = TokenMemory(chat_model)
         
-        # Create the BeeAgent with proper parameters
-        agent = ReActAgent(
+        # Create the ToolCallingAgent with proper parameters
+        # Assuming ToolCallingAgent can be initialized without an explicit output_schema,
+        # or it defaults to a generic one (e.g., string or dict).
+        # If output_schema is mandatory, this provider would need a way to determine it from 'record' or 'config'.
+        agent = ToolCallingAgent(
             llm=chat_model,
             tools=tools or [],
             memory=memory,
             meta=meta
+            # output_schema=config.get("output_schema_class") # Example if schema class is passed in config
         )
         
         return agent
     
     async def execute_agent(
         self, 
-        agent_instance: Union[ReActAgent, str],
+        agent_instance: Union[ToolCallingAgent, str], # Updated type hint
         input_text: str,
         execution_config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Execute a BeeAgent with input text.
+        Execute a BeeAI ToolCallingAgent with input text.
         
         Args:
-            agent_instance: The BeeAgent instance or name
+            agent_instance: The ToolCallingAgent instance or name
             input_text: Input text to process
             execution_config: Optional execution configuration parameters
             
@@ -142,7 +146,7 @@ class BeeAIProvider(FrameworkProvider):
                 "result": f"Error: BeeAIProvider requires agent instance, not name"
             }
                 
-        logger.info(f"Executing BeeAgent with input: {input_text[:50]}...")
+        logger.info(f"Executing BeeAI ToolCallingAgent with input: {input_text[:50]}...")
         
         # Apply default execution config if none provided
         execution_config = execution_config or {}
@@ -155,30 +159,45 @@ class BeeAIProvider(FrameworkProvider):
         )
         
         try:
-            # Run the agent with the input text
-            run_result = await agent_instance.run(
+            # Run the agent with the input text.
+            # The agent.run() method now returns a Run object. Execution is triggered by await-ing it.
+            run_obj = await agent_instance.run( # Renamed variable to run_obj
                 prompt=input_text,
                 execution=bee_exec_config
             )
             
-            # Get the text result
-            result_text = run_result.result.text
-            
+            # Assuming the actual output is on run_obj.final_output or similar
+            # and this final_output is the Pydantic model instance (e.g., MemoryOperationOutput)
+            actual_output = getattr(run_obj, 'final_output', None)
+            if actual_output is None: # Fallback if final_output is not the attribute name
+                 actual_output = getattr(run_obj, 'output', run_obj) # Try 'output' or the run_obj itself
+
+            if hasattr(actual_output, 'model_dump_json'): # Pydantic model
+                result_content = actual_output.model_dump_json(indent=2)
+            elif isinstance(actual_output, dict) or isinstance(actual_output, list):
+                result_content = json.dumps(actual_output, indent=2)
+            # Remove old ReActAgent specific handling if ToolCallingAgent output is always structured
+            # elif hasattr(actual_output, 'result') and hasattr(actual_output.result, 'text'):
+            #     result_content = actual_output.result.text
+            else:
+                result_content = str(actual_output)
+
             return {
                 "status": "success",
-                "message": "BeeAgent executed successfully",
-                "result": result_text,
-                "raw_result": run_result  # Include raw result for advanced usage
+                "message": "ToolCallingAgent executed successfully",
+                "result": result_content,
+                "raw_result_type": str(type(actual_output)),
+                "run_id": str(getattr(run_obj, 'id', 'N/A')) # Example of accessing Run object property
             }
             
         except Exception as e:
-            logger.error(f"Error executing BeeAgent: {str(e)}")
+            logger.error(f"Error executing ToolCallingAgent: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
             
             return {
                 "status": "error",
-                "message": f"Error executing BeeAgent: {str(e)}",
+                "message": f"Error executing ToolCallingAgent: {str(e)}",
                 "result": f"Error: {str(e)}",
                 "error": e
             }
@@ -202,7 +221,7 @@ class BeeAIProvider(FrameworkProvider):
         Returns:
             List of supported agent type names
         """
-        return ["BeeAgent", "ReActAgent"]
+        return ["BeeAgent", "ReActAgent", "ToolCallingAgent", "BaseAgent"] # Added ToolCallingAgent and BaseAgent
     
     def get_configuration_schema(self) -> Dict[str, Any]:
         """

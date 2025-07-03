@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
 
 # BeeAI Framework imports
-from beeai_framework.agents.react import ReActAgent
+from beeai_framework.agents.tool_calling import ToolCallingAgent # Changed from ReActAgent
 from beeai_framework.agents.types import AgentMeta
 from beeai_framework.memory import TokenMemory, UnconstrainedMemory
 from beeai_framework.context import RunContext
@@ -19,8 +19,16 @@ from evolving_agents.tools.intent_review.approve_plan_tool import ApprovePlanToo
 # Import core components
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.core.dependency_container import DependencyContainer
+from pydantic import BaseModel, Field # Added for Output schema
 
 logger = logging.getLogger(__name__)
+
+class ReviewDecisionOutput(BaseModel):
+    """Output schema for IntentReviewAgent's decision."""
+    plan_id: str = Field(description="ID of the plan that was reviewed.")
+    status: str = Field(description="Review status, e.g., 'approved', 'rejected', 'needs_modification'.")
+    comments: Optional[str] = Field(None, description="Detailed comments or reasons for the decision.")
+    suggested_modifications: Optional[List[str]] = Field(None, description="Specific suggestions if modifications are needed.")
 
 class IntentReviewAgentInitializer:
     """
@@ -38,7 +46,7 @@ class IntentReviewAgentInitializer:
     async def create_agent(
         llm_service: Optional[LLMService] = None,
         container: Optional[DependencyContainer] = None
-    ) -> ReActAgent:
+    ) -> ToolCallingAgent[ReviewDecisionOutput]: # Updated return type
         """
         Create and configure the Intent Review Agent.
         
@@ -91,11 +99,12 @@ class IntentReviewAgentInitializer:
         )
         
         # Create the Intent Review Agent
-        agent = ReActAgent(
+        agent = ToolCallingAgent[ReviewDecisionOutput]( # Updated agent type
             llm=chat_model,
             tools=tools,
             memory=TokenMemory(chat_model),
-            meta=meta
+            meta=meta,
+            output_schema=ReviewDecisionOutput # Assuming ToolCallingAgent takes output_schema
         )
         
         # Add tools dictionary for direct access

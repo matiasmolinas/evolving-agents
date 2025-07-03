@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional, Union
 from pydantic import BaseModel, Field
 
 # --- BeeAI Framework Imports ---
-from beeai_framework.agents.react import ReActAgent
+from beeai_framework.agents.tool_calling import ToolCallingAgent # Changed from ReActAgent
 from beeai_framework.agents.types import AgentMeta
 from beeai_framework.memory import TokenMemory
 from beeai_framework.tools.tool import Tool, StringToolOutput
@@ -67,7 +67,7 @@ class ArchitectZeroAgentInitializer:
         smart_library: Optional[SmartLibrary] = None,
         agent_bus: Optional[SmartAgentBus] = None,
         container: Optional[DependencyContainer] = None
-    ) -> ReActAgent:
+    ) -> ToolCallingAgent[SolutionDesignOutput]: # Updated return type
         """
         Create and configure the Architect-Zero agent.
 
@@ -135,13 +135,14 @@ class ArchitectZeroAgentInitializer:
         )
 
         # --- Create the Architect-Zero Agent ---
-        agent = ReActAgent(
+        agent = ToolCallingAgent[SolutionDesignOutput]( # Updated agent type
             llm=chat_model,
-            tools=architect_tools, # Pass only the architect's specific tools
+            tools=architect_tools,
             memory=TokenMemory(chat_model),
-            meta=meta
+            meta=meta,
+            output_schema=SolutionDesignOutput # Assuming ToolCallingAgent takes output_schema
         )
-        logger.info("ArchitectZero ReActAgent created.")
+        logger.info("ArchitectZero ToolCallingAgent created.")
 
         # Add tools dictionary for direct access (optional, mapping only its own tools)
         tools_dict = {
@@ -212,6 +213,16 @@ class ArchitectZeroAgentInitializer:
 # --- Tool Implementations for ArchitectZero ---
 # (AnalyzeRequirementsTool, DesignSolutionTool, ComponentSpecificationTool remain the same as before)
 # ... (Keep the existing implementations of these three tools) ...
+
+class SolutionDesignOutput(BaseModel):
+    """Output schema for ArchitectZero's designed solution."""
+    status: str = Field(description="Status of the design process, e.g., 'success', 'partial', 'failure'.")
+    solution_overview: str = Field(description="High-level overview of the proposed solution.")
+    designed_workflow: Optional[List[Dict[str, Any]]] = Field(None, description="The designed sequence of agent/tool steps.")
+    component_specifications: Optional[Dict[str, Any]] = Field(None, description="Specifications for any new or evolved components.")
+    recommendations: Optional[List[str]] = Field(None, description="Recommendations for implementation or next steps.")
+    error_message: Optional[str] = Field(None, description="Error message if the design process failed.")
+
 
 class AnalyzeRequirementsTool(Tool[AnalyzeRequirementsInput, None, StringToolOutput]):
     """Tool for analyzing task requirements and identifying needed components."""
@@ -428,7 +439,7 @@ async def create_architect_zero(
     smart_library: Optional[SmartLibrary] = None,
     agent_bus: Optional[SmartAgentBus] = None,
     container: Optional[DependencyContainer] = None
-) -> ReActAgent:
+) -> ToolCallingAgent[SolutionDesignOutput]: # Updated return type
     """
     Factory function to create and configure the Architect-Zero agent.
     """
