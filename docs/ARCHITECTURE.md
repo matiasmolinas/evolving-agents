@@ -4,7 +4,7 @@ This document details the architectural design of the Evolving Agents Toolkit (E
 
 ## 1. Introduction & Philosophy
 
-The Evolving Agents Toolkit aims to provide a robust framework for building *ecosystems* of autonomous AI agents. The core philosophy is **agent-centric**: the system itself is managed and orchestrated by specialized agents (like the `SystemAgent`), which leverage tools to interact with underlying services and manage other components. All primary data, including component metadata, embeddings, agent registrations, operational logs, LLM caches, intent plans, and **detailed agent experiences (Smart Memory)**, is now persisted in **MongoDB**.
+The Evolving Agents Toolkit aims to provide a robust framework for building *ecosystems* of autonomous AI agents. The core philosophy is **agent-centric**: the system itself is managed and orchestrated by specialized agents (like the `SystemAgent`), which leverage tools to interact with underlying services and manage other components. All primary data, including component metadata, embeddings, agent registrations, operational logs, intent plans, and **detailed agent experiences (Smart Memory)**, is persisted in **MongoDB**. LLM and embedding call caching is handled by the underlying `beeai-framework`'s native caching system.
 
 Key goals of the architecture include:
 
@@ -14,39 +14,41 @@ Key goals of the architecture include:
 *   **Decoupled Communication:** Facilitate capability-based communication via the `SmartAgentBus`.
 *   **Governance & Safety:** Embed safety through `Firmware` and an optional human-in-the-loop review process.
 *   **Deep Contextual Understanding:** Provide agents with rich, task-relevant context dynamically constructed from `SmartLibrary`, current task data, and **historical experiences from Smart Memory**.
-*   **Orchestration:** Enable complex goal achievement through `SystemAgent`-driven workflow generation and execution.
+*   **Orchestration:** Enable complex goal achievement through `SystemAgent`-driven strategies, potentially leveraging `beeai-framework`'s `AgentWorkflow`.
 *   **Cumulative Learning & Self-Improvement:** The **Smart Memory ecosystem** is central to enabling agents, particularly `SystemAgent`, to learn from past workflows, decisions, and outcomes. This learning directly informs better problem-solving, more effective component evolution, and potentially the evolution of the system's own operational strategies.
 *   **Unified & Scalable Backend:** Utilize MongoDB for all persistent data.
 
 ---
 ```mermaid
 graph TD
-    User["User / External System"] -- High-Level Goal --> SA[("SystemAgent\n(Orchestrator, Learner)")];;;agent
+    User["User / External System"] -- High-Level Goal --> SA[("SystemAgent\n(Orchestrator, Learner, e.g., ToolCallingAgent)")];;;agent
 
     subgraph "Core Infrastructure & Services (MongoDB Backend)"
         direction LR
         SL["Smart Library\n(Components, Versions)"];;;service
         SM["Smart Memory\n(Agent Experiences - `eat_agent_experiences`)"];;;service
         SB["Smart Agent Bus\n(Discovery, Routing - `eat_agent_registry`, `eat_agent_bus_logs`)"];;;service
-        LLMS["LLM Service\n(Reasoning, Embeddings, Generation - Cache: `eat_llm_cache`)"];;;service
+        LLMS["LLM Service\n(Reasoning via BeeAI ChatModel, Embeddings via BeeAI EmbeddingModel)\n(Native BeeAI Caching)"];;;service
         FW["Firmware\n(Governance Rules)"];;;service
         MongoDB[("MongoDB Atlas / Server\n(Primary Data Store, Vector Search)")]:::infra
     end
     
     subgraph "Key Agents & Factories"
         direction LR
-        MMA[("MemoryManagerAgent\n(Manages Smart Memory via Bus)")];;;agent
+        MMA[("MemoryManagerAgent\n(Manages Smart Memory via Bus, e.g., ReActAgent)")];;;agent
         AgentF["Agent Factory"];;;infra
         ToolF["Tool Factory"];;;infra
-        ArchZ["ArchitectZero\n(Optional: Solution Design)"];;;agent
+        ArchZ["ArchitectZero\n(Optional: Solution Design, e.g., ReActAgent or ToolCallingAgent)"];;;agent
         EvoS["EvolutionStrategistAgent\n(Optional: Proactive Evolution Suggestions)"];;;agent
     end
 
     %% SystemAgent Core Interactions
-    SA -- Uses --> ToolsSystem["SystemAgent Tools\n(Search, Create, Evolve, Request, Workflow, IntentReview, ContextBuilder, ExperienceRecorder...)"];;;tool
+    SA -- Uses --> ToolsSystem["SystemAgent Tools\n(Search, Create, Evolve, Request, IntentReview, ContextBuilder, ExperienceRecorder...)"];;;tool
     SA -- Uses --> LLMS
     SA -- Relies on --> AgentF
     SA -- Relies on --> ToolF
+    SA -- May Orchestrate --> BeeAIWorkflow[("BeeAI AgentWorkflow")];;;infra
+
 
     %% Smart Memory Interactions
     ToolsSystem -- Records/Retrieves Experiences via Bus --> MMA
@@ -107,11 +109,11 @@ The toolkit is composed of several key interacting components, all leveraging Mo
 
 ### 2.1. SystemAgent
 
-The central orchestrator, a `beeai_framework.agents.react.ReActAgent`.
+The central orchestrator, typically a `beeai_framework.agents.tool_calling.ToolCallingAgent` (or a similar advanced BeeAI agent type).
 *   **Role:**
     *   Manages the lifecycle of components (agents, tools) by searching the `SmartLibrary`, creating new ones (using `CreateComponentTool`), or evolving existing ones (using `EvolveComponentTool`).
     *   Facilitates communication and task delegation via the `SmartAgentBus` (using `RequestAgentTool`, `DiscoverAgentTool`).
-    *   Handles complex, multi-step task execution, often by generating and processing internal workflows (using `GenerateWorkflowTool`, `ProcessWorkflowTool`).
+    *   Handles complex, multi-step task execution, potentially by designing and executing sequences of operations or by leveraging `beeai_framework.workflows.agent.AgentWorkflow` for more structured orchestration.
     *   **Crucially, actively utilizes the Smart Memory ecosystem for enhanced decision-making:**
         *   Uses `ContextBuilderTool` before significant planning or component selection to gather relevant past experiences and message summaries from the `MemoryManagerAgent`. This provides deep, historical context.
         *   Uses `ExperienceRecorderTool` after completing tasks or workflows to record significant outcomes, decisions, and learnings into Smart Memory, fostering continuous improvement for itself and the system.
@@ -120,24 +122,24 @@ The central orchestrator, a `beeai_framework.agents.react.ReActAgent`.
     *   **SmartLibrary Tools:** `SearchComponentTool`, `CreateComponentTool`, `EvolveComponentTool`.
     *   **SmartContext & Memory Tools:** `TaskContextTool` (for T_raz generation for search queries), `ContextBuilderTool` (constructs rich context using Smart Memory and SmartLibrary), `ExperienceRecorderTool` (records outcomes to Smart Memory).
     *   **AgentBus Tools:** `RegisterAgentTool`, `RequestAgentTool`, `DiscoverAgentTool`.
-    *   **Workflow Tools:** `GenerateWorkflowTool`, `ProcessWorkflowTool`.
     *   **Intent Review Tools (Optional):** `WorkflowDesignReviewTool`, `ComponentSelectionReviewTool`, `ApprovePlanTool`.
+    *   *(Note: Previous EAT-specific workflow tools like `GenerateWorkflowTool` and `ProcessWorkflowTool` are superseded by BeeAI's native `AgentWorkflow` capabilities or direct orchestration by `SystemAgent`.)*
 
 ### 2.2. ArchitectZero Agent
 
-A specialized `ReActAgent` for designing solutions, typically invoked by `SystemAgent` via the `SmartAgentBus`.
-*   **Role:** Analyzes complex requirements, queries `SmartLibrary` and potentially `SmartMemory` (if equipped with tools or via SystemAgent proxy) for existing patterns or components, and designs multi-component solutions.
-*   **Output:** A structured solution design (e.g., JSON) that `SystemAgent` can use as a blueprint for workflow generation or component creation.
+A specialized agent (e.g., `ReActAgent` or `ToolCallingAgent`) for designing solutions, typically invoked by `SystemAgent` via the `SmartAgentBus`.
+*   **Role:** Analyzes complex requirements, queries `SmartLibrary` and potentially `SmartMemory` (if equipped with tools or via SystemAgent proxy) for existing patterns or components, and designs multi-component solutions. This design might take the form of a plan for `SystemAgent` or a structure for a `beeai_framework.workflows.agent.AgentWorkflow`.
+*   **Output:** A structured solution design (e.g., JSON, or a sequence of steps for an `AgentWorkflow`) that `SystemAgent` can use as a blueprint.
 
 ### 2.3 Smart Memory Ecosystem
 
 This is a critical addition for enabling advanced learning and autonomous evolution.
 *   **`MemoryManagerAgent`**:
-    *   **Role**: A `ReActAgent` acting as the central orchestrator for the storage and retrieval of long-term memories (experiences). Registered on the `SmartAgentBus` (e.g., `memory_manager_agent_default_id`). It exposes a general `process_task` capability, allowing other agents (primarily `SystemAgent` via its tools) to send natural language requests for memory operations (e.g., "store this experience: {...}", "find experiences related to: 'invoice processing errors'").
+    *   **Role**: A `ReActAgent` (or potentially another BeeAI agent type) acting as the central orchestrator for the storage and retrieval of long-term memories (experiences). Registered on the `SmartAgentBus` (e.g., `memory_manager_agent_default_id`). It exposes a general `process_task` capability, allowing other agents (primarily `SystemAgent` via its tools) to send natural language requests for memory operations (e.g., "store this experience: {...}", "find experiences related to: 'invoice processing errors'").
     *   **Internal Tools**:
-        *   `MongoExperienceStoreTool`: Handles CRUD operations for experiences in the `eat_agent_experiences` MongoDB collection, including generating embeddings for searchable text fields within an experience.
+        *   `MongoExperienceStoreTool`: Handles CRUD operations for experiences in the `eat_agent_experiences` MongoDB collection, including generating embeddings for searchable text fields within an experience (using `LLMService`'s `EmbeddingModel`).
         *   `SemanticExperienceSearchTool`: Performs semantic (vector) searches over stored experiences in `eat_agent_experiences` based on natural language queries.
-        *   `MessageSummarizationTool`: Uses an LLM to summarize message histories relevant to a specific goal, often requested by `ContextBuilderTool`.
+        *   `MessageSummarizationTool`: Uses an LLM (via `LLMService`'s `ChatModel`) to summarize message histories relevant to a specific goal, often requested by `ContextBuilderTool`.
 *   **`ContextBuilderTool` (Tool for `SystemAgent`)**:
     *   **Purpose**: Dynamically constructs an optimized `SmartContext` instance for `SystemAgent` to use for a specific sub-task.
     *   **Functionality**: Invoked by `SystemAgent`. It uses `RequestAgentTool` to query the `MemoryManagerAgent` (to retrieve relevant past experiences and message summaries) and also directly queries `SmartLibrary` for relevant components. It assembles this information into a focused `SmartContext`.
@@ -153,15 +155,15 @@ This is a critical addition for enabling advanced learning and autonomous evolut
 
 Persistent storage and discovery for reusable components (agents, tools, firmware).
 *   **MongoDB Collection:** `eat_components` (or configurable name).
-*   **Stores:** Each component as a MongoDB document including its `id`, `name`, `record_type`, `domain`, `description`, `code_snippet`, `version`, `tags`, `metadata` (like `applicability_text`), and crucially, its `content_embedding` (E_orig) and `applicability_embedding` (E_raz).
+*   **Stores:** Each component as a MongoDB document including its `id`, `name`, `record_type`, `domain`, `description`, `code_snippet`, `version`, `tags`, `metadata` (like `applicability_text`), and crucially, its `content_embedding` (E_orig) and `applicability_embedding` (E_raz) generated via `LLMService`'s `EmbeddingModel`.
 *   **Discovery (Dual Embedding on MongoDB):**
     *   Uses **MongoDB Atlas Vector Search** (or equivalent) on the `content_embedding` and `applicability_embedding` fields within the `eat_components` collection.
     *   Supports **Task-Aware Semantic Search**: Primarily queries against `applicability_embedding` using task context, then refines using `content_embedding` similarity.
 *   **Versioning & Evolution:** Tracks component versions and parentage within MongoDB documents.
 *   **Interface:** Methods like `create_record`, `find_record_by_id`, `semantic_search`, `evolve_record` now perform CRUD and search operations against MongoDB.
 *   **Indexing Pipeline:** When records are created/updated:
-    *   `T_orig` (functional text from `_get_record_vector_text`) is embedded to get `content_embedding`.
-    *   `T_raz` (applicability text from `generate_applicability_text` via `LLMService`) is generated and embedded to get `applicability_embedding`.
+    *   `T_orig` (functional text from `_get_record_vector_text`) is embedded using `LLMService.embedding_model` to get `content_embedding`.
+    *   `T_raz` (applicability text from `generate_applicability_text` via `LLMService.chat_model`) is generated and then embedded using `LLMService.embedding_model` to get `applicability_embedding`.
     *   Both embeddings and `T_raz` (in metadata) are stored directly in the component's MongoDB document.
 
 ```mermaid
@@ -171,7 +173,7 @@ graph TD
     MongoDBLib -- Vector Indexes on --> VIdxContent["Content Embedding (E_orig)"]
     MongoDBLib -- Vector Indexes on --> VIdxApp["Applicability Embedding (E_raz)"]
 
-    SLI -->|Uses| LLMSLib["LLM Service (Embeddings & T_raz Generation)"]
+    SLI -->|Uses| LLMSLib["LLM Service (BeeAI EmbeddingModel for Embeddings & BeeAI ChatModel for T_raz Generation)"]
 
     subgraph "Storage & Search (MongoDB)"
         direction LR
@@ -204,7 +206,7 @@ Manages inter-agent communication and capability discovery.
 graph TD
     SABI["AgentBus Interface"] -->|Manages| Reg["Agent Registry (MongoDB 'eat_agent_registry')"]
     SABI -->|Logs to| ExecLogs["Execution Logs (MongoDB 'eat_agent_bus_logs')"]
-    SABI -->|Uses for Discovery| LLMSBus["LLM Service (for embedding query if vector searching descriptions)"]
+    SABI -->|Uses for Discovery| LLMSBus["LLM Service (BeeAI EmbeddingModel for embedding query if vector searching descriptions)"]
     SABI -->|Monitors| CB["Circuit Breakers (File-based)"]
 
     Reg -- Optional Vector Index on --> AgentDescEmbeds["Agent Description Embeddings"]
@@ -233,7 +235,7 @@ Data structure for passing task-relevant information between components, especia
 
 ### 2.7. EvolutionStrategistAgent (Optional)
 
-*   **Role:** A specialized agent (potentially a `ReActAgent`) designed to proactively analyze system performance, component experiences, and library structure to identify and suggest opportunities for evolution. It acts as a higher-level "improvement engine."
+*   **Role:** A specialized agent (potentially a `ReActAgent` or `ToolCallingAgent`) designed to proactively analyze system performance, component experiences, and library structure to identify and suggest opportunities for evolution. It acts as a higher-level "improvement engine."
 *   **Data Sources for Analysis:**
     *   `ComponentExperienceTracker`: For quantitative performance metrics (success/failure rates, execution times, error frequencies) derived from `SmartAgentBus` logs or a dedicated metrics store.
     *   `SmartMemory` (via `MemoryManagerAgent`): To analyze patterns in successful/failed experiences, understanding *why* components perform as they do in specific contexts. This provides qualitative insights.
@@ -247,7 +249,7 @@ Data structure for passing task-relevant information between components, especia
 
 ### 2.8. Providers & Agent Factory
 
-*   **`Providers` (e.g., `BeeAIProvider`, `OpenAIAgentsProvider`):** Abstract the specifics of interacting with different underlying AI agent frameworks. They handle the creation and execution of agents built with those frameworks.
+*   **`Providers` (e.g., `BeeAIProvider`, `OpenAIAgentsProvider`):** Abstract the specifics of interacting with different underlying AI agent frameworks. They handle the creation and execution of agents built with those frameworks, using BeeAI's `ChatModel`, `EmbeddingModel`, tools, and agent types (like `ToolCallingAgent`) where appropriate.
 *   **`AgentFactory`:** Uses the `ProviderRegistry` to select the appropriate `FrameworkProvider` based on a component's specified framework (e.g., "beeai", "openai-agents"). It then delegates agent creation to that provider. It can also instantiate tools directly if they are simple Python classes.
 
 ### 2.9. Dependency Container
@@ -255,13 +257,18 @@ Data structure for passing task-relevant information between components, especia
 *   **Role:** A simple Inversion of Control (IoC) container (`DependencyContainer`) manages the instantiation and sharing of core singleton services like `MongoDBClient`, `LLMService`, `SmartLibrary`, `SmartAgentBus`, and key agents like `SystemAgent`, `MemoryManagerAgent`.
 *   **Benefits:** Decouples components, simplifies initialization, and makes dependencies explicit. Components can request their dependencies from the container rather than instantiating them directly.
 
-### 2.10. LLM Service (MongoDB Cache)
+### 2.10. LLM Service (Leveraging BeeAI Native Capabilities)
 
-*   **Role:** Provides a unified interface for interacting with Large Language Models (LLMs) for tasks like text generation, code generation, and text embedding.
-*   **Frameworks:** Utilizes `LiteLLM` (via `beeai-framework`) for broad compatibility with various LLM providers (OpenAI, Anthropic, Ollama, etc.).
-*   **Caching (`LLMCache` on MongoDB):**
-    *   LLM completions and embedding results are cached to reduce redundant API calls, save costs, and speed up repeated operations.
-    *   The cache (`eat_llm_cache` collection in MongoDB) uses Time-To-Live (TTL) indexes for automatic expiration of old entries.
+*   **Role:** Provides a unified interface for EAT components to access Large Language Models (LLMs) and embedding functionalities. It now primarily acts as a wrapper or direct user of `beeai-framework`'s native model and caching capabilities.
+*   **Models:**
+    *   **Chat Models:** Instantiated via `beeai_framework.backend.ChatModel.from_name("provider:model_name", cache=...)`. EAT's `LLMService.generate()` method calls `self.chat_model.create()`.
+    *   **Embedding Models:** Instantiated via `beeai_framework.backend.EmbeddingModel.from_name("provider:model_name", cache=...)`. EAT's `LLMService.embed()` and `embed_batch()` methods call `self.embedding_model.create()`.
+*   **Frameworks:** Leverages `LiteLLM` through `beeai-framework` for broad compatibility with various LLM providers (OpenAI, Anthropic, Ollama, etc.).
+*   **Caching (Native BeeAI Caching):**
+    *   EAT's custom `LLMCache` (and the `eat_llm_cache` MongoDB collection) is **deprecated and removed**.
+    *   Caching for LLM completions and embedding results is handled by `beeai-framework`'s native, pluggable caching system (e.g., `UnconstrainedCache`, `SlidingCache`).
+    *   The chosen cache instance is passed to `ChatModel.from_name()` and `EmbeddingModel.from_name()` during their instantiation in `LLMService`. This automatically enables caching for all subsequent `create()` calls on these model instances.
+    *   This approach simplifies EAT's codebase and leverages the more robust and flexible caching provided by the BeeAI framework.
 
 ### 2.11. Firmware
 
@@ -275,18 +282,18 @@ Data structure for passing task-relevant information between components, especia
 *   **Functionality:**
     *   `OpenAIToolAdapter`: Converts EAT-compatible tools (e.g., BeeAI tools, dynamic tools) into a format usable by OpenAI Agents.
     *   `OpenAIGuardrailsAdapter`: Converts EAT's `Firmware` concepts into input/output guardrails compatible with the OpenAI Agents SDK.
-*   **Importance:** They enable interoperability and allow EAT to leverage components and functionalities from various ecosystems.
+*   **Importance:** They enable interoperability and allow EAT to leverage components and functionalities from various ecosystems. The migration to newer BeeAI versions might reduce the need for some adapters if BeeAI offers more direct integrations (e.g., improved OpenAI SDK support).
 
 ### 2.13. Intent Review System (MongoDB Backend)
 
-*   **Role:** Provides an optional human-in-the-loop (HITL) mechanism for reviewing and approving actions قبل execution, enhancing safety and control.
+*   **Role:** Provides an optional human-in-the-loop (HITL) mechanism for reviewing and approving actions before execution, enhancing safety and control.
 *   **`IntentPlan` Storage (MongoDB Collection):** `eat_intent_plans`.
-    *   When intent review is enabled for the "intents" level, `ProcessWorkflowTool` generates `IntentPlan` objects (detailing each step, its parameters, and justification).
+    *   When intent review is enabled for the "intents" level, and if a structured plan is generated (e.g., by `SystemAgent` or `ArchitectZero`, potentially before constructing an `AgentWorkflow`), this plan can be stored as an `IntentPlan` object.
     *   These `IntentPlan` objects are serialized and stored as documents in this MongoDB collection.
 *   **Review Process:**
     *   The `IntentReviewAgent` (or a human user directly) uses tools like `ApprovePlanTool`.
     *   `ApprovePlanTool` loads the `IntentPlan` from MongoDB by its `plan_id`, facilitates the review, and then updates the plan's status (e.g., "APPROVED", "REJECTED") and any reviewer comments directly in its MongoDB document.
-*   **Other Review Tools:** `WorkflowDesignReviewTool` and `ComponentSelectionReviewTool` allow for earlier-stage reviews, though their outputs might not always be persisted as formal `IntentPlan` objects unless they feed into one.
+*   **Other Review Tools:** `WorkflowDesignReviewTool` and `ComponentSelectionReviewTool` allow for earlier-stage reviews of proposed agent/tool selections or workflow structures (including `AgentWorkflow` designs). Their outputs might not always be persisted as formal `IntentPlan` objects unless they feed into one.
 
 ## 3. Key Architectural Patterns & Flows
 
@@ -319,10 +326,10 @@ The `SmartAgentBus` is the central nervous system for the EAT ecosystem, facilit
     *   If multiple providers are found, the bus might employ a selection strategy (e.g., round-robin, load-based, highest confidence – currently simpler, often takes the first suitable).
 *   **Execution:**
     *   The bus routes the request `content` to the selected Provider agent/tool instance.
-    *   The Provider executes the capability using the provided `content`.
-    *   The result of the execution is returned to the `SmartAgentBus`.
+    *   The Provider executes the capability using the provided `content`. This now involves the BeeAI framework's standard agent execution (e.g., `agent.run(prompt, context)` which returns a `Run` object).
+    *   The result of the execution (extracted from the `Run` object) is returned to the `SmartAgentBus`.
 *   **Response Delivery:** The `SmartAgentBus` relays the result back to the original Requester.
-*   **Logging:** All significant Data Bus operations (requests, which agent handled it, success/failure, duration) are logged to the `eat_agent_bus_logs` MongoDB collection. This provides an audit trail and data for `ComponentExperienceTracker`.
+*   **Logging:** All significant Data Bus operations (requests, which agent handled it, success/failure, duration) are logged to the `eat_agent_bus_logs` MongoDB collection. This provides an audit trail and data for `ComponentExperienceTracker`. Observability can be further enhanced by subscribing to BeeAI's native event stream (`Run.on()`).
 
 **C. Key Characteristics:**
 
@@ -340,7 +347,7 @@ The core logic for how `SmartLibrary` uses dual embeddings remains, but the `tas
 
 1.  **Query Formulation:** `SystemAgent` (or another agent) has a `query` (what it's looking for) and a `task_description` (the current task it's trying to solve).
 2.  **Context Enrichment (via `ContextBuilderTool`):** Often, before searching the library, `SystemAgent` will use `ContextBuilderTool`. This tool queries `SmartMemory` (via `MemoryManagerAgent`) for relevant past experiences and message summaries related to the `task_description`. It also queries `SmartLibrary` for an initial set of relevant components. The output of `ContextBuilderTool` provides an *enriched task context*.
-3.  **Embedding for Search:** `LLMService` embeds the original `query` (for E_orig) and the (potentially enriched) `task_description` (for E_raz).
+3.  **Embedding for Search:** `LLMService` (using BeeAI's `EmbeddingModel`) embeds the original `query` (for E_orig) and the (potentially enriched) `task_description` (for E_raz).
 4.  **Applicability Search (MongoDB `$vectorSearch`):** `SmartLibrary.semantic_search` uses the `task_description` embedding (E_raz_query) to query the `applicability_embedding` field in the `eat_components` MongoDB collection. This prioritizes components whose purpose aligns with the current task.
 5.  **Refinement & Scoring:**
     *   `SmartLibrary` retrieves candidate component documents from MongoDB, which include their `content_embedding` (E_orig).
@@ -355,7 +362,7 @@ sequenceDiagram
     participant MMA as MemoryManagerAgent
     participant SL as SmartLibrary (MongoDB backed)
     participant MongoDB as MongoDB (eat_components, eat_agent_experiences)
-    participant LLM_Emb as Embedding Service
+    participant LLMSvc as LLMService (BeeAI EmbeddingModel)
 
     Agent->>Agent: Formulate Initial Task Query / Description
     Agent->>CtxBuilder: BuildContext(Task Description)
@@ -371,8 +378,8 @@ sequenceDiagram
     
     Note over Agent: Agent now has richer context for its next action.
     Agent->>Agent: Refine Query & Task Context (using Enriched SmartContext results)
-    Agent->>LLM_Emb: Embed Query (E_orig_query), Embed Task Context (E_raz_query)
-    LLM_Emb-->>Agent: Query Embeddings
+    Agent->>LLMSvc: Embed Query (E_orig_query), Embed Task Context (E_raz_query)
+    LLMSvc-->>Agent: Query Embeddings
 
     Agent->>SL: semantic_search(Refined Query, Refined Task Context, ...)
     SL->>MongoDB: $vectorSearch on 'applicability_embedding' with E_raz_query
@@ -392,16 +399,16 @@ This is a **central flow** enabled by the Smart Memory ecosystem:
     *   `MemoryManagerAgent` uses `MessageSummarizationTool` to summarize relevant recent message history (if provided to `ContextBuilderTool`).
     *   `ContextBuilderTool` also queries `SmartLibrary` (MongoDB `eat_components`) for potentially relevant existing components.
     *   `ContextBuilderTool` returns a structured dataset containing these findings to `SystemAgent`.
-3.  **Informed Planning & Action:** `SystemAgent` incorporates this rich context (past successes/failures, relevant components, message summaries) into its planning:
+3.  **Informed Planning & Action:** `SystemAgent` (e.g., a `ToolCallingAgent`) incorporates this rich context into its planning and execution:
     *   More accurate component selection (via `SearchComponentTool` now using better task context, or by directly choosing from `ContextBuilderTool`'s suggestions).
-    *   Better workflow design (via `GenerateWorkflowTool`).
+    *   Better design of multi-step processes or `AgentWorkflow` configurations.
     *   More targeted parameters for tool/agent execution.
-4.  **Task Execution:** `SystemAgent` orchestrates the execution of the planned steps.
+4.  **Task Execution:** `SystemAgent` orchestrates the execution of the planned steps, potentially by invoking other agents via the `SmartAgentBus` or executing an `AgentWorkflow`.
 5.  **Experience Recording:** After a significant sub-task or the overall task is completed (or fails), `SystemAgent` uses `ExperienceRecorderTool`.
     *   `ExperienceRecorderTool` structures the key details of the just-completed experience (goal, input summary, components used, decisions, output summary, outcome, reasoning snippets).
     *   It sends this structured experience to `MemoryManagerAgent` (via `SmartAgentBus`).
-    *   `MemoryManagerAgent` uses `MongoExperienceStoreTool` to save the experience (including generating its embeddings) into the `eat_agent_experiences` collection in MongoDB.
-6.  **Learning Loop Closure:** The newly recorded experience is now available for future `ContextBuilderTool` queries, allowing the system to learn and improve over time.
+    *   `MemoryManagerAgent` uses `MongoExperienceStoreTool` to save the experience (including generating its embeddings via `LLMService`) into the `eat_agent_experiences` collection in MongoDB.
+6.  **Learning Loop Closure:** The newly recorded experience is now available for future `ContextBuilderTool` queries, allowing the system to learn and improve over time. Observability can be enhanced by subscribing to BeeAI's native event stream (`Run.on()`) using `ComponentExperienceTracker`.
 
 ### 3.4. Informed Component Evolution
 
@@ -413,65 +420,105 @@ Smart Memory plays a vital role in making component evolution more targeted and 
 2.  **Contextual Evolution Prompting:** When `SystemAgent` decides to evolve a component using `EvolveComponentTool`:
     *   It first uses `ContextBuilderTool` to gather context related to the component-to-be-evolved and the problem it's failing to solve (or the new capability needed).
     *   This context (e.g., "Component X failed 3 times on task Y when input was Z, resulting in error W. Component A handles similar inputs P successfully.") is used to formulate a much more specific and informed "changes" description for `EvolveComponentTool`.
-3.  **LLM-Driven Evolution:** `EvolveComponentTool` uses the LLM to generate new code based on the parent component's code and this rich, contextual "changes" description.
+3.  **LLM-Driven Evolution:** `EvolveComponentTool` uses the LLM (via `LLMService`) to generate new code based on the parent component's code and this rich, contextual "changes" description.
 4.  **New Version in Library:** The evolved component is saved as a new version in `SmartLibrary`.
 5.  **Future Use:** This new, contextually-evolved component is now available for future tasks and will be discoverable via `SmartLibrary` searches, further improving system performance.
 
-### 3.5. Workflow Generation & Execution
-The `SystemAgent` uses `GenerateWorkflowTool` to create a YAML definition of steps based on a task or a design from `ArchitectZero`. This generation can be informed by context retrieved via `ContextBuilderTool`. The `ProcessWorkflowTool` then parses this YAML, substitutes parameters, and either:
-*   Converts it into an `IntentPlan` (if intent review is enabled for 'intents'), which is saved to MongoDB (`eat_intent_plans`) for review.
-*   Returns a list of processed steps for direct execution if intent review is not active for that stage.
+### 3.5. Workflow Orchestration with BeeAI `AgentWorkflow`
+
+With the migration to a newer `beeai-framework`, EAT's custom YAML-based workflow engine (`GenerateWorkflowTool`, `ProcessWorkflowTool`) is **deprecated and replaced** by leveraging BeeAI's native `AgentWorkflow` or direct orchestration by `SystemAgent` (which is often a `ToolCallingAgent` capable of multi-step reasoning).
+
+*   **Design Phase:**
+    *   `ArchitectZero` or `SystemAgent` can design a sequence of tasks or steps required to achieve a complex goal. This design can be informed by `SmartLibrary` searches and `SmartMemory` context.
+    *   The output of this design phase is a structured plan outlining the agents/tools to be used and their roles or specific prompts.
+*   **Execution with `AgentWorkflow`:**
+    *   The orchestrating script (e.g., an example script, or `SystemAgent` itself if it's managing the workflow) can dynamically construct a `beeai_framework.workflows.agent.AgentWorkflow` instance.
+    *   Specialized agents (which could be instances of `ToolCallingAgent`, `ReActAgent`, or custom BeeAI agents) are added to this workflow, each configured for a specific step in the designed plan.
+        ```python
+        # Example:
+        # from beeai_framework.workflows.agent import AgentWorkflow, AgentWorkflowInput
+        # from evolving_agents.agents.agent_factory import AgentFactory # To get agent instances
+        #
+        # workflow = AgentWorkflow(name="InvoiceProcessing")
+        #
+        # ocr_agent = AgentFactory.create_agent("OCRSpecialistAgentComponentID")
+        # extractor_agent = AgentFactory.create_agent("InvoiceDataExtractorComponentID")
+        #
+        # workflow.add_agent(agent=ocr_agent, name="InvoiceReader", role="Extracts text from invoice images.")
+        # workflow.add_agent(agent=extractor_agent, name="DataExtractor", role="Extracts structured data from text.")
+        # # ... add more agents/steps
+        #
+        # result = await workflow.run(inputs=[
+        #     AgentWorkflowInput(prompt="Process attached invoice image.", agent="InvoiceReader"),
+        #     AgentWorkflowInput(prompt="Extract key details from the OCR text.", agent="DataExtractor"),
+        #     # ... other inputs mapping to workflow steps
+        # ])
+        ```
+*   **Direct Orchestration by `SystemAgent`:**
+    *   If `SystemAgent` is a `ToolCallingAgent`, it can manage multi-step processes by reasoning about the sequence of tools to call or sub-prompts to issue to itself or other agents via the `SmartAgentBus`. This provides flexibility for less rigidly structured workflows.
+*   **Benefits:**
+    *   Leverages a robust, maintained workflow engine from the core framework.
+    *   Simplifies EAT's codebase by removing custom workflow logic.
+    *   Potentially benefits from `AgentWorkflow`'s built-in error handling, state management, and observability features.
+*   **Intent Review:** If intent review is needed for a workflow designed to use `AgentWorkflow`, the review would focus on the proposed sequence of agents, their configurations, and roles within the workflow *before* the `AgentWorkflow` is constructed and run. The `WorkflowDesignReviewTool` can be adapted for this.
 
 ### 3.6. Dependency Injection & Initialization
 The `DependencyContainer` is used at application startup to instantiate and wire together core services (`MongoDBClient`, `LLMService`, `SmartLibrary`, `SmartAgentBus`, `Firmware`) and key agents (`SystemAgent`, `ArchitectZero`, `MemoryManagerAgent`, `IntentReviewAgent`). This promotes loose coupling and centralized management of shared resources. Core components like `SmartLibrary` and `SmartAgentBus` have `initialize()` methods that might perform further setup, like loading data from MongoDB or syncing registries, once all their dependencies are available.
 
 ### 3.7. Intent Review / Human-in-the-Loop Flow (MongoDB Backend)
 
-1.  **Design Review (Optional):** `SystemAgent` can use `WorkflowDesignReviewTool` to get human/AI feedback on a high-level solution design (e.g., from `ArchitectZero`) before detailed planning.
-2.  **Component Selection Review (Optional):** `SystemAgent` can use `ComponentSelectionReviewTool` after a `SearchComponentTool` run to get human/AI validation of the chosen components.
-3.  **Intent Plan Generation & Persistence:** If intent review for the 'intents' level is active, `ProcessWorkflowTool` (used by `SystemAgent`) generates a detailed `IntentPlan` object. This object, containing each step, its parameters, and justification, is serialized and saved as a document in the `eat_intent_plans` MongoDB collection. The `plan_id` is returned.
+1.  **Design Review (Optional):** `SystemAgent` can use `WorkflowDesignReviewTool` to get human/AI feedback on a high-level solution design (e.g., from `ArchitectZero`, or a proposed `AgentWorkflow` structure) before detailed planning or execution.
+2.  **Component Selection Review (Optional):** `SystemAgent` can use `ComponentSelectionReviewTool` after a `SearchComponentTool` run to get human/AI validation of the chosen components for a task or workflow step.
+3.  **Intent Plan Generation & Persistence:** If a formal plan needs review before execution (especially for complex orchestrations not fully managed by a single `AgentWorkflow` run, or for specific critical steps), `SystemAgent` can still generate a detailed `IntentPlan` object. This object, containing each step, its parameters, and justification, is serialized and saved as a document in the `eat_intent_plans` MongoDB collection. The `plan_id` is returned.
 4.  **Intent Plan Review (Core):** `SystemAgent` (or a human operator) then uses `ApprovePlanTool`, providing the `plan_id`. `ApprovePlanTool` loads the `IntentPlan` from MongoDB, facilitates interactive or AI-assisted review, and updates the plan's status (e.g., to `APPROVED` or `REJECTED`) and reviewer comments directly in its MongoDB document.
-5.  **Execution Post-Approval:** If the `IntentPlan` is `APPROVED`, `SystemAgent` would typically load this approved plan (or its constituent intents) from MongoDB to guide the safe execution of the task.
+5.  **Execution Post-Approval:** If the `IntentPlan` is `APPROVED`, `SystemAgent` would typically load this approved plan (or its constituent intents) from MongoDB to guide the safe execution of the task, which might involve running one or more `AgentWorkflow` instances or directly invoking agents/tools.
 
 ```mermaid
 sequenceDiagram
     participant SysA as SystemAgent
-    participant PWT as ProcessWorkflowTool
+    participant DesignPhase as Design/Planning (SystemAgent/ArchitectZero)
     participant MongoDBReview as MongoDB (eat_intent_plans)
     participant Reviewer as IntentReviewAgent / Human
     participant APT as ApprovePlanTool
+    participant Executor as Execution Logic (AgentWorkflow / Direct Calls)
 
-    Note over SysA: Task requires workflow
-    SysA->>PWT: ProcessWorkflow(workflowYAML, objective, ...)
-    Note over PWT: Intent Review Enabled for 'intents'
-    PWT->>PWT: Parse YAML, Substitute Params
-    PWT->>PWT: Validate Steps & Generate IntentPlan Object
-    PWT->>MongoDBReview: Save/Upsert IntentPlan Object (as document)
-    MongoDBReview-->>PWT: Confirm Save (e.g., plan_id)
-    PWT-->>SysA: Return plan_id (and status: intent_plan_created)
+    Note over SysA: Task requires complex orchestration or critical steps
+    SysA->>DesignPhase: Design solution / workflow steps
+    DesignPhase-->>SysA: Proposed Plan / Workflow Structure
 
-    Note over SysA: Review Required for plan_id
-    SysA->>Reviewer: Request Intent Plan Review (Pass plan_id)
-    Reviewer->>APT: Use ApprovePlanTool (Input: plan_id)
-    APT->>MongoDBReview: Load IntentPlan document by plan_id
-    MongoDBReview-->>APT: Return IntentPlan document
-    Note over APT: Presents Plan to Reviewer for decision
-    APT->>Reviewer: Get Approval/Rejection Decision & Comments
-    Reviewer-->>SysA: Return Decision (Approved/Rejected, comments)
+    alt Formal Intent Plan Review
+        SysA->>SysA: Generate IntentPlan Object from Proposed Plan
+        SysA->>MongoDBReview: Save/Upsert IntentPlan Object (as document)
+        MongoDBReview-->>SysA: Confirm Save (e.g., plan_id)
 
-    alt Plan Approved
-        APT->>MongoDBReview: Update IntentPlan document status to APPROVED, add comments
-        SysA->>MongoDBReview: (Later) Load Approved Intents from Plan for execution
+        Note over SysA: Review Required for plan_id
+        SysA->>Reviewer: Request Intent Plan Review (Pass plan_id)
+        Reviewer->>APT: Use ApprovePlanTool (Input: plan_id)
+        APT->>MongoDBReview: Load IntentPlan document by plan_id
+        MongoDBReview-->>APT: Return IntentPlan document
+        Note over APT: Presents Plan to Reviewer for decision
+        APT->>Reviewer: Get Approval/Rejection Decision & Comments
+        Reviewer-->>SysA: Return Decision (Approved/Rejected, comments)
+
+        alt Plan Approved
+            APT->>MongoDBReview: Update IntentPlan document status to APPROVED, add comments
+            SysA->>Executor: Execute based on Approved Plan (e.g., run AgentWorkflow, call agents)
+            Executor-->>SysA: Execution Result
+            SysA-->>Caller: Final Result
+        else Plan Rejected
+            APT->>MongoDBReview: Update IntentPlan document status to REJECTED, add reason
+            SysA->>SysA: Halt Execution / Report Rejection
+            SysA-->>Caller: Report Rejection / Failure
+        end
+    else Direct Execution (or review handled by WorkflowDesignReviewTool earlier)
+        SysA->>Executor: Execute designed steps (e.g., run AgentWorkflow)
+        Executor-->>SysA: Execution Result
         SysA-->>Caller: Final Result
-    else Plan Rejected
-        APT->>MongoDBReview: Update IntentPlan document status to REJECTED, add reason
-        SysA->>SysA: Halt Execution / Report Rejection
-        SysA-->>Caller: Report Rejection / Failure
     end
 ```
 
 ## 4. Multi-Framework Integration
-EAT is designed for interoperability. The `ProviderRegistry` and `FrameworkProvider` abstract base class allow integration with various agent frameworks (e.g., BeeAI, OpenAI Agents SDK). `AgentFactory` uses this registry to instantiate agents based on the framework specified in their `SmartLibrary` record. Adapters (like `OpenAIToolAdapter`) help bridge EAT's internal tool formats with those expected by specific SDKs. This modular design allows the EAT ecosystem to leverage agents and tools built with different technologies.
+EAT is designed for interoperability. The `ProviderRegistry` and `FrameworkProvider` abstract base class allow integration with various agent frameworks (e.g., BeeAI, OpenAI Agents SDK). `AgentFactory` uses this registry to instantiate agents based on the framework specified in their `SmartLibrary` record. Adapters (like `OpenAIToolAdapter`) help bridge EAT's internal tool formats with those expected by specific SDKs. The migration to the latest BeeAI framework strengthens this by ensuring EAT's core BeeAI-based components use up-to-date BeeAI patterns (e.g., `ChatModel`, `EmbeddingModel`, `ToolCallingAgent`, `AgentWorkflow`).
 
 ## 5. Governance and Safety
 Safety and governance are integrated through:
@@ -479,5 +526,6 @@ Safety and governance are integrated through:
 *   **Intent Review System:** Provides optional human-in-the-loop checkpoints at various stages (design, component selection, intent execution) to validate system plans and actions before they proceed. The persistence of `IntentPlan`s in MongoDB aids auditability.
 *   **`SmartAgentBus` Circuit Breakers:** Help prevent cascading failures by temporarily disabling agents that repeatedly fail or timeout.
 *   **Smart Memory:** While primarily for learning, recorded experiences (especially failures and their contexts) can be analyzed to identify systemic risks or unsafe component behaviors, contributing to long-term safety improvements.
+*   **BeeAI Native Features:** Newer versions of `beeai-framework` may include enhanced safety features, better tool execution control (e.g., `tool_choice` in `ToolCallingAgent`), and more robust error handling, which EAT will inherit.
 
-This enhanced architecture, with Smart Memory at its core, provides a more powerful foundation for EAT to achieve its goal of building adaptive, learning, and autonomously evolving AI agent systems. The ability to learn from rich, contextualized past experiences allows the system to make more intelligent decisions about current tasks and future evolutions.
+This enhanced architecture, with Smart Memory at its core and leveraging the latest `beeai-framework` capabilities, provides a more powerful foundation for EAT to achieve its goal of building adaptive, learning, and autonomously evolving AI agent systems. The ability to learn from rich, contextualized past experiences allows the system to make more intelligent decisions about current tasks and future evolutions.
