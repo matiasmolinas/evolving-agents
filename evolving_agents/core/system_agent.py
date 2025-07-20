@@ -184,12 +184,11 @@ class SystemAgentFactory:
 
         # --- Memory and Agent Creation ---
         memory = UnconstrainedMemory() if memory_type == "unconstrained" else TokenMemory(chat_model)
-        system_agent = ToolCallingAgent[BaseToolOutput]( # Changed to ToolCallingAgent
+        system_agent = ToolCallingAgent( # Changed to ToolCallingAgent
             llm=chat_model,
             tools=tools,
             memory=memory,
-            meta=meta,
-            output_schema=BaseToolOutput # Added a generic output schema
+            meta=meta
         )
 
         # --- Tool Mapping ---

@@ -210,8 +210,8 @@ class LLMService:
         logger.debug(f"Generating embedding for text: {text[:50]}...")
         
         try:
-            # Native EmbeddingModel.create expects a list of texts
-            output = await self.embedding_model.create(texts=[text]) # Returns EmbeddingModelOutput
+            # Native EmbeddingModel.create expects a list of documents
+            output = await self.embedding_model.create(documents=[text]) # Returns EmbeddingModelOutput
             
             if output.embeddings and output.embeddings[0]:
                 embedding = output.embeddings[0]
@@ -239,7 +239,7 @@ class LLMService:
         logger.debug(f"Generating batch embeddings for {len(texts)} texts...")
         
         try:
-            output = await self.embedding_model.create(texts=texts) # Returns EmbeddingModelOutput
+            output = await self.embedding_model.create(documents=texts) # Returns EmbeddingModelOutput
             
             if output.embeddings and len(output.embeddings) == len(texts):
                 return output.embeddings
