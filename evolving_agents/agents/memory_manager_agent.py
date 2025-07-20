@@ -21,7 +21,7 @@ class MemoryOperationOutput(BaseModel):
     message: Optional[str] = Field(None, description="A message detailing the outcome or error.")
     data: Optional[Any] = Field(None, description="Data retrieved or context relevant to the operation, e.g., experience_id, search results, summary.")
 
-class MemoryManagerAgent(ToolCallingAgent[MemoryOperationOutput]): # Updated base class and added generic type
+class MemoryManagerAgent(ToolCallingAgent):
     def __init__(
         self,
         llm_service: LLMService,
@@ -79,8 +79,7 @@ class MemoryManagerAgent(ToolCallingAgent[MemoryOperationOutput]): # Updated bas
             llm=llm_service.chat_model,
             tools=final_agent_meta.tools,
             memory=final_memory,
-            meta=final_agent_meta,
-            output_schema=MemoryOperationOutput # Assuming ToolCallingAgent takes output_schema
+            meta=final_agent_meta
         )
 
         # After super().__init__(), ToolCallingAgent should have populated self.name, self.description, etc.

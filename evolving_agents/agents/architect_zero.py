@@ -46,6 +46,16 @@ class ComponentSpecInput(BaseModel):
 # Removed: GenerateWorkflowInput Pydantic model - ArchitectZero no longer generates YAML directly.
 
 
+class SolutionDesignOutput(BaseModel):
+    """Output schema for ArchitectZero's designed solution."""
+    status: str = Field(description="Status of the design process, e.g., 'success', 'partial', 'failure'.")
+    solution_overview: str = Field(description="High-level overview of the proposed solution.")
+    designed_workflow: Optional[List[Dict[str, Any]]] = Field(None, description="The designed sequence of agent/tool steps.")
+    component_specifications: Optional[Dict[str, Any]] = Field(None, description="Specifications for any new or evolved components.")
+    recommendations: Optional[List[str]] = Field(None, description="Recommendations for implementation or next steps.")
+    error_message: Optional[str] = Field(None, description="Error message if the design process failed.")
+
+
 # --- ArchitectZero Agent Initializer ---
 
 class ArchitectZeroAgentInitializer:
@@ -67,7 +77,7 @@ class ArchitectZeroAgentInitializer:
         smart_library: Optional[SmartLibrary] = None,
         agent_bus: Optional[SmartAgentBus] = None,
         container: Optional[DependencyContainer] = None
-    ) -> ToolCallingAgent[SolutionDesignOutput]: # Updated return type
+    ):
         """
         Create and configure the Architect-Zero agent.
 
@@ -135,12 +145,11 @@ class ArchitectZeroAgentInitializer:
         )
 
         # --- Create the Architect-Zero Agent ---
-        agent = ToolCallingAgent[SolutionDesignOutput]( # Updated agent type
+        agent = ToolCallingAgent(
             llm=chat_model,
             tools=architect_tools,
             memory=TokenMemory(chat_model),
-            meta=meta,
-            output_schema=SolutionDesignOutput # Assuming ToolCallingAgent takes output_schema
+            meta=meta
         )
         logger.info("ArchitectZero ToolCallingAgent created.")
 
@@ -439,7 +448,7 @@ async def create_architect_zero(
     smart_library: Optional[SmartLibrary] = None,
     agent_bus: Optional[SmartAgentBus] = None,
     container: Optional[DependencyContainer] = None
-) -> ToolCallingAgent[SolutionDesignOutput]: # Updated return type
+):
     """
     Factory function to create and configure the Architect-Zero agent.
     """

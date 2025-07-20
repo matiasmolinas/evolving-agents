@@ -396,26 +396,6 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
 
                 CODE:
                 """
-            else:
-                # Generic tool template for other frameworks
-                creation_prompt = f"""
-                {firmware_content}
-
-                Create a Python tool that fulfills these requirements:
-                "{requirements}"
-
-                TOOL NAME: {name}
-                DOMAIN: {domain}
-                DESCRIPTION: {description}
-
-                The tool should be properly implemented with:
-                - Clear input parameters
-                - Appropriate error handling
-                - Domain-specific functionality for {domain}
-                - All required disclaimers from the firmware
-
-                CODE:
-                """
 
         # Generate code using LLM
         return await self.llm.generate(creation_prompt)

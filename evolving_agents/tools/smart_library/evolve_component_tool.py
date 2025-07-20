@@ -13,7 +13,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.firmware.firmware import Firmware
 # Import the corrected safe_json_dumps
-from evolving_agents.workflow.process_workflow_tool import safe_json_dumps
+from evolving_agents.utils.json_utils import safe_json_dumps
 
 class EvolveComponentInput(BaseModel):
     """Input schema for the EvolveComponentTool."""

@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from beeai_framework.agents.tool_calling import ToolCallingAgent # Changed from ReActAgent
 from beeai_framework.agents.types import AgentMeta
 from beeai_framework.memory import TokenMemory, UnconstrainedMemory
-from beeai_framework.tools.tool import BaseToolOutput # For a generic output type
+from beeai_framework.tools.tool import ToolOutput # For a generic output type
 
 # Import our specialized tools
 # Standard Tools
@@ -54,7 +54,7 @@ class SystemAgentFactory:
         mongodb_client: Optional[MongoDBClient] = None, # Added for explicit passing
         memory_type: str = "token",
         container: Optional[DependencyContainer] = None
-    ) -> ToolCallingAgent[BaseToolOutput]: # Updated return type
+    ):
 
         # --- Resolve Dependencies ---
         logger.debug(f"SystemAgentFactory: Received container: {container is not None}")

@@ -139,10 +139,14 @@ class LLMService:
 
             # Instantiate ChatModel using the factory
             if chat_model_name_for_factory:
+                chat_model_kwargs = {
+                    "settings": chat_settings_for_factory
+                }
+                if self.cache:
+                    chat_model_kwargs["cache"] = self.cache
                 self.chat_model = ChatModel.from_name(
                     chat_model_name_for_factory,
-                    settings=chat_settings_for_factory,
-                    cache=self.cache # Pass the cache instance
+                    **chat_model_kwargs
                 )
             else:
                 logger.error(f"Could not determine chat_model_name_for_factory for provider {self.provider}. Chat model not initialized.")
@@ -150,10 +154,14 @@ class LLMService:
 
             # Instantiate the native EmbeddingModel
             if embedding_model_name_for_factory:
+                embedding_model_kwargs = {
+                    "settings": embedding_settings_for_factory
+                }
+                if self.cache:
+                    embedding_model_kwargs["cache"] = self.cache
                 self.embedding_model = NativeEmbeddingModel.from_name(
                     embedding_model_name_for_factory,
-                    settings=embedding_settings_for_factory,
-                    cache=self.cache # Pass the cache instance
+                    **embedding_model_kwargs
                 )
             else:
                 logger.error(f"Could not determine embedding_model_name_for_factory for provider {self.provider}. Embedding model not initialized.")
