@@ -13,7 +13,7 @@ from evolving_agents.smart_library.smart_library import SmartLibrary
 from evolving_agents.core.llm_service import LLMService
 from evolving_agents.firmware.firmware import Firmware
 # Import the corrected safe_json_dumps
-from evolving_agents.workflow.process_workflow_tool import safe_json_dumps
+from evolving_agents.utils.json_utils import safe_json_dumps
 
 
 class CreateComponentInput(BaseModel):
@@ -393,6 +393,26 @@ class CreateComponentTool(Tool[CreateComponentInput, None, StringToolOutput]):
                 - Include error handling
                 - For domain '{domain}', include all required disclaimers
                 - The code must be complete and executable
+
+                CODE:
+                """
+            else:
+                # Generic tool template for other frameworks
+                creation_prompt = f"""
+                {firmware_content}
+
+                Create a Python tool that fulfills these requirements:
+                "{requirements}"
+
+                TOOL NAME: {name}
+                DOMAIN: {domain}
+                DESCRIPTION: {description}
+
+                The tool should be properly implemented with:
+                - Clear input parameters
+                - Appropriate error handling
+                - Domain-specific functionality for {domain}
+                - All required disclaimers from the firmware
 
                 CODE:
                 """
