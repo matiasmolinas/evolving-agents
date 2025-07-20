@@ -12,7 +12,6 @@ from typing import Dict, Any, List, Optional, Union
 import pymongo
 
 from beeai_framework.backend.chat import ChatModel
-from beeai_framework.backend.embedding import EmbeddingModelOutput # Added import
 from beeai_framework.backend.message import UserMessage
 from beeai_framework.adapters.litellm.chat import LiteLLMChatModel
 from beeai_framework.backend.constants import ProviderName
@@ -95,8 +94,8 @@ class LLMService:
             os.environ["OPENAI_API_KEY"] = self.api_key
 
         # Initialize models based on provider
-        # Import native EmbeddingModel from beeai_framework
-        from beeai_framework.backend import EmbeddingModel as NativeEmbeddingModel
+        # Note: EmbeddingModel not available in current beeai_framework version
+        NativeEmbeddingModel = None
 
         try:
             chat_model_name_for_factory = None
@@ -149,14 +148,17 @@ class LLMService:
                 self.chat_model = None
 
             # Instantiate the native EmbeddingModel
-            if embedding_model_name_for_factory:
+            if embedding_model_name_for_factory and NativeEmbeddingModel:
                 self.embedding_model = NativeEmbeddingModel.from_name(
                     embedding_model_name_for_factory,
                     settings=embedding_settings_for_factory,
                     cache=self.cache # Pass the cache instance
                 )
             else:
-                logger.error(f"Could not determine embedding_model_name_for_factory for provider {self.provider}. Embedding model not initialized.")
+                if not NativeEmbeddingModel:
+                    logger.warning("EmbeddingModel not available in current beeai_framework version. Embedding functionality disabled.")
+                else:
+                    logger.error(f"Could not determine embedding_model_name_for_factory for provider {self.provider}. Embedding model not initialized.")
                 self.embedding_model = None
 
         except Exception as e:
@@ -203,7 +205,7 @@ class LLMService:
         
         try:
             # Native EmbeddingModel.create expects a list of texts
-            output = await self.embedding_model.create(texts=[text]) # Returns EmbeddingModelOutput
+            output = await self.embedding_model.create(texts=[text])
             
             if output.embeddings and output.embeddings[0]:
                 embedding = output.embeddings[0]
@@ -231,7 +233,7 @@ class LLMService:
         logger.debug(f"Generating batch embeddings for {len(texts)} texts...")
         
         try:
-            output = await self.embedding_model.create(texts=texts) # Returns EmbeddingModelOutput
+            output = await self.embedding_model.create(texts=texts)
             
             if output.embeddings and len(output.embeddings) == len(texts):
                 return output.embeddings

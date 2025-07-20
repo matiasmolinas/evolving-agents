@@ -29,6 +29,7 @@ from evolving_agents.core.dependency_container import DependencyContainer
 from evolving_agents.firmware.firmware import Firmware
 from evolving_agents.agents.architect_zero import ArchitectZeroAgentInitializer
 from evolving_agents.core.mongodb_client import MongoDBClient
+from evolving_agents.core.agent_factory import AgentFactory
 from evolving_agents import config as eat_config
 
 # MemoryManagerAgent and its dependencies
@@ -673,74 +674,6 @@ async def run_demo():
 
     # --- Display the final result ---
     console.print("\n[bold green]OPERATION COMPLETE: Invoice Processing Result (via AgentWorkflow)[/]")
-    final_data_to_display = execution_result.get("final_result")
-
-    if isinstance(final_data_to_display, dict) and "error" not in final_data_to_display:
-
-    **Goal:** Accurately process the provided invoice document and return structured, verified data.
-
-    **Functional Requirements:**
-    - Extract key fields: Invoice # (or InvoiceNumber), Date, Vendor, Bill To, Line Items (Description, Quantity, Unit Price, Item Total), Subtotal, Tax Amount, Shipping (if present), Total Due, Payment Terms, Due Date.
-    - Verify calculations: The sum of line item totals should match the Subtotal. The sum of Subtotal, Tax Amount, and Shipping (if present) must match the Total Due. Report any discrepancies.
-
-    **Non-Functional Requirements:**
-    - High accuracy is critical.
-    - Output must be a single, valid JSON object containing the extracted data and a 'verification' or 'Verification' section (status: 'ok'/'failed', discrepancies: list).
-    - Handle potential variations in invoice layouts gracefully.
-
-    **Input Data:**
-    ```
-    {SAMPLE_INVOICE}
-    ```
-
-    **Action:** Achieve this goal using the best approach available within the framework. Create, evolve, or reuse components as needed. Your final response should consist of ONLY the JSON object containing the extracted and verified invoice data. Do not include any explanatory text before or after the JSON object.
-    """
-
-    console.print("\n[bold blue]OPERATION: SystemAgent processing invoice task[/]")
-    rprint(Panel(f"[italic]Task Prompt Given to SystemAgent:[/]\n{high_level_task_prompt[:400]}...", title="SystemAgent Input", border_style="magenta", expand=False))
-
-    execution_result = {}
-    with console.status("[bold green]SystemAgent is orchestrating the task... This may take a few minutes.[/]", spinner="dots"):
-        try:
-            sys_agent_response = await system_agent.run(high_level_task_prompt)
-            final_output_text = sys_agent_response.result.text if hasattr(sys_agent_response.result, 'text') and sys_agent_response.result.text else str(sys_agent_response)
-            logger.info(f"Raw SystemAgent Output (first 1000 chars):\n{final_output_text[:1000]}")
-
-            final_result_json = extract_json_from_response(final_output_text)
-
-            if not final_result_json or ("error" in final_result_json and final_result_json.get("error") != "No valid JSON object found in the provided text."):
-                console.print("\r[yellow]⚠ Standard JSON extraction failed or yielded error. Attempting LLM-based JSON extraction...[/]", end="", flush=True)
-                await asyncio.sleep(0.1)
-                final_result_json = await extract_json_with_llm(llm_service, final_output_text)
-
-            if final_result_json and "error" not in final_result_json:
-                final_result_data = final_result_json
-                console.print("\r[green]✓[/] Successfully extracted JSON result from SystemAgent output.                                  ")
-            else:
-                console.print("\r[red]✗[/] Could not extract valid JSON result from SystemAgent output. Raw text output will be used.             ")
-                final_result_data = final_output_text 
-                if final_result_json and "error" in final_result_json:
-                     logger.error(f"LLM-based JSON extraction also failed or returned error: {final_result_json}")
-
-            execution_result = {
-                "status": "completed_successfully" if isinstance(final_result_data, dict) and "error" not in final_result_data else "completed_with_warnings_or_error",
-                "final_result": final_result_data,
-                "agent_raw_output": final_output_text
-            }
-            with open(WORKFLOW_OUTPUT_PATH, "w", encoding="utf-8") as f:
-                json.dump(execution_result, f, indent=2, ensure_ascii=False)
-            console.print(f"[dim]Full execution result saved to [cyan]{WORKFLOW_OUTPUT_PATH}[/][/]")
-
-        except Exception as e:
-            console.print(f"\r[bold red]✗ ERROR executing SystemAgent task: {e}[/]")
-            import traceback
-            logger.error("SystemAgent task execution failed:", exc_info=True)
-            execution_result = { "status": "error", "error_message": str(e), "traceback": traceback.format_exc(), "agent_raw_output": "" }
-            with open(WORKFLOW_OUTPUT_PATH, "w", encoding="utf-8") as f:
-                json.dump(execution_result, f, indent=2, ensure_ascii=False)
-
-    # --- Display the final result ---
-    console.print("\n[bold green]OPERATION COMPLETE: Invoice Processing Result[/]")
     final_data_to_display = execution_result.get("final_result")
 
     if isinstance(final_data_to_display, dict) and "error" not in final_data_to_display:
