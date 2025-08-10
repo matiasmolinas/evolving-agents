@@ -4,6 +4,29 @@
 [![GitHub Stars](https://img.shields.io/github/stars/matiasmolinas/evolving-agents)](https://github.com/matiasmolinas/evolving-agents/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/matiasmolinas/evolving-agents)](https://github.com/matiasmolinas/evolving-agents/network)
 
+## 🚨 PROJECT SUNSET NOTICE - JULY 2025 🚨
+
+**This project has been officially discontinued.** While EAT demonstrated powerful concepts in multi-agent orchestration, we recognized that the complex Python architecture was over-engineered for achieving adaptive agent behavior.
+
+### 🔄 Evolution to LLMunix
+
+The core concepts from EAT have been **dramatically simplified and reimplemented** in our new flagship project:
+
+**👉 [LLMunix - Pure Markdown Operating System](https://github.com/EvolvingAgentsLabs/llmunix)**
+
+**Key improvements:**
+- **EAT**: Complex Python + MongoDB architecture
+- **LLMunix**: Pure markdown interpreted by LLM runtime engines  
+- **Result**: Same adaptive capabilities, 10x simpler implementation
+
+**🌟 For continued development of adaptive agent concepts, please visit:**
+- **[Evolving Agents Labs](https://evolvingagentslabs.github.io)** - Our new research organization
+- **[LLMunix](https://github.com/EvolvingAgentsLabs/llmunix)** - The successor project
+
+---
+
+## 📚 Original EAT Documentation (Archived)
+
 **Build complex, adaptive AI agent systems designed for AI-First strategies. Define high-level goals, and let the toolkit orchestrate the discovery, creation, execution, and evolution of the agents and tools needed to achieve outcomes similar to sophisticated human workflows.**
 
 <p align="center">
