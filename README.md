@@ -25,6 +25,26 @@ The core concepts from EAT have been **dramatically simplified and reimplemented
 
 ---
 
+# ⚠️ Evolving Agents Toolkit (EAT) has evolved into LLM OS
+
+> **This repository is now archived.** The core architecture has been rewritten to support true self-modification and lower latency.
+
+### 👉 Go to the new repository: [LLM OS](https://github.com/EvolvingAgentsLabs/llm-os)
+
+---
+
+### Why the move?
+We hit a ceiling with the EAT architecture. The heavy reliance on Python dependency injection and MongoDB for **Agent Identity** made it difficult for the AI to modify itself.
+
+**In the new LLM OS, we introduced:**
+1.  **Hybrid Architecture:** Agents are defined in Markdown (Cognitive Layer) but run in Python (Somatic Layer).
+2.  **HOPE Protocol:** The system "crystallizes" its own thoughts into permanent Python tools automatically.
+3.  **Simplified Stack:** We removed MongoDB for *Agent Definitions* to allow for hot-reloading and self-creation.
+
+*(Note on Database: While LLM OS currently uses file-based memory for speed, we are researching a new Vector/Graph database implementation for "Deep Memory" in future versions.)*
+
+---
+
 ## 📚 Original EAT Documentation (Archived)
 
 **Build complex, adaptive AI agent systems designed for AI-First strategies. Define high-level goals, and let the toolkit orchestrate the discovery, creation, execution, and evolution of the agents and tools needed to achieve outcomes similar to sophisticated human workflows.**
